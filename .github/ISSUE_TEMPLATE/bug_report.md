@@ -1,39 +1,30 @@
 ---
 name: Bug report
-about: Create a report to help us improve
+about: 기능 동작 중 발생한 문제를 보고합니다.
 title: "[BUG]"
 labels: ''
 assignees: ''
 
 ---
 
-name: "🐞 Bug"
-description: "버그 수정"
-title: "[Bug] "
-labels: ["bug"]
-body:
-  - type: textarea
-    id: summary
-    attributes:
-      label: 버그 설명
-      placeholder: 어떤 문제가 발생했나요?
-    validations:
-      required: true
+## 버그 설명
+어떤 문제가 발생했는지 명확하게 설명해주세요.
 
-  - type: textarea
-    id: reproduce
-    attributes:
-      label: 재현 방법
-      value: |
-        1. 
-        2. 
-    validations:
-      required: true
+## 재현 절차
+문제를 재현하는 단계:
+1. ...
+2. ...
+3. ...
 
-  - type: textarea
-    id: expected
-    attributes:
-      label: 예상 동작
-      placeholder: 원래 어떻게 동작해야 하나요?
-    validations:
-      required: true
+## 기대 동작
+정상적으로 동작했어야 할 행동을 설명해주세요.
+
+## 스크린샷 
+해당하는 경우 스크린샷을 첨부해주세요.
+
+## 환경 정보
+- 브라우저 / OS:
+- 백엔드 버전:
+- 프론트엔드 버전:
+
+## 기타 참고 사항
