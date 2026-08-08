@@ -1,35 +1,40 @@
-from django.shortcuts import render
-from rest_framework_simplejwt.serializers import RefreshToken
-from rest_framework.views import APIView
-from rest_framework.response import Response
-from .serializers import *
 from rest_framework import status
+from rest_framework.permissions import AllowAny
+from rest_framework.response import Response
+from rest_framework.views import APIView
+from rest_framework_simplejwt.tokens import RefreshToken
 
-# Create your views here.
-class RegisterView(APIView):
+from .serializers import SignupSerializer
+
+NEXT_ROUTES = {
+    'owner': 'onboarding/day0',
+    'member': 'app/home',
+}
+
+
+class SignupView(APIView):
+    permission_classes = [AllowAny]
+    throttle_scope = 'signup'
+
     def post(self, request):
-        serializer = RegisterSerializer(data=request.data)
+        serializer = SignupSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        membership = serializer.save()
 
-        # 유효성 검사 
-        if serializer.is_valid(raise_exception=True):
-            
-            # 유효성 검사 통과 후 객체 생성
-            user = serializer.save()
+        token = RefreshToken.for_user(membership.user)
 
-            # user에게 refresh,access token 발급
-            token = RefreshToken.for_user(user)
-            refresh_token = str(token)
-            access_token = str(token.access_token)
-
-            res = Response(
-                {
-                    "user": serializer.data,
-                    "message": "register success!",
-                    "token": {
-                        "access_token": access_token,
-                        "refresh_token": refresh_token,
-                    }, 
+        return Response(
+            {
+                'userId': membership.user_id,
+                'role': membership.role,
+                'company': {
+                    'id': membership.company_id,
+                    'name': membership.company.name,
+                    'code': membership.company.code,
                 },
-                status=status.HTTP_201_CREATED,
-            )
-            return res
+                'next': NEXT_ROUTES[membership.role],
+                'accessToken': str(token.access_token),
+                'refreshToken': str(token),
+            },
+            status=status.HTTP_201_CREATED,
+        )
