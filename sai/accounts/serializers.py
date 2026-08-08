@@ -1,39 +1,91 @@
+from django.contrib.auth import get_user_model
+from django.contrib.auth.password_validation import validate_password as run_password_validators
+from django.core.exceptions import ValidationError as DjangoValidationError
+from django.db import transaction
 from rest_framework import serializers
-from .models import *
+
+from companies.models import Company
+from companies.utils import generate_company_code, normalize_code
+
+from .models import Membership
+
+User = get_user_model()
+
 
 # 회원가입용 시리얼라이저
-class RegisterSerializer(serializers.ModelSerializer):
-    password = serializers.CharField(required=True)
-    username = serializers.CharField(required=True)
-    email = serializers.CharField(required=True)
+# role(owner/member)
+class SignupSerializer(serializers.Serializer):
+    email = serializers.EmailField()
+    password = serializers.CharField(write_only=True)
+    role = serializers.ChoiceField(choices=Membership.Role.choices)
 
-    class Meta:
-        model = User
+    # owner 전용
+    companyName = serializers.CharField(required=False, allow_blank=True)
 
-        # 필요한 필드값 지정
-        fields = ['username', 'email', 'password']
+    # member 전용
+    companyCode = serializers.CharField(required=False, allow_blank=True)
+    readingLanguage = serializers.CharField(required=False, allow_blank=True)
 
-    def create(self, validated_data):
-        #비밀번호 분리
-        password = validated_data.pop('password', None)
+    def validate_email(self, value):
+        # 대소문자만 다른 이메일로 중복 가입되지 않도록 정규화 후 비교한다.
+        value = value.lower().strip()
+        if User.objects.filter(email=value).exists():
+            raise serializers.ValidationError('email already registered', code='email_taken')
+        return value
 
-        # User 객체 생성
-        user = User(**validated_data)
+    def validate_password(self, value):
+        # settings의 AUTH_PASSWORD_VALIDATORS는 직접 호출해야 동작한다.
+        try:
+            run_password_validators(value)
+        except DjangoValidationError as exc:
+            raise serializers.ValidationError(exc.messages, code='weak_password')
+        return value
 
-        # 비밀번호 해싱해서 저장
-        user.set_password(password)
-        user.save()
-
-        return user
-
-    # 이메일 유효성 검사 함수
-    def validate_email(self, input):
-        # 이메일 형식 검사
-        if not "@" in input:
-            raise serializers.ValidationError("Invalid email format")
-
-        # 이메일 중복 여부 검사
-        if User.objects.filter(email=input).exists():
-            raise serializers.ValidationError("Email already exists.")
+    def validate(self, attrs):
         
-        return input
+        if attrs['role'] == Membership.Role.OWNER:
+            if not attrs.get('companyName', '').strip():
+                raise serializers.ValidationError({'companyName': 'this field is required'})
+            attrs.pop('companyCode', None)
+            attrs.pop('readingLanguage', None)
+        else:
+            code = attrs.get('companyCode', '').strip()
+            if not code:
+                raise serializers.ValidationError({'companyCode': 'this field is required'})
+            if not attrs.get('readingLanguage', '').strip():
+                raise serializers.ValidationError({'readingLanguage': 'this field is required'})
+
+            try:
+                attrs['company'] = Company.objects.get(code_normalized=normalize_code(code))
+            except Company.DoesNotExist:
+                raise serializers.ValidationError(
+                    'no company matches this code', code='company_code_not_found'
+                )
+            attrs.pop('companyName', None)
+
+        return attrs
+
+    @transaction.atomic
+    def create(self, validated_data):
+        # 회사 생성 + 유저 생성 + 멤버십 생성 -> 트랜잭션 하나에서
+        # 중간 실패 시 주인 없는 회사 남게되는거 방지 
+        if validated_data['role'] == Membership.Role.OWNER:
+            name = validated_data['companyName'].strip()
+            display_code, normalized_code = generate_company_code(name)
+            company = Company.objects.create(
+                name=name, code=display_code, code_normalized=normalized_code
+            )
+            reading_language = None
+        else:
+            company = validated_data['company']
+            reading_language = validated_data['readingLanguage'].strip()
+
+        user = User.objects.create_user(
+            email=validated_data['email'], password=validated_data['password']
+        )
+        return Membership.objects.create(
+            user=user,
+            company=company,
+            role=validated_data['role'],
+            reading_language=reading_language,
+        )
