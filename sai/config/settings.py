@@ -13,6 +13,7 @@ https://docs.djangoproject.com/en/6.1/ref/settings/
 from pathlib import Path
 import os, json
 from django.core.exceptions import ImproperlyConfigured
+from datetime import timedelta
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -42,7 +43,33 @@ DEBUG = True
 
 ALLOWED_HOSTS = []
 
+REST_FRAMEWORK = {
+    'DEFAULT_AUTHENTICATION_CLASSES': ( # DRF의 기본 인증Authentication 방식을 JWT로 바꿉니다.
+        'rest_framework_simplejwt.authentication.JWTAuthentication',
+    ),
+    # 기본: 인증 필수로 두고
+    # 가입/로그인 뷰에서만 AllowAny로
+    'DEFAULT_PERMISSION_CLASSES': (
+        'rest_framework.permissions.IsAuthenticated',
+    ),
+    # 에러 응답 : {"error": {"code", "field"}} 형태로 통일
+    'EXCEPTION_HANDLER': 'config.exceptions.api_exception_handler',
+    # rate_limited 에러용
+    'DEFAULT_THROTTLE_CLASSES': (
+        'rest_framework.throttling.ScopedRateThrottle',
+    ),
+    'DEFAULT_THROTTLE_RATES': {
+        'signup': '5/min',
+        'login': '10/min',
+    },
+}
 
+SIMPLE_JWT = { # JWT 세부내용 설정
+    'ACCESS_TOKEN_LIFETIME': timedelta(hours=3),    # 유효기간 3시간
+    'REFRESH_TOKEN_LIFETIME': timedelta(days=7),    # 유효기간 7일
+    'ROTATE_REFRESH_TOKENS': False,
+    'BLACKLIST_AFTER_ROTATION': False,
+}
 
 # Application definition
 
@@ -58,16 +85,20 @@ DJANGO_APPS = [
 ]
 
 PROJECT_APPS = [
-
+    'accounts',
+    'companies',
 ]
 
 THIRD_PARTY_APPS = [
-
+    'rest_framework_simplejwt',
+    'rest_framework',
+    'corsheaders',
+    'drf_yasg',
 ]
 
 
 INSTALLED_APPS = DJANGO_APPS + PROJECT_APPS + THIRD_PARTY_APPS
-
+AUTH_USER_MODEL = 'accounts.User'
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
@@ -107,6 +138,18 @@ DATABASES = {
         'ENGINE': 'django.db.backends.sqlite3',
         'NAME': BASE_DIR / 'db.sqlite3',
     }
+}
+
+# drf-yasg (Swagger) 설정: Swagger UI에서 Bearer 토큰으로 인증 가능하도록 함
+SWAGGER_SETTINGS = {
+    'SECURITY_DEFINITIONS': {
+        'Bearer': {
+            'type': 'apiKey',
+            'name': 'Authorization',
+            'in': 'header'
+        }
+    },
+    'USE_SESSION_AUTH': False,
 }
 
 
