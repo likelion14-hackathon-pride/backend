@@ -3,6 +3,8 @@ from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken
+from rest_framework.permissions import IsAuthenticated
+from django.contrib.auth import logout
 
 from .serializers import AuthSerializer, SignupSerializer
 
@@ -66,3 +68,11 @@ class AuthView(APIView):
             },
             status=status.HTTP_200_OK,
         )
+
+
+class LogoutView(APIView):
+    permission_classes = [IsAuthenticated] 
+
+    def post(self, request):
+        logout(request)
+        return Response({"message": "logout success!"}, status=status.HTTP_200_OK)
