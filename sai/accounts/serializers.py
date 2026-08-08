@@ -1,4 +1,4 @@
-from django.contrib.auth import get_user_model
+from django.contrib.auth import authenticate, get_user_model
 from django.contrib.auth.password_validation import validate_password as run_password_validators
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import transaction
@@ -89,3 +89,44 @@ class SignupSerializer(serializers.Serializer):
             role=validated_data['role'],
             reading_language=reading_language,
         )
+
+# 로그인용 시리얼라이저
+class AuthSerializer(serializers.Serializer):
+    email = serializers.EmailField(required=True)
+    password = serializers.CharField(required=True, write_only=True)
+    companyCode = serializers.CharField(required=True)
+
+    def validate(self, attrs):
+        try:
+            company = Company.objects.get(
+                code_normalized=normalize_code(attrs['companyCode'].strip())
+            )
+        except Company.DoesNotExist:
+            raise serializers.ValidationError(
+                'no company matches this code', code='company_code_not_found'
+            )
+
+        # 비밀번호 검증 
+        user = authenticate(
+            request=self.context.get('request'),
+            username=attrs['email'].lower().strip(),
+            password=attrs['password'],
+        )
+        if user is None:
+            raise serializers.ValidationError(
+                'email or password is incorrect', code='invalid_credentials'
+            )
+
+        membership = (
+            Membership.objects.select_related('company')
+            .filter(user=user, company=company)
+            .first()
+        )
+        # 소속이 아닌 회사로 로그인한 경우.
+        if membership is None:
+            raise serializers.ValidationError(
+                'email or password is incorrect', code='invalid_credentials'
+            )
+
+        attrs['membership'] = membership
+        return attrs
