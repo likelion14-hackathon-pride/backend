@@ -27,9 +27,9 @@ class User(AbstractBaseUser, PermissionsMixin):
 
     objects = UserManager()
     USERNAME_FIELD = 'email'
-    REQUIRED_FIELDS = []          
+    REQUIRED_FIELDS = []
 
-#  소속 + 역할  
+#  소속 + 역할
 class Membership(models.Model):
     class Role(models.TextChoices):
         OWNER = 'owner'

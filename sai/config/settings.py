@@ -60,6 +60,7 @@ REST_FRAMEWORK = {
     ),
     'DEFAULT_THROTTLE_RATES': {
         'signup': '5/min',
+        'login': '10/min',
     },
 }
 
