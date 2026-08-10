@@ -8,11 +8,11 @@ from django.contrib.auth import logout
 from drf_yasg.utils import swagger_auto_schema
 from drf_yasg import openapi
 
-from .serializers import AuthSerializer, SignupSerializer
+from .serializers import AuthSerializer, MemberSignupSerializer, OwnerSignupSerializer
 
 NEXT_ROUTES = {
-    'owner': 'onboarding/day0',
-    'member': 'app/home',
+    'OWNER': 'onboarding/day0',
+    'MEMBER': 'app/home',
 }
 
 def _string(example):
@@ -37,17 +37,17 @@ ERROR_SCHEMA = openapi.Schema(
     },
 )
 
-SIGNUP_RESPONSE = openapi.Schema(
+OWNER_SIGNUP_RESPONSE = openapi.Schema(
     type=openapi.TYPE_OBJECT,
     properties={
         'userId': openapi.Schema(type=openapi.TYPE_INTEGER, example=1),
-        'role': _string('owner'),
+        'role': _string('OWNER'),
         'company': openapi.Schema(
             type=openapi.TYPE_OBJECT,
             properties={
                 'id': openapi.Schema(type=openapi.TYPE_INTEGER, example=1),
                 'name': _string('에코랩'),
-                'code': _string('ECHO-4821'),
+                'code': _string('A7K2M9QX4RTB'),
             },
         ),
         'next': _string('onboarding/day0'),
@@ -56,12 +56,12 @@ SIGNUP_RESPONSE = openapi.Schema(
     },
 )
 
-LOGIN_RESPONSE = openapi.Schema(
+# 팀원 가입과 로그인 응답. company에는 code를 담지 않는다.
+AUTH_RESPONSE = openapi.Schema(
     type=openapi.TYPE_OBJECT,
     properties={
         'userId': openapi.Schema(type=openapi.TYPE_INTEGER, example=1),
-        'role': _string('member'),
-        # 로그인 응답의 company에는 code를 담지 않는다.
+        'role': _string('MEMBER'),
         'company': openapi.Schema(
             type=openapi.TYPE_OBJECT,
             properties={
@@ -70,38 +70,33 @@ LOGIN_RESPONSE = openapi.Schema(
             },
         ),
         'next': _string('app/home'),
-        'lastRoute': openapi.Schema(
-            type=openapi.TYPE_STRING, nullable=True, example='/instructions/482'
-        ),
         'accessToken': _string('eyJhbGciOi...'),
         'refreshToken': _string('eyJhbGciOi...'),
     },
 )
 
 
-class SignupView(APIView):
+class OwnerSignupView(APIView):
     permission_classes = [AllowAny]
     throttle_scope = 'signup'
 
     @swagger_auto_schema(
-        operation_summary="회원가입",
+        operation_summary="대표 회원가입",
         operation_description=(
-            "계정을 생성합니다. role에 따라 필요한 필드가 다릅니다.\n\n"
-            "- owner: 회사를 새로 만들고 회사 코드를 발급받습니다.\n"
-            "- member: 기존 회사에 합류합니다.\n\n"
+            "회사를 새로 만들고 대표 계정을 생성합니다.\n\n"
+            "발급된 회사 코드는 이 응답에서만 확인할 수 있습니다. "
+            "화면 언어는 ko로 고정됩니다."
         ),
-        request_body=SignupSerializer,
+        request_body=OwnerSignupSerializer,
         responses={
-            201: openapi.Response("가입 성공", SIGNUP_RESPONSE),
-            400: openapi.Response(
-                "email_taken / weak_password / company_code_not_found", ERROR_SCHEMA
-            ),
+            201: openapi.Response("가입 성공", OWNER_SIGNUP_RESPONSE),
+            400: openapi.Response("email_taken / weak_password", ERROR_SCHEMA),
             429: openapi.Response("rate_limited", ERROR_SCHEMA),
         },
         security=[],  # 인증 없이 호출하는 API
     )
     def post(self, request):
-        serializer = SignupSerializer(data=request.data)
+        serializer = OwnerSignupSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         membership = serializer.save()
 
@@ -123,6 +118,49 @@ class SignupView(APIView):
             status=status.HTTP_201_CREATED,
         )
 
+
+class MemberSignupView(APIView):
+    permission_classes = [AllowAny]
+    throttle_scope = 'signup'
+
+    @swagger_auto_schema(
+        operation_summary="팀원 회원가입",
+        operation_description=(
+            "회사 코드로 기존 회사에 합류합니다.\n\n"
+            "화면 언어는 en으로 고정됩니다."
+        ),
+        request_body=MemberSignupSerializer,
+        responses={
+            201: openapi.Response("가입 성공", AUTH_RESPONSE),
+            400: openapi.Response(
+                "email_taken / weak_password / company_code_not_found", ERROR_SCHEMA
+            ),
+            429: openapi.Response("rate_limited", ERROR_SCHEMA),
+        },
+        security=[],  # 인증 없이 호출하는 API
+    )
+    def post(self, request):
+        serializer = MemberSignupSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        membership = serializer.save()
+
+        token = RefreshToken.for_user(membership.user)
+
+        return Response(
+            {
+                'userId': membership.user_id,
+                'role': membership.role,
+                'company': {
+                    'id': membership.company_id,
+                    'name': membership.company.name,
+                },
+                'next': NEXT_ROUTES[membership.role],
+                'accessToken': str(token.access_token),
+                'refreshToken': str(token),
+            },
+            status=status.HTTP_201_CREATED,
+        )
+
 # 로그인 담당 view
 class AuthView(APIView):
     permission_classes = [AllowAny]
@@ -131,15 +169,13 @@ class AuthView(APIView):
     @swagger_auto_schema(
         operation_summary="로그인",
         operation_description=(
-            "이메일, 비밀번호, 회사 코드로 로그인합니다.\n\n"
-            "회사 코드는 대소문자와 공백/하이픈을 무시하고 비교합니다 "
+            "이메일과 비밀번호로 로그인합니다.\n\n"
+            "비밀번호가 틀렸거나 소속이 없으면 모두 invalid_credentials로 응답합니다."
         ),
         request_body=AuthSerializer,
         responses={
-            200: openapi.Response("로그인 성공", LOGIN_RESPONSE),
-            400: openapi.Response(
-                "invalid_credentials / company_code_not_found", ERROR_SCHEMA
-            ),
+            200: openapi.Response("로그인 성공", AUTH_RESPONSE),
+            400: openapi.Response("invalid_credentials", ERROR_SCHEMA),
             429: openapi.Response("rate_limited", ERROR_SCHEMA),
         },
         security=[],  # 인증 없이 호출하는 API
@@ -160,7 +196,6 @@ class AuthView(APIView):
                     'name': membership.company.name,
                 },
                 'next': NEXT_ROUTES[membership.role],
-                'lastRoute': membership.last_route,
                 'accessToken': str(token.access_token),
                 'refreshToken': str(token),
             },

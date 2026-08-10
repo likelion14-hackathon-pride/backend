@@ -5,26 +5,18 @@ from django.db import transaction
 from rest_framework import serializers
 
 from companies.models import Company
-from companies.utils import generate_company_code, normalize_code
+from companies.utils import generate_company_code
 
 from .models import Membership
 
 User = get_user_model()
 
 
-# 회원가입용 시리얼라이저
-# role(owner/member)
+# 회원가입 공통 필드
 class SignupSerializer(serializers.Serializer):
     email = serializers.EmailField()
     password = serializers.CharField(write_only=True)
-    role = serializers.ChoiceField(choices=Membership.Role.choices)
-
-    # owner 전용
-    companyName = serializers.CharField(required=False, allow_blank=True)
-
-    # member 전용
-    companyCode = serializers.CharField(required=False, allow_blank=True)
-    readingLanguage = serializers.CharField(required=False, allow_blank=True)
+    displayName = serializers.CharField(max_length=60)
 
     def validate_email(self, value):
         # 대소문자만 다른 이메일로 중복 가입되지 않도록 정규화 후 비교한다.
@@ -41,72 +33,59 @@ class SignupSerializer(serializers.Serializer):
             raise serializers.ValidationError(exc.messages, code='weak_password')
         return value
 
-    def validate(self, attrs):
-        
-        if attrs['role'] == Membership.Role.OWNER:
-            if not attrs.get('companyName', '').strip():
-                raise serializers.ValidationError({'companyName': 'this field is required'})
-            attrs.pop('companyCode', None)
-            attrs.pop('readingLanguage', None)
-        else:
-            code = attrs.get('companyCode', '').strip()
-            if not code:
-                raise serializers.ValidationError({'companyCode': 'this field is required'})
-            if not attrs.get('readingLanguage', '').strip():
-                raise serializers.ValidationError({'readingLanguage': 'this field is required'})
+    def create_user(self, validated_data, ui_language):
+        return User.objects.create_user(
+            email=validated_data['email'],
+            password=validated_data['password'],
+            display_name=validated_data['displayName'].strip(),
+            ui_language=ui_language,
+        )
 
-            try:
-                attrs['company'] = Company.objects.get(code_normalized=normalize_code(code))
-            except Company.DoesNotExist:
-                raise serializers.ValidationError(
-                    'no company matches this code', code='company_code_not_found'
-                )
-            attrs.pop('companyName', None)
 
-        return attrs
+# 대표 회원가입용 시리얼라이저
+class OwnerSignupSerializer(SignupSerializer):
+    companyName = serializers.CharField(max_length=100)
 
     @transaction.atomic
     def create(self, validated_data):
         # 회사 생성 + 유저 생성 + 멤버십 생성 -> 트랜잭션 하나에서
-        # 중간 실패 시 주인 없는 회사 남게되는거 방지 
-        if validated_data['role'] == Membership.Role.OWNER:
-            name = validated_data['companyName'].strip()
-            display_code, normalized_code = generate_company_code(name)
-            company = Company.objects.create(
-                name=name, code=display_code, code_normalized=normalized_code
-            )
-            reading_language = None
-        else:
-            company = validated_data['company']
-            reading_language = validated_data['readingLanguage'].strip()
-
-        user = User.objects.create_user(
-            email=validated_data['email'], password=validated_data['password']
+        # 중간 실패 시 주인 없는 회사 남게되는거 방지
+        company = Company.objects.create(
+            name=validated_data['companyName'].strip(), code=generate_company_code()
         )
+        user = self.create_user(validated_data, 'ko')
         return Membership.objects.create(
-            user=user,
-            company=company,
-            role=validated_data['role'],
-            reading_language=reading_language,
+            user=user, company=company, role=Membership.Role.OWNER
         )
 
-# 로그인용 시리얼라이저
-class AuthSerializer(serializers.Serializer):
-    email = serializers.EmailField(required=True)
-    password = serializers.CharField(required=True, write_only=True)
-    companyCode = serializers.CharField(required=True)
 
-    def validate(self, attrs):
+# 팀원 회원가입용 시리얼라이저
+class MemberSignupSerializer(SignupSerializer):
+    companyCode = serializers.CharField(max_length=16)
+
+    def validate_companyCode(self, value):
         try:
-            company = Company.objects.get(
-                code_normalized=normalize_code(attrs['companyCode'].strip())
-            )
+            return Company.objects.get(code=value.strip())
         except Company.DoesNotExist:
             raise serializers.ValidationError(
                 'no company matches this code', code='company_code_not_found'
             )
 
-        # 비밀번호 검증 
+    @transaction.atomic
+    def create(self, validated_data):
+        user = self.create_user(validated_data, 'en')
+        return Membership.objects.create(
+            user=user, company=validated_data['companyCode'], role=Membership.Role.MEMBER
+        )
+
+
+# 로그인용 시리얼라이저
+class AuthSerializer(serializers.Serializer):
+    email = serializers.EmailField(required=True)
+    password = serializers.CharField(required=True, write_only=True)
+
+    def validate(self, attrs):
+        # 비밀번호 검증
         user = authenticate(
             request=self.context.get('request'),
             username=attrs['email'].lower().strip(),
@@ -119,10 +98,10 @@ class AuthSerializer(serializers.Serializer):
 
         membership = (
             Membership.objects.select_related('company')
-            .filter(user=user, company=company)
+            .filter(user=user, status=Membership.Status.ACTIVE)
             .first()
         )
-        # 소속이 아닌 회사로 로그인한 경우.
+        # 소속이 없거나 퇴사한 경우.
         if membership is None:
             raise serializers.ValidationError(
                 'email or password is incorrect', code='invalid_credentials'
