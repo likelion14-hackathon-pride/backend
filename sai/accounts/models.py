@@ -24,6 +24,10 @@ class User(AbstractBaseUser, PermissionsMixin):
     is_active = models.BooleanField(default=True)
     is_staff = models.BooleanField(default=False)
     date_joined = models.DateTimeField(auto_now_add=True)
+    last_seen_at = models.DateTimeField(null=True, blank=True)
+    display_name = models.CharField(max_length=60)
+    ui_language = models.CharField(max_length=2, default='ko')
+    timezone = models.CharField(max_length=40, default='Asia/Seoul')
 
     objects = UserManager()
     USERNAME_FIELD = 'email'
@@ -32,22 +36,26 @@ class User(AbstractBaseUser, PermissionsMixin):
 #  소속 + 역할
 class Membership(models.Model):
     class Role(models.TextChoices):
-        OWNER = 'owner'
-        MEMBER = 'member'
+        OWNER = 'OWNER'
+        MEMBER = 'MEMBER'
+
+    class Status(models.TextChoices):
+        ACTIVE = 'ACTIVE'
+        LEFT = 'LEFT'
 
     user = models.ForeignKey('accounts.User', on_delete=models.CASCADE, related_name='memberships')
     company = models.ForeignKey('companies.Company', on_delete=models.CASCADE, related_name='memberships')
-    role = models.CharField(max_length=10, choices=Role.choices)
-    reading_language = models.CharField(max_length=5, null=True, blank=True)   # member만
-    last_route = models.CharField(max_length=255, null=True, blank=True)
+    role = models.CharField(max_length=10, choices=Role.choices, default=Role.MEMBER)
+    status = models.CharField(max_length=10, choices=Status.choices, default=Status.ACTIVE)
     joined_at = models.DateTimeField(auto_now_add=True)
+    left_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         constraints = [
-            models.UniqueConstraint(fields=['user', 'company'], name='uniq_user_company'),
+            models.UniqueConstraint(fields=['user'], name='uniq_membership_user'),
             models.UniqueConstraint(
                 fields=['company'],
-                condition=models.Q(role='owner'),
-                name='uniq_owner_per_company',
+                condition=models.Q(role='OWNER', status='ACTIVE'),
+                name='uniq_company_active_owner',
             ),
         ]
