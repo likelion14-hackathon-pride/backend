@@ -2,7 +2,7 @@ from django.db import models
 
 
 class RiskKeyword(models.Model):
-    class Severity(models.TextChoices):
+    class Level(models.TextChoices):
         CAUTION = 'CAUTION'
         DANGER = 'DANGER'
 
@@ -11,19 +11,21 @@ class RiskKeyword(models.Model):
         on_delete=models.CASCADE,
         related_name='risk_keywords',
     )
-    keyword = models.CharField(max_length=100)
-    message = models.CharField(max_length=255, null=True, blank=True)
-    severity = models.CharField(
-        max_length=10,
-        choices=Severity.choices,
-        default=Severity.CAUTION,
+    word = models.CharField(max_length=50)
+    aliases = models.JSONField(null=True, blank=True)
+    note = models.TextField(null=True, blank=True)
+    level = models.CharField(
+        max_length=20,
+        choices=Level.choices,
+        default=Level.CAUTION,
     )
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
+        db_table = 'policy_riskykeyword'
         constraints = [
             models.UniqueConstraint(
-                fields=['company', 'keyword'],
-                name='uniq_company_risk_keyword',
+                fields=['company', 'word'],
+                name='uniq_company_risky_keyword',
             ),
         ]
