@@ -1,4 +1,5 @@
 from django.shortcuts import get_object_or_404
+from drf_yasg.utils import swagger_auto_schema
 from rest_framework import status
 from rest_framework.exceptions import PermissionDenied
 from rest_framework.response import Response
@@ -29,6 +30,15 @@ def get_owner_company(user, company_id):
 
 # 위험 작업 키워드 조회 및 등록 담당 view
 class RiskKeywordListCreateView(APIView):
+    @swagger_auto_schema(
+        operation_summary='위험 키워드 목록 조회',
+        responses={
+            200: RiskKeywordSerializer(many=True),
+            401: '인증되지 않음',
+            403: 'Owner 권한 없음',
+            404: '회사를 찾을 수 없음',
+        },
+    )
     def get(self, request, company_id):
         company = get_owner_company(request.user, company_id)
         keywords = RiskKeyword.objects.filter(company=company).order_by('-created_at')
@@ -36,6 +46,17 @@ class RiskKeywordListCreateView(APIView):
 
         return Response(serializer.data, status=status.HTTP_200_OK)
 
+    @swagger_auto_schema(
+        operation_summary='위험 키워드 등록',
+        request_body=RiskKeywordSerializer,
+        responses={
+            201: RiskKeywordSerializer(),
+            400: '잘못된 요청',
+            401: '인증되지 않음',
+            403: 'Owner 권한 없음',
+            404: '회사를 찾을 수 없음',
+        },
+    )
     def post(self, request, company_id):
         company = get_owner_company(request.user, company_id)
 
@@ -52,6 +73,15 @@ class RiskKeywordListCreateView(APIView):
 
 # 위험 작업 키워드 삭제 담당 view
 class RiskKeywordDeleteView(APIView):
+    @swagger_auto_schema(
+        operation_summary='위험 키워드 삭제',
+        responses={
+            204: '삭제 성공',
+            401: '인증되지 않음',
+            403: 'Owner 권한 없음',
+            404: '회사 또는 키워드를 찾을 수 없음',
+        },
+    )
     def delete(self, request, company_id, keyword_id):
         company = get_owner_company(request.user, company_id)
         keyword = get_object_or_404(
