@@ -69,3 +69,17 @@ class HandbookEntryListCreateView(APIView):
         response_serializer = HandbookEntrySerializer(entry)
 
         return Response(response_serializer.data, status=status.HTTP_201_CREATED)
+
+
+# 핸드북 항목 상세 조회 view
+class HandbookEntryDetailView(APIView):
+    def get(self, request, company_id, entry_id):
+        company = get_owner_company(request.user, company_id)
+        entry = get_object_or_404(
+            HandbookEntry.objects.select_related('scope'),
+            id=entry_id,
+            company=company,
+        )
+        serializer = HandbookEntrySerializer(entry)
+
+        return Response(serializer.data, status=status.HTTP_200_OK)
