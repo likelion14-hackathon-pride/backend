@@ -98,7 +98,7 @@ class AuthSerializer(serializers.Serializer):
 
         membership = (
             Membership.objects.select_related('company')
-            .filter(user=user, status=Membership.Status.ACTIVE)
+            .filter(user=user, left_at__isnull=True)
             .first()
         )
         # 소속이 없거나 퇴사한 경우.

@@ -39,14 +39,9 @@ class Membership(models.Model):
         OWNER = 'OWNER'
         MEMBER = 'MEMBER'
 
-    class Status(models.TextChoices):
-        ACTIVE = 'ACTIVE'
-        LEFT = 'LEFT'
-
     user = models.ForeignKey('accounts.User', on_delete=models.CASCADE, related_name='memberships')
     company = models.ForeignKey('companies.Company', on_delete=models.CASCADE, related_name='memberships')
     role = models.CharField(max_length=10, choices=Role.choices, default=Role.MEMBER)
-    status = models.CharField(max_length=10, choices=Status.choices, default=Status.ACTIVE)
     joined_at = models.DateTimeField(auto_now_add=True)
     left_at = models.DateTimeField(null=True, blank=True)
 
@@ -55,7 +50,7 @@ class Membership(models.Model):
             models.UniqueConstraint(fields=['user'], name='uniq_membership_user'),
             models.UniqueConstraint(
                 fields=['company'],
-                condition=models.Q(role='OWNER', status='ACTIVE'),
+                condition=models.Q(role='OWNER', left_at__isnull=True),
                 name='uniq_company_active_owner',
             ),
         ]

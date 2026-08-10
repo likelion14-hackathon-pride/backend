@@ -10,5 +10,4 @@ class Company(models.Model):
     working_hours_start = models.TimeField(default=time(9, 0))
     working_hours_end = models.TimeField(default=time(18, 0))
     onboarding_step = models.SmallIntegerField(default=0)   # 0=시작 전 ~ 4=위험 작업
-    onboarding_completed_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
