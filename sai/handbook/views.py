@@ -10,7 +10,12 @@ from accounts.models import Membership
 from companies.models import Company
 
 from .models import HandbookEntry
-from .serializers import (HandbookEntryCreateSerializer, HandbookEntryListSerializer, HandbookEntrySerializer)
+from .serializers import (
+    HandbookEntryCreateSerializer,
+    HandbookEntryListSerializer,
+    HandbookEntrySerializer,
+    HandbookEntryUpdateSerializer,
+)
 
 
 SCOPE_PARAMETER = openapi.Parameter(
@@ -155,3 +160,17 @@ class HandbookEntryDetailView(APIView):
         serializer = HandbookEntrySerializer(entry)
 
         return Response(serializer.data, status=status.HTTP_200_OK)
+
+    def patch(self, request, company_id, entry_id):
+        company = get_owner_company(request.user, company_id)
+        entry = get_object_or_404(
+            HandbookEntry.objects.select_related('scope'),
+            id=entry_id,
+            company=company,
+        )
+        serializer = HandbookEntryUpdateSerializer(entry, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        entry = serializer.save()
+        response_serializer = HandbookEntrySerializer(entry)
+
+        return Response(response_serializer.data, status=status.HTTP_200_OK)
