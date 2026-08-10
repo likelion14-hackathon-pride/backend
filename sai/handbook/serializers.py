@@ -2,7 +2,7 @@ from django.utils import timezone
 from drf_yasg.utils import swagger_serializer_method
 from rest_framework import serializers
 
-from .models import CompanyScope, HandbookEntry
+from .models import CompanyScope, HandbookEntry, HandbookRevision
 
 
 # 핸드북 항목 직접 등록용 시리얼라이저
@@ -94,3 +94,54 @@ class HandbookEntrySerializer(serializers.ModelSerializer):
 class HandbookEntryListSerializer(serializers.Serializer):
     items = HandbookEntrySerializer(many=True)
     nextCursor = serializers.CharField(allow_null=True)
+
+
+# 핸드북 항목 수정용 시리얼라이저
+class HandbookEntryUpdateSerializer(serializers.ModelSerializer):
+    ruleEn = serializers.CharField(source='body_en', required=False)
+    originalKo = serializers.CharField(source='body_ko', required=False)
+    scope = serializers.ChoiceField(choices=CompanyScope.Kind.choices, required=False)
+    projectId = serializers.CharField(required=False, allow_null=True)
+
+    class Meta:
+        model = HandbookEntry
+        fields = ['title', 'ruleEn', 'originalKo', 'scope', 'projectId', 'status']
+        extra_kwargs = {'title': {'required': False}, 'status': {'required': False}}
+
+    def validate(self, attrs):
+        scope_kind = attrs.get('scope', self.instance.scope.kind)
+        project_id = attrs.get('projectId', self.instance.scope.area_key)
+
+        if scope_kind == CompanyScope.Kind.PROJECT and not project_id:
+            raise serializers.ValidationError({'projectId': 'projectId is required'})
+
+        return attrs
+
+    def update(self, instance, validated_data):
+        scope_kind = validated_data.pop('scope', instance.scope.kind)
+        project_id = validated_data.pop('projectId', instance.scope.area_key)
+
+        if scope_kind == CompanyScope.Kind.COMPANY:
+            project_id = None
+
+        HandbookRevision.objects.create(
+            company=instance.company,
+            entry=instance,
+            before={
+                'title': instance.title,
+                'body_ko': instance.body_ko,
+                'body_en': instance.body_en,
+                'scope_id': instance.scope_id,
+                'status': instance.status,
+            },
+        )
+
+        scope, _ = CompanyScope.objects.get_or_create(
+            company=instance.company,
+            kind=scope_kind,
+            area_key=project_id,
+            defaults={'name': project_id or '회사 규칙', 'state': 'ACTIVE'},
+        )
+        instance.scope = scope
+
+        return super().update(instance, validated_data)
