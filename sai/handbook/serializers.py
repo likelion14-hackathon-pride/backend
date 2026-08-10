@@ -17,9 +17,7 @@ class HandbookEntryCreateSerializer(serializers.ModelSerializer):
 
     def validate(self, attrs):
         if attrs['scope'] == CompanyScope.Kind.PROJECT and not attrs.get('projectId'):
-            raise serializers.ValidationError({
-                'projectId': 'projectId is required',
-            })
+            raise serializers.ValidationError({'projectId': 'projectId is required'})
 
         return attrs
 
@@ -32,17 +30,49 @@ class HandbookEntryCreateSerializer(serializers.ModelSerializer):
             company=company,
             kind=scope_kind,
             area_key=project_id,
-            defaults={
-                'name': project_id or '회사 규칙',
-                'state': 'ACTIVE',
-            },
+            defaults={'name': project_id or '회사 규칙', 'state': 'ACTIVE'},
         )
 
         return HandbookEntry.objects.create(
-            company=company,
-            scope=scope,
-            status=HandbookEntry.Status.CONFIRMED,
-            origin='DIRECT_ENTRY',
-            confirmed_at=timezone.now(),
+            company=company, scope=scope, status=HandbookEntry.Status.CONFIRMED,
+            origin='DIRECT_ENTRY', confirmed_at=timezone.now(),
             **validated_data,
         )
+
+
+# 핸드북 항목 응답용 시리얼라이저
+class HandbookEntrySerializer(serializers.ModelSerializer):
+    companyId = serializers.IntegerField(source='company_id', read_only=True)
+    scope = serializers.CharField(source='scope.kind', read_only=True)
+    projectId = serializers.CharField(source='scope.area_key', read_only=True, allow_null=True)
+    questionCount = serializers.IntegerField(source='ask_count', read_only=True)
+    sourceType = serializers.CharField(source='origin', read_only=True)
+    currentVersion = serializers.SerializerMethodField()
+    createdAt = serializers.DateTimeField(source='created_at', read_only=True)
+    updatedAt = serializers.DateTimeField(source='updated_at', read_only=True)
+
+    class Meta:
+        model = HandbookEntry
+        fields = [
+            'id',
+            'companyId',
+            'title',
+            'scope',
+            'projectId',
+            'status',
+            'questionCount',
+            'sourceType',
+            'currentVersion',
+            'createdAt',
+            'updatedAt',
+        ]
+
+    def get_currentVersion(self, obj):
+        return {
+            'id': obj.id,
+            'version': obj.revisions.count() + 1,
+            'ruleEn': obj.body_en,
+            'originalKo': obj.body_ko,
+            'citations': [],
+            'createdAt': obj.created_at,
+        }
