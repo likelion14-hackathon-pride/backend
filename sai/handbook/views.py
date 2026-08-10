@@ -10,11 +10,7 @@ from accounts.models import Membership
 from companies.models import Company
 
 from .models import HandbookEntry
-from .serializers import (
-    HandbookEntryCreateSerializer,
-    HandbookEntryListSerializer,
-    HandbookEntrySerializer,
-)
+from .serializers import (HandbookEntryCreateSerializer, HandbookEntryListSerializer, HandbookEntrySerializer)
 
 
 SCOPE_PARAMETER = openapi.Parameter(
@@ -61,7 +57,7 @@ def get_owner_company(user, company_id):
 # 핸드북 항목 직접 등록 view
 class HandbookEntryListCreateView(APIView):
     @swagger_auto_schema(
-        operation_summary='핸드북 항목 목록',
+        operation_summary='핸드북 항목 목록 조회',
         manual_parameters=[
             SCOPE_PARAMETER,
             PROJECT_PARAMETER,
@@ -140,7 +136,7 @@ class HandbookEntryListCreateView(APIView):
 # 핸드북 항목 상세 조회 view
 class HandbookEntryDetailView(APIView):
     @swagger_auto_schema(
-        operation_summary='핸드북 항목 조회',
+        operation_summary='핸드북 항목 별 상세 조회',
         responses={
             200: HandbookEntrySerializer(),
             401: '인증되지 않음',
