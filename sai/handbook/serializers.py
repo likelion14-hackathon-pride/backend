@@ -1,4 +1,5 @@
 from django.utils import timezone
+from drf_yasg.utils import swagger_serializer_method
 from rest_framework import serializers
 
 from .models import CompanyScope, HandbookEntry
@@ -40,6 +41,16 @@ class HandbookEntryCreateSerializer(serializers.ModelSerializer):
         )
 
 
+# 핸드북 현재 내용 응답용 시리얼라이저
+class HandbookEntryVersionSerializer(serializers.Serializer):
+    id = serializers.IntegerField()
+    version = serializers.IntegerField()
+    ruleEn = serializers.CharField()
+    originalKo = serializers.CharField()
+    citations = serializers.ListField(child=serializers.DictField())
+    createdAt = serializers.DateTimeField()
+
+
 # 핸드북 항목 응답용 시리얼라이저
 class HandbookEntrySerializer(serializers.ModelSerializer):
     companyId = serializers.IntegerField(source='company_id', read_only=True)
@@ -67,6 +78,7 @@ class HandbookEntrySerializer(serializers.ModelSerializer):
             'updatedAt',
         ]
 
+    @swagger_serializer_method(serializer_or_field=HandbookEntryVersionSerializer)
     def get_currentVersion(self, obj):
         return {
             'id': obj.id,
@@ -76,3 +88,9 @@ class HandbookEntrySerializer(serializers.ModelSerializer):
             'citations': [],
             'createdAt': obj.created_at,
         }
+
+
+# 핸드북 목록 응답용 시리얼라이저
+class HandbookEntryListSerializer(serializers.Serializer):
+    items = HandbookEntrySerializer(many=True)
+    nextCursor = serializers.CharField(allow_null=True)
