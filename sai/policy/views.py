@@ -12,7 +12,7 @@ from .models import RiskKeyword
 from .serializers import RiskKeywordSerializer
 
 
-# 요청한 사용자가 해당 회사의 대표인지 확인한다.
+# 요청한 사용자가 해당 회사의 대표인지 확인
 def get_owner_company(user, company_id):
     company = get_object_or_404(Company, id=company_id)
     is_owner = Membership.objects.filter(
