@@ -48,3 +48,17 @@ class RiskKeywordListCreateView(APIView):
         serializer.save(company=company)
 
         return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+
+# 위험 작업 키워드 삭제 담당 view
+class RiskKeywordDeleteView(APIView):
+    def delete(self, request, company_id, keyword_id):
+        company = get_owner_company(request.user, company_id)
+        keyword = get_object_or_404(
+            RiskKeyword,
+            id=keyword_id,
+            company=company,
+        )
+        keyword.delete()
+
+        return Response(status=status.HTTP_204_NO_CONTENT)
