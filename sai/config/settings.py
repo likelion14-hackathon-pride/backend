@@ -88,6 +88,7 @@ PROJECT_APPS = [
     'accounts',
     'companies',
     'policy',
+    'handbook',
 ]
 
 THIRD_PARTY_APPS = [
