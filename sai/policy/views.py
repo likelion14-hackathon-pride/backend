@@ -7,6 +7,7 @@ from rest_framework.views import APIView
 from accounts.models import Membership
 from companies.models import Company
 
+from .models import RiskKeyword
 from .serializers import RiskKeywordSerializer
 
 
@@ -26,8 +27,15 @@ def get_owner_company(user, company_id):
     return company
 
 
-# 위험 작업 키워드 등록 담당 view
-class RiskKeywordCreateView(APIView):
+# 위험 작업 키워드 조회 및 등록 담당 view
+class RiskKeywordListCreateView(APIView):
+    def get(self, request, company_id):
+        company = get_owner_company(request.user, company_id)
+        keywords = RiskKeyword.objects.filter(company=company).order_by('-created_at')
+        serializer = RiskKeywordSerializer(keywords, many=True)
+
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
     def post(self, request, company_id):
         company = get_owner_company(request.user, company_id)
 
