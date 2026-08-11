@@ -1,4 +1,5 @@
 from django.shortcuts import get_object_or_404
+from django.utils import timezone
 from rest_framework import status
 from rest_framework.exceptions import PermissionDenied
 from rest_framework.permissions import IsAuthenticated
@@ -9,7 +10,12 @@ from accounts.models import Membership
 from companies.models import Company
 
 from .models import Question
-from .serializers import OnboardingSerializer, OnboardingStepSerializer
+from .serializers import (
+    OnboardingQuestionSerializer,
+    OnboardingQuestionUpdateSerializer,
+    OnboardingSerializer,
+    OnboardingStepSerializer,
+)
 
 
 # 요청한 사용자가 해당 회사의 대표인지 확인
@@ -54,5 +60,33 @@ class OnboardingView(APIView):
                 'questions': questions,
             }
         )
+
+        return Response(response_serializer.data, status=status.HTTP_200_OK)
+
+
+# 온보딩 질문 답변 저장 view
+class OnboardingQuestionDetailView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def patch(self, request, company_id, question_id):
+        company = get_owner_company(request.user, company_id)
+        question = get_object_or_404(Question, id=question_id, company=company)
+        serializer = OnboardingQuestionUpdateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        answer = serializer.validated_data.get('answerKo')
+        question_status = serializer.validated_data.get('status')
+
+        if answer:
+            question.answer_ko = answer
+            question.status = Question.Status.ANSWERED
+            question.answered_at = timezone.now()
+        elif question_status == Question.Status.SKIPPED:
+            question.answer_ko = None
+            question.status = Question.Status.SKIPPED
+            question.answered_at = None
+
+        question.save(update_fields=['answer_ko', 'status', 'answered_at'])
+        response_serializer = OnboardingQuestionSerializer(question)
 
         return Response(response_serializer.data, status=status.HTTP_200_OK)
