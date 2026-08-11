@@ -4,6 +4,19 @@ from rest_framework import serializers
 from .models import CompanyScope, HandbookEntry, HandbookRevision
 
 
+# 핸드북 범위 응답용 시리얼라이저
+class CompanyScopeSerializer(serializers.ModelSerializer):
+    areaKey = serializers.CharField(source='area_key', read_only=True, allow_null=True)
+
+    class Meta:
+        model = CompanyScope
+        fields = ['id', 'kind', 'areaKey', 'name', 'description', 'state']
+
+
+class CompanyScopeListSerializer(serializers.Serializer):
+    items = CompanyScopeSerializer(many=True)
+
+
 # 핸드북 항목 직접 등록용 시리얼라이저
 class HandbookEntryCreateSerializer(serializers.ModelSerializer):
     ruleEn = serializers.CharField(source='body_en')
