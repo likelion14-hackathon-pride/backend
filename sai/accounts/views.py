@@ -5,13 +5,14 @@ from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework.permissions import IsAuthenticated
 from django.contrib.auth import logout
-from drf_yasg.utils import swagger_auto_schema
 from drf_yasg import openapi
+from drf_yasg.utils import swagger_auto_schema
 
 from .models import Membership
 from .serializers import (
     AuthSerializer,
     CompanySerializer,
+    MeSerializer,
     MembershipSerializer,
     MemberSignupSerializer,
     OwnerSignupSerializer,
@@ -218,6 +219,15 @@ class LogoutView(APIView):
 class MeView(APIView):
     permission_classes = [IsAuthenticated]
 
+    @swagger_auto_schema(
+        operation_summary='내 정보 조회',
+        responses={
+            200: MeSerializer(),
+            401: '인증되지 않음',
+            404: '소속 정보를 찾을 수 없음',
+        },
+        tags=['User'],
+    )
     def get(self, request):
         membership = (
             Membership.objects.select_related('company')

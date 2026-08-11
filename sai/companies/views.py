@@ -1,4 +1,6 @@
 from django.shortcuts import get_object_or_404
+from drf_yasg import openapi
+from drf_yasg.utils import swagger_auto_schema
 from rest_framework import status
 from rest_framework.exceptions import PermissionDenied
 from rest_framework.exceptions import ValidationError
@@ -7,15 +9,38 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from accounts.models import Membership
-from accounts.serializers import CompanySerializer, MembershipSerializer
+from accounts.serializers import CompanySerializer, MembershipListSerializer, MembershipSerializer
 
 from .models import Company
+
+
+CURSOR_PARAMETER = openapi.Parameter(
+    'cursor',
+    openapi.IN_QUERY,
+    type=openapi.TYPE_STRING,
+)
+LIMIT_PARAMETER = openapi.Parameter(
+    'limit',
+    openapi.IN_QUERY,
+    type=openapi.TYPE_INTEGER,
+    default=20,
+)
 
 
 # 회사 정보 조회 view
 class CompanyDetailView(APIView):
     permission_classes = [IsAuthenticated]
 
+    @swagger_auto_schema(
+        operation_summary='회사 정보 조회',
+        responses={
+            200: CompanySerializer(),
+            401: '인증되지 않음',
+            403: '회사 접근 권한 없음',
+            404: '회사를 찾을 수 없음',
+        },
+        tags=['Company'],
+    )
     def get(self, request, company_id):
         company = get_object_or_404(Company, id=company_id)
         is_member = Membership.objects.filter(user=request.user, company=company, left_at__isnull=True).exists()
@@ -31,6 +56,18 @@ class CompanyDetailView(APIView):
 class CompanyMemberListView(APIView):
     permission_classes = [IsAuthenticated]
 
+    @swagger_auto_schema(
+        operation_summary='회사 구성원 목록 조회',
+        manual_parameters=[CURSOR_PARAMETER, LIMIT_PARAMETER],
+        responses={
+            200: MembershipListSerializer(),
+            400: '잘못된 요청',
+            401: '인증되지 않음',
+            403: '회사 접근 권한 없음',
+            404: '회사를 찾을 수 없음',
+        },
+        tags=['Company'],
+    )
     def get(self, request, company_id):
         company = get_object_or_404(Company, id=company_id)
         is_member = Membership.objects.filter(user=request.user, company=company, left_at__isnull=True).exists()
