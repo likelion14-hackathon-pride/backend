@@ -8,7 +8,15 @@ from django.contrib.auth import logout
 from drf_yasg.utils import swagger_auto_schema
 from drf_yasg import openapi
 
-from .serializers import AuthSerializer, MemberSignupSerializer, OwnerSignupSerializer
+from .models import Membership
+from .serializers import (
+    AuthSerializer,
+    CompanySerializer,
+    MembershipSerializer,
+    MemberSignupSerializer,
+    OwnerSignupSerializer,
+    UserSerializer,
+)
 
 NEXT_ROUTES = {
     'OWNER': 'onboarding/day0',
@@ -204,3 +212,27 @@ class LogoutView(APIView):
     def post(self, request):
         logout(request)
         return Response({"message": "logout success!"}, status=status.HTTP_200_OK)
+
+
+# 로그인한 사용자 정보 조회 view
+class MeView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        membership = (
+            Membership.objects.select_related('company')
+            .filter(user=request.user, left_at__isnull=True)
+            .first()
+        )
+
+        if membership is None:
+            return Response({'detail': 'membership not found'}, status=status.HTTP_404_NOT_FOUND)
+
+        return Response(
+            {
+                'user': UserSerializer(request.user).data,
+                'membership': MembershipSerializer(membership).data,
+                'company': CompanySerializer(membership.company).data,
+            },
+            status=status.HTTP_200_OK,
+        )
