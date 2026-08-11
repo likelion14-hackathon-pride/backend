@@ -26,7 +26,6 @@ secret_file = BASE_DIR / 'secrets.json'
 secrets = json.loads(secret_file.read_text()) if secret_file.exists() else {}
 
 
-# 환경변수 > secrets.json > 기본값 순으로 조회
 def get_secret(key, default=None):
     if key in os.environ:
         return os.environ[key]
@@ -37,7 +36,7 @@ def get_secret(key, default=None):
     raise ImproperlyConfigured(f'{key} 설정이 없습니다')
 
 
-# 환경변수는 항상 문자열로 들어오므로 타입을 맞춰서 읽는다
+
 def get_bool(key, default=False):
     value = get_secret(key, default)
     if isinstance(value, str):
@@ -232,3 +231,5 @@ MAILERS = {
         'BACKEND': 'django.core.mail.backends.console.EmailBackend',
     },
 }
+AWS_STORAGE_BUCKET_NAME = get_secret('S3_BUCKET', 'saisai-sources')
+AWS_S3_REGION_NAME = 'ap-northeast-2'
