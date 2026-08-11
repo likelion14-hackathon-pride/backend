@@ -108,6 +108,16 @@ class CompanyMemberListView(APIView):
 class CompanySettingsView(APIView):
     permission_classes = [IsAuthenticated]
 
+    @swagger_auto_schema(
+        operation_summary='회사 근무시간 설정 조회',
+        responses={
+            200: CompanySettingsSerializer(),
+            401: '인증되지 않음',
+            403: '회사 접근 권한 없음',
+            404: '회사를 찾을 수 없음',
+        },
+        tags=['Company'],
+    )
     def get(self, request, company_id):
         company = get_object_or_404(Company, id=company_id)
         is_member = Membership.objects.filter(user=request.user, company=company, left_at__isnull=True).exists()
@@ -118,6 +128,18 @@ class CompanySettingsView(APIView):
         serializer = CompanySettingsSerializer(company)
         return Response(serializer.data, status=status.HTTP_200_OK)
 
+    @swagger_auto_schema(
+        operation_summary='회사 근무시간 설정 수정',
+        request_body=CompanySettingsSerializer,
+        responses={
+            200: CompanySettingsSerializer(),
+            400: '잘못된 요청',
+            401: '인증되지 않음',
+            403: 'Owner 권한 없음',
+            404: '회사를 찾을 수 없음',
+        },
+        tags=['Company'],
+    )
     def patch(self, request, company_id):
         company = get_object_or_404(Company, id=company_id)
         is_owner = Membership.objects.filter(user=request.user, company=company, role=Membership.Role.OWNER, left_at__isnull=True).exists()
