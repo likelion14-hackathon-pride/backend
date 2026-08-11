@@ -1,0 +1,25 @@
+name: Deploy to EC2
+
+on:
+  push:
+    branches: [develop]
+  workflow_dispatch: 
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script: |
+            cd ~/backend
+            git pull origin develop
+            cd sai
+            ~/.local/bin/poetry install --no-root
+            ~/.local/bin/poetry run python manage.py migrate --noinput
+            ~/.local/bin/poetry run python manage.py collectstatic --noinput
+            sudo systemctl restart gunicorn
