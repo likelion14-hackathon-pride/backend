@@ -12,6 +12,7 @@ from accounts.models import Membership
 from accounts.serializers import CompanySerializer, MembershipListSerializer, MembershipSerializer
 
 from .models import Company
+from .serializers import CompanySettingsSerializer
 
 
 CURSOR_PARAMETER = openapi.Parameter(
@@ -101,3 +102,18 @@ class CompanyMemberListView(APIView):
             {'items': serializer.data, 'nextCursor': next_cursor},
             status=status.HTTP_200_OK,
         )
+
+
+# 회사 근무시간 설정 조회 view
+class CompanySettingsView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, company_id):
+        company = get_object_or_404(Company, id=company_id)
+        is_member = Membership.objects.filter(user=request.user, company=company, left_at__isnull=True).exists()
+
+        if not is_member:
+            raise PermissionDenied('company permission required')
+
+        serializer = CompanySettingsSerializer(company)
+        return Response(serializer.data, status=status.HTTP_200_OK)
