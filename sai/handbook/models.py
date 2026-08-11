@@ -12,7 +12,7 @@ class CompanyScope(models.Model):
     area_key = models.CharField(max_length=16, null=True, blank=True)
     name = models.CharField(max_length=80)
     description = models.TextField(null=True, blank=True)
-    state = models.CharField(max_length=8)
+    state = models.CharField(max_length=8, null=True, blank=True)
 
     class Meta:
         db_table = 'companies_scope'
@@ -38,12 +38,12 @@ class HandbookEntry(models.Model):
     original_lang = models.CharField(max_length=2, default='ko')
     status = models.CharField(max_length=10, choices=Status.choices, default=Status.DRAFT)
     confidence = models.CharField(max_length=6, null=True, blank=True)
-    origin = models.CharField(max_length=14)
+    origin = models.CharField(max_length=16)
     ask_count = models.SmallIntegerField(default=0)
     drift_status = models.CharField(max_length=16, choices=DriftStatus.choices, default=DriftStatus.CURRENT)
     confirmed_at = models.DateTimeField(null=True, blank=True)
-    embedding_ko = VectorField(dimensions=1024, null=True, blank=True)
-    embedding_en = VectorField(dimensions=1024, null=True, blank=True)
+    embedding_ko = VectorField(dimensions=1536, null=True, blank=True)
+    embedding_en = VectorField(dimensions=1536, null=True, blank=True)
     embedding_model = models.CharField(max_length=40, null=True, blank=True)
     embedded_at = models.DateTimeField(null=True, blank=True)
     translated_at = models.DateTimeField(null=True, blank=True)
