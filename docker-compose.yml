@@ -1,0 +1,19 @@
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    container_name: sai-db
+    environment:
+      POSTGRES_USER: sai
+      POSTGRES_PASSWORD: dev
+      POSTGRES_DB: sai
+    ports:
+      - "5432:5432"
+    volumes:
+      - sai_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sai"]
+      interval: 5s
+      retries: 5
+
+volumes:
+  sai_pgdata:
