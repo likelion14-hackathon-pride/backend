@@ -9,8 +9,10 @@ from rest_framework.views import APIView
 from accounts.models import Membership
 from companies.models import Company
 
-from .models import HandbookEntry
+from .models import CompanyScope, HandbookEntry
 from .serializers import (
+    CompanyScopeListSerializer,
+    CompanyScopeSerializer,
     HandbookEntryCreateSerializer,
     HandbookEntryListSerializer,
     HandbookEntrySerializer,
@@ -177,3 +179,21 @@ class HandbookEntryDetailView(APIView):
         response_serializer = HandbookEntrySerializer(entry)
 
         return Response(response_serializer.data, status=status.HTTP_200_OK)
+
+
+# 회사 규칙과 프로젝트 범위 목록 조회 view
+class CompanyScopeListView(APIView):
+    def get(self, request, company_id):
+        company = get_owner_company(request.user, company_id)
+        scopes = CompanyScope.objects.filter(company=company)
+        scope_kind = request.query_params.get('kind')
+
+        if scope_kind:
+            if scope_kind not in CompanyScope.Kind.values:
+                raise ValidationError({'kind': 'invalid kind'})
+            scopes = scopes.filter(kind=scope_kind)
+
+        scopes = scopes.order_by('kind', 'name')
+        serializer = CompanyScopeSerializer(scopes, many=True)
+
+        return Response({'items': serializer.data}, status=status.HTTP_200_OK)
