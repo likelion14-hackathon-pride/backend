@@ -152,3 +152,14 @@ class MembershipSerializer(serializers.ModelSerializer):
         if obj.left_at:
             return 'LEFT'
         return 'ACTIVE'
+
+
+class MeSerializer(serializers.Serializer):
+    user = UserSerializer()
+    membership = MembershipSerializer()
+    company = CompanySerializer()
+
+
+class MembershipListSerializer(serializers.Serializer):
+    items = MembershipSerializer(many=True)
+    nextCursor = serializers.CharField(allow_null=True)
