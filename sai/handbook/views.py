@@ -67,6 +67,17 @@ def get_owner_company(user, company_id):
     return company
 
 
+# 요청한 사용자가 해당 회사의 구성원인지 확인
+def get_member_company(user, company_id):
+    company = get_object_or_404(Company, id=company_id)
+    is_member = Membership.objects.filter(user=user, company=company, left_at__isnull=True).exists()
+
+    if not is_member:
+        raise PermissionDenied('company permission required')
+
+    return company
+
+
 # 핸드북 항목 직접 등록 view
 class HandbookEntryListCreateView(APIView):
     @swagger_auto_schema(
@@ -82,13 +93,13 @@ class HandbookEntryListCreateView(APIView):
             200: HandbookEntryListSerializer(),
             400: '잘못된 요청',
             401: '인증되지 않음',
-            403: 'Owner 권한 없음',
+            403: '회사 접근 권한 없음',
             404: '회사를 찾을 수 없음',
         },
         tags=['Handbook'],
     )
     def get(self, request, company_id):
-        company = get_owner_company(request.user, company_id)
+        company = get_member_company(request.user, company_id)
         entries = HandbookEntry.objects.filter(company=company).select_related('scope')
 
         scope_id = request.query_params.get('scopeId')
@@ -156,13 +167,13 @@ class HandbookEntryDetailView(APIView):
         responses={
             200: HandbookEntrySerializer(),
             401: '인증되지 않음',
-            403: 'Owner 권한 없음',
+            403: '회사 접근 권한 없음',
             404: '회사 또는 핸드북 항목을 찾을 수 없음',
         },
         tags=['Handbook'],
     )
     def get(self, request, company_id, entry_id):
-        company = get_owner_company(request.user, company_id)
+        company = get_member_company(request.user, company_id)
         entry = get_object_or_404(
             HandbookEntry.objects.select_related('scope'),
             id=entry_id,
@@ -208,13 +219,13 @@ class CompanyScopeListView(APIView):
             200: CompanyScopeListSerializer(),
             400: '잘못된 요청',
             401: '인증되지 않음',
-            403: 'Owner 권한 없음',
+            403: '회사 접근 권한 없음',
             404: '회사를 찾을 수 없음',
         },
         tags=['Handbook'],
     )
     def get(self, request, company_id):
-        company = get_owner_company(request.user, company_id)
+        company = get_member_company(request.user, company_id)
         scopes = CompanyScope.objects.filter(company=company)
         scope_kind = request.query_params.get('kind')
 
