@@ -1,5 +1,6 @@
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
+from drf_yasg.utils import swagger_auto_schema
 from rest_framework import status
 from rest_framework.exceptions import PermissionDenied
 from rest_framework.permissions import IsAuthenticated
@@ -37,6 +38,16 @@ def get_owner_company(user, company_id):
 class OnboardingView(APIView):
     permission_classes = [IsAuthenticated]
 
+    @swagger_auto_schema(
+        operation_summary='온보딩 진행 조회',
+        responses={
+            200: OnboardingSerializer(),
+            401: '인증되지 않음',
+            403: 'Owner 권한 없음',
+            404: '회사를 찾을 수 없음',
+        },
+        tags=['Onboarding'],
+    )
     def get(self, request, company_id):
         company = get_owner_company(request.user, company_id)
         questions = Question.objects.filter(company=company).order_by('priority', 'id')
@@ -49,6 +60,18 @@ class OnboardingView(APIView):
 
         return Response(serializer.data, status=status.HTTP_200_OK)
 
+    @swagger_auto_schema(
+        operation_summary='온보딩 진행 단계 저장',
+        request_body=OnboardingStepSerializer,
+        responses={
+            200: OnboardingSerializer(),
+            400: '잘못된 요청',
+            401: '인증되지 않음',
+            403: 'Owner 권한 없음',
+            404: '회사를 찾을 수 없음',
+        },
+        tags=['Onboarding'],
+    )
     def patch(self, request, company_id):
         company = get_owner_company(request.user, company_id)
         serializer = OnboardingStepSerializer(data=request.data)
@@ -72,6 +95,18 @@ class OnboardingView(APIView):
 class OnboardingQuestionDetailView(APIView):
     permission_classes = [IsAuthenticated]
 
+    @swagger_auto_schema(
+        operation_summary='온보딩 질문 답변 저장',
+        request_body=OnboardingQuestionUpdateSerializer,
+        responses={
+            200: OnboardingQuestionSerializer(),
+            400: '잘못된 요청',
+            401: '인증되지 않음',
+            403: 'Owner 권한 없음',
+            404: '회사 또는 질문을 찾을 수 없음',
+        },
+        tags=['Onboarding'],
+    )
     def patch(self, request, company_id, question_id):
         company = get_owner_company(request.user, company_id)
         question = get_object_or_404(Question, id=question_id, company=company)
@@ -100,6 +135,16 @@ class OnboardingQuestionDetailView(APIView):
 class OnboardingCompleteView(APIView):
     permission_classes = [IsAuthenticated]
 
+    @swagger_auto_schema(
+        operation_summary='온보딩 완료',
+        responses={
+            200: OnboardingCompleteSerializer(),
+            401: '인증되지 않음',
+            403: 'Owner 권한 없음',
+            404: '회사를 찾을 수 없음',
+        },
+        tags=['Onboarding'],
+    )
     def post(self, request, company_id):
         company = get_owner_company(request.user, company_id)
         company.onboarding_step = 4
