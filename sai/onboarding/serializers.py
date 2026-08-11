@@ -56,3 +56,16 @@ class OnboardingSerializer(serializers.Serializer):
 # 온보딩 단계 저장용 시리얼라이저
 class OnboardingStepSerializer(serializers.Serializer):
     onboardingStep = serializers.IntegerField(min_value=1, max_value=4)
+
+
+# 온보딩 완료 화면 요약용 시리얼라이저
+class OnboardingSummarySerializer(serializers.Serializer):
+    sourceCount = serializers.IntegerField()
+    handbookEntryCount = serializers.IntegerField()
+    riskKeywordCount = serializers.IntegerField()
+
+
+class OnboardingCompleteSerializer(serializers.Serializer):
+    onboardingStep = serializers.IntegerField()
+    nextRoute = serializers.CharField()
+    summary = OnboardingSummarySerializer()

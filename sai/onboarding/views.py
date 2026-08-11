@@ -8,11 +8,15 @@ from rest_framework.views import APIView
 
 from accounts.models import Membership
 from companies.models import Company
+from handbook.models import HandbookEntry
+from policy.models import RiskKeyword
+from sources.models import Connection
 
 from .models import Question
 from .serializers import (
     OnboardingQuestionSerializer,
     OnboardingQuestionUpdateSerializer,
+    OnboardingCompleteSerializer,
     OnboardingSerializer,
     OnboardingStepSerializer,
 )
@@ -88,5 +92,35 @@ class OnboardingQuestionDetailView(APIView):
 
         question.save(update_fields=['answer_ko', 'status', 'answered_at'])
         response_serializer = OnboardingQuestionSerializer(question)
+
+        return Response(response_serializer.data, status=status.HTTP_200_OK)
+
+
+# Day 0 온보딩 완료 view
+class OnboardingCompleteView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, company_id):
+        company = get_owner_company(request.user, company_id)
+        company.onboarding_step = 4
+        company.save(update_fields=['onboarding_step'])
+
+        response_serializer = OnboardingCompleteSerializer(
+            {
+                'onboardingStep': company.onboarding_step,
+                'nextRoute': 'owner/dashboard',
+                'summary': {
+                    'sourceCount': Connection.objects.filter(
+                        company=company,
+                        status=Connection.Status.CONNECTED,
+                    ).count(),
+                    'handbookEntryCount': HandbookEntry.objects.filter(
+                        company=company,
+                        status=HandbookEntry.Status.CONFIRMED,
+                    ).count(),
+                    'riskKeywordCount': RiskKeyword.objects.filter(company=company).count(),
+                },
+            }
+        )
 
         return Response(response_serializer.data, status=status.HTTP_200_OK)
