@@ -80,3 +80,21 @@ class HandbookRevision(models.Model):
 
     class Meta:
         db_table = 'handbook_revision'
+
+
+# 핸드북 항목 근거
+class HandbookEvidence(models.Model):
+    company = models.ForeignKey('companies.Company', on_delete=models.CASCADE, related_name='handbook_evidences')
+    entry = models.ForeignKey(HandbookEntry, on_delete=models.CASCADE, related_name='evidences')
+    chunk = models.ForeignKey('sources.Chunk', on_delete=models.SET_NULL, null=True, blank=True, related_name='handbook_evidences')
+    document = models.ForeignKey('sources.RawDocument', on_delete=models.SET_NULL, null=True, blank=True, related_name='handbook_evidences')
+    quote = models.TextField(null=True, blank=True)
+    locator = models.CharField(max_length=60, null=True, blank=True)
+    tag = models.CharField(max_length=8)
+    source_label = models.CharField(max_length=200, null=True, blank=True)
+    speaker_name = models.CharField(max_length=60, null=True, blank=True)
+    permalink = models.TextField(null=True, blank=True)
+    occurred_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        db_table = 'handbook_evidence'
