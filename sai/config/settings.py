@@ -22,26 +22,42 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/6.1/howto/deployment/checklist/
 
-secret_file = os.path.join(BASE_DIR, 'secrets.json') 
-
-with open(secret_file) as f:
-    secrets = json.loads(f.read())
-
-def get_secret(setting, secrets=secrets): 
-# secret 변수를 가져오거나 그렇지 못 하면 예외를 반환
-    try:
-        return secrets[setting]
-    except KeyError:
-        error_msg = "Set the {} environment variable".format(setting)
-        raise ImproperlyConfigured(error_msg)
-
-SECRET_KEY = get_secret("SECRET_KEY")
+secret_file = BASE_DIR / 'secrets.json'
+secrets = json.loads(secret_file.read_text()) if secret_file.exists() else {}
 
 
-# SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+def get_secret(key, default=None):
+    if key in os.environ:
+        return os.environ[key]
+    if key in secrets:
+        return secrets[key]
+    if default is not None:
+        return default
+    raise ImproperlyConfigured(f'{key} 설정이 없습니다')
 
-ALLOWED_HOSTS = []
+
+
+def get_bool(key, default=False):
+    value = get_secret(key, default)
+    if isinstance(value, str):
+        return value.strip().lower() in ('1', 'true', 'yes', 'on')
+    return bool(value)
+
+
+def get_list(key, default=None):
+    value = get_secret(key, [] if default is None else default)
+    if isinstance(value, str):
+        return [item.strip() for item in value.split(',') if item.strip()]
+    return list(value)
+
+
+SECRET_KEY = get_secret('SECRET_KEY')
+
+DEBUG = get_bool('DEBUG', False)
+
+ALLOWED_HOSTS = get_list('ALLOWED_HOSTS', ['localhost', '127.0.0.1'])
+
+CSRF_TRUSTED_ORIGINS = get_list('CSRF_ORIGINS', [])
 
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': ( # DRF의 기본 인증Authentication 방식을 JWT로 바꿉니다.
@@ -82,6 +98,7 @@ DJANGO_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
+    'django.contrib.postgres',
 ]
 
 PROJECT_APPS = [
@@ -89,6 +106,10 @@ PROJECT_APPS = [
     'companies',
     'policy',
     'handbook',
+    'sources',
+    'onboarding',
+    'qna',
+    'cards',
 ]
 
 THIRD_PARTY_APPS = [
@@ -102,7 +123,11 @@ THIRD_PARTY_APPS = [
 INSTALLED_APPS = DJANGO_APPS + PROJECT_APPS + THIRD_PARTY_APPS
 AUTH_USER_MODEL = 'accounts.User'
 
+CORS_ALLOWED_ORIGINS = get_list('CORS_ORIGINS', ['http://localhost:5173'])
+CORS_ALLOW_CREDENTIALS = True
+
 MIDDLEWARE = [
+    'corsheaders.middleware.CorsMiddleware',
     'django.middleware.security.SecurityMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
@@ -135,10 +160,15 @@ WSGI_APPLICATION = 'config.wsgi.application'
 # Database
 # https://docs.djangoproject.com/en/6.1/ref/settings/#databases
 
+# DB 변경 
 DATABASES = {
     'default': {
-        'ENGINE': 'django.db.backends.sqlite3',
-        'NAME': BASE_DIR / 'db.sqlite3',
+        'ENGINE': 'django.db.backends.postgresql',
+        'NAME': get_secret('DB_NAME'),
+        'USER': get_secret('DB_USER'),
+        'PASSWORD': get_secret('DB_PASSWORD'),
+        'HOST': get_secret('DB_HOST'),
+        'PORT': get_secret('DB_PORT'),
     }
 }
 
@@ -190,6 +220,7 @@ USE_TZ = True
 # https://docs.djangoproject.com/en/6.1/howto/static-files/
 
 STATIC_URL = 'static/'
+STATIC_ROOT = BASE_DIR / 'staticfiles'
 
 
 # Email
@@ -200,3 +231,5 @@ MAILERS = {
         'BACKEND': 'django.core.mail.backends.console.EmailBackend',
     },
 }
+AWS_STORAGE_BUCKET_NAME = get_secret('S3_BUCKET', 'saisai-sources')
+AWS_S3_REGION_NAME = 'ap-northeast-2'

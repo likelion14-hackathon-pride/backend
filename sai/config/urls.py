@@ -15,6 +15,7 @@ Including another URLconf
     2. Add a URL to urlpatterns:  path('blog/', include('blog.urls'))
 """
 from django.contrib import admin
+from django.http import JsonResponse
 from django.urls import path, include
 from rest_framework import permissions
 from drf_yasg.views import get_schema_view 
@@ -32,6 +33,7 @@ schema_view = get_schema_view(
 )
 
 urlpatterns = [
+    path('health/', lambda request: JsonResponse({'ok': True})),
     path('admin/', admin.site.urls),
     path('api/auth/', include('accounts.urls')),
     path('api/companies/', include('policy.urls')),

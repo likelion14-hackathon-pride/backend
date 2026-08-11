@@ -1,5 +1,5 @@
 from django.db import models
-
+from pgvector.django import VectorField, HnswIndex
 
 # 회사 규칙 / 프로젝트 범위 구분
 class CompanyScope(models.Model):
@@ -42,8 +42,8 @@ class HandbookEntry(models.Model):
     ask_count = models.SmallIntegerField(default=0)
     drift_status = models.CharField(max_length=16, choices=DriftStatus.choices, default=DriftStatus.CURRENT)
     confirmed_at = models.DateTimeField(null=True, blank=True)
-    embedding_ko = models.JSONField(null=True, blank=True)
-    embedding_en = models.JSONField(null=True, blank=True)
+    embedding_ko = VectorField(dimensions=1024, null=True, blank=True)
+    embedding_en = VectorField(dimensions=1024, null=True, blank=True)
     embedding_model = models.CharField(max_length=40, null=True, blank=True)
     embedded_at = models.DateTimeField(null=True, blank=True)
     translated_at = models.DateTimeField(null=True, blank=True)
@@ -53,7 +53,22 @@ class HandbookEntry(models.Model):
 
     class Meta:
         db_table = 'handbook_entry'
-
+        indexes = [
+            HnswIndex(
+                name='hb_emb_ko_idx',
+                fields=['embedding_ko'],
+                m=16,
+                ef_construction=64,
+                opclasses=['vector_cosine_ops'],
+            ),
+            HnswIndex(
+                name='hb_emb_en_idx',
+                fields=['embedding_en'],
+                m=16,
+                ef_construction=64,
+                opclasses=['vector_cosine_ops'],
+            ),
+        ]
 
 # 핸드북 항목 수정 이력 -> 수정 전 내용 기록 (버전관리?)
 class HandbookRevision(models.Model):
