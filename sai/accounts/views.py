@@ -15,27 +15,11 @@ NEXT_ROUTES = {
     'MEMBER': 'app/home',
 }
 
+FORM_AND_JSON = ['application/x-www-form-urlencoded', 'application/json']
+
 def _string(example):
     return openapi.Schema(type=openapi.TYPE_STRING, example=example)
 
-
-# 에러는 전부 {"error": {"code", "field"}} 형태 
-ERROR_SCHEMA = openapi.Schema(
-    type=openapi.TYPE_OBJECT,
-    properties={
-        'error': openapi.Schema(
-            type=openapi.TYPE_OBJECT,
-            properties={
-                'code': _string('invalid_credentials'),
-                'field': openapi.Schema(
-                    type=openapi.TYPE_STRING,
-                    nullable=True,
-                    description='문구를 표시할 필드. null이면 폼 상단에 표시한다.',
-                ),
-            },
-        ),
-    },
-)
 
 OWNER_SIGNUP_RESPONSE = openapi.Schema(
     type=openapi.TYPE_OBJECT,
@@ -75,25 +59,31 @@ AUTH_RESPONSE = openapi.Schema(
     },
 )
 
+LOGOUT_RESPONSE = openapi.Schema(
+    type=openapi.TYPE_OBJECT,
+    properties={'message': _string('logout success!')},
+)
+
 
 class OwnerSignupView(APIView):
     permission_classes = [AllowAny]
     throttle_scope = 'signup'
 
     @swagger_auto_schema(
-        operation_summary="대표 회원가입",
+        operation_summary='대표 회원가입',
         operation_description=(
-            "회사를 새로 만들고 대표 계정을 생성합니다.\n\n"
-            "발급된 회사 코드는 이 응답에서만 확인할 수 있습니다. "
-            "화면 언어는 ko로 고정됩니다."
+            '발급된 회사 코드는 이 응답에서만 확인할 수 있습니다. '
+            '화면 언어는 ko로 고정됩니다.'
         ),
         request_body=OwnerSignupSerializer,
+        consumes=FORM_AND_JSON,
         responses={
-            201: openapi.Response("가입 성공", OWNER_SIGNUP_RESPONSE),
-            400: openapi.Response("email_taken / weak_password", ERROR_SCHEMA),
-            429: openapi.Response("rate_limited", ERROR_SCHEMA),
+            201: OWNER_SIGNUP_RESPONSE,
+            400: '잘못된 요청 (email_taken / weak_password)',
+            429: '요청 한도 초과 (rate_limited)',
         },
-        security=[],  # 인증 없이 호출하는 API
+        tags=['Auth'],
+        security=[],
     )
     def post(self, request):
         serializer = OwnerSignupSerializer(data=request.data)
@@ -124,20 +114,17 @@ class MemberSignupView(APIView):
     throttle_scope = 'signup'
 
     @swagger_auto_schema(
-        operation_summary="팀원 회원가입",
-        operation_description=(
-            "회사 코드로 기존 회사에 합류합니다.\n\n"
-            "화면 언어는 en으로 고정됩니다."
-        ),
+        operation_summary='팀원 회원가입',
+        operation_description='회사 코드로 기존 회사에 합류합니다. 화면 언어는 en으로 고정됩니다.',
         request_body=MemberSignupSerializer,
+        consumes=FORM_AND_JSON,
         responses={
-            201: openapi.Response("가입 성공", AUTH_RESPONSE),
-            400: openapi.Response(
-                "email_taken / weak_password / company_code_not_found", ERROR_SCHEMA
-            ),
-            429: openapi.Response("rate_limited", ERROR_SCHEMA),
+            201: AUTH_RESPONSE,
+            400: '잘못된 요청 (email_taken / weak_password / company_code_not_found)',
+            429: '요청 한도 초과 (rate_limited)',
         },
-        security=[],  # 인증 없이 호출하는 API
+        tags=['Auth'],
+        security=[],
     )
     def post(self, request):
         serializer = MemberSignupSerializer(data=request.data)
@@ -167,18 +154,17 @@ class AuthView(APIView):
     throttle_scope = 'login'
 
     @swagger_auto_schema(
-        operation_summary="로그인",
-        operation_description=(
-            "이메일과 비밀번호로 로그인합니다.\n\n"
-            "비밀번호가 틀렸거나 소속이 없으면 모두 invalid_credentials로 응답합니다."
-        ),
+        operation_summary='로그인',
+        operation_description='비밀번호가 틀렸거나 소속이 없으면 모두 invalid_credentials로 응답합니다.',
         request_body=AuthSerializer,
+        consumes=FORM_AND_JSON,
         responses={
-            200: openapi.Response("로그인 성공", AUTH_RESPONSE),
-            400: openapi.Response("invalid_credentials", ERROR_SCHEMA),
-            429: openapi.Response("rate_limited", ERROR_SCHEMA),
+            200: AUTH_RESPONSE,
+            400: '잘못된 요청 (invalid_credentials)',
+            429: '요청 한도 초과 (rate_limited)',
         },
-        security=[],  # 인증 없이 호출하는 API
+        tags=['Auth'],
+        security=[],
     )
     def post(self, request):
         serializer = AuthSerializer(data=request.data, context={'request': request})
@@ -207,21 +193,13 @@ class LogoutView(APIView):
     permission_classes = [IsAuthenticated]
 
     @swagger_auto_schema(
-        operation_summary="로그아웃",
-        operation_description=(
-            "로그아웃합니다. Authorization 헤더에 access token이 필요합니다.\n\n"
-            "현재 서버는 발급된 토큰을 무효화하지 않습니다. "
-        ),
+        operation_summary='로그아웃',
+        operation_description='현재 서버는 발급된 토큰을 무효화하지 않습니다.',
         responses={
-            200: openapi.Response(
-                "로그아웃 성공",
-                openapi.Schema(
-                    type=openapi.TYPE_OBJECT,
-                    properties={'message': _string('logout success!')},
-                ),
-            ),
-            401: "인증되지 않음",
+            200: LOGOUT_RESPONSE,
+            401: '인증되지 않음',
         },
+        tags=['Auth'],
     )
     def post(self, request):
         logout(request)
