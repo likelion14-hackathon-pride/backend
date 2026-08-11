@@ -90,6 +90,10 @@ PROJECT_APPS = [
     'companies',
     'policy',
     'handbook',
+    'sources',
+    'onboarding',
+    'qna',
+    'cards',
 ]
 
 THIRD_PARTY_APPS = [
