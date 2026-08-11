@@ -20,22 +20,28 @@ from .serializers import (
 )
 
 
-SCOPE_PARAMETER = openapi.Parameter(
-    'scope',
+SCOPE_ID_PARAMETER = openapi.Parameter(
+    'scopeId',
+    openapi.IN_QUERY,
+    type=openapi.TYPE_INTEGER,
+)
+SCOPE_KIND_PARAMETER = openapi.Parameter(
+    'scopeKind',
     openapi.IN_QUERY,
     type=openapi.TYPE_STRING,
     enum=['COMPANY', 'PROJECT'],
 )
-PROJECT_PARAMETER = openapi.Parameter(
-    'projectId',
+KIND_PARAMETER = openapi.Parameter(
+    'kind',
     openapi.IN_QUERY,
     type=openapi.TYPE_STRING,
+    enum=['COMPANY', 'PROJECT'],
 )
 STATUS_PARAMETER = openapi.Parameter(
     'status',
     openapi.IN_QUERY,
     type=openapi.TYPE_STRING,
-    enum=['CONFIRMED', 'BLANK', 'ARCHIVED'],
+    enum=['DRAFT', 'CONFIRMED', 'BLANK', 'ARCHIVED'],
 )
 CURSOR_PARAMETER = openapi.Parameter(
     'cursor',
@@ -66,8 +72,8 @@ class HandbookEntryListCreateView(APIView):
     @swagger_auto_schema(
         operation_summary='핸드북 항목 목록 조회',
         manual_parameters=[
-            SCOPE_PARAMETER,
-            PROJECT_PARAMETER,
+            SCOPE_ID_PARAMETER,
+            SCOPE_KIND_PARAMETER,
             STATUS_PARAMETER,
             CURSOR_PARAMETER,
             LIMIT_PARAMETER,
@@ -166,6 +172,18 @@ class HandbookEntryDetailView(APIView):
 
         return Response(serializer.data, status=status.HTTP_200_OK)
 
+    @swagger_auto_schema(
+        operation_summary='핸드북 항목 수정',
+        request_body=HandbookEntryUpdateSerializer,
+        responses={
+            200: HandbookEntrySerializer(),
+            400: '잘못된 요청',
+            401: '인증되지 않음',
+            403: 'Owner 권한 없음',
+            404: '회사, 범위 또는 핸드북 항목을 찾을 수 없음',
+        },
+        tags=['Handbook'],
+    )
     def patch(self, request, company_id, entry_id):
         company = get_owner_company(request.user, company_id)
         entry = get_object_or_404(
@@ -183,6 +201,18 @@ class HandbookEntryDetailView(APIView):
 
 # 회사 규칙과 프로젝트 범위 목록 조회 view
 class CompanyScopeListView(APIView):
+    @swagger_auto_schema(
+        operation_summary='핸드북 범위 목록 조회',
+        manual_parameters=[KIND_PARAMETER],
+        responses={
+            200: CompanyScopeListSerializer(),
+            400: '잘못된 요청',
+            401: '인증되지 않음',
+            403: 'Owner 권한 없음',
+            404: '회사를 찾을 수 없음',
+        },
+        tags=['Handbook'],
+    )
     def get(self, request, company_id):
         company = get_owner_company(request.user, company_id)
         scopes = CompanyScope.objects.filter(company=company)
