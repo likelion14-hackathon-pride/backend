@@ -83,15 +83,18 @@ class HandbookEntryListCreateView(APIView):
         company = get_owner_company(request.user, company_id)
         entries = HandbookEntry.objects.filter(company=company).select_related('scope')
 
-        scope = request.query_params.get('scope')
-        project_id = request.query_params.get('projectId')
+        scope_id = request.query_params.get('scopeId')
+        scope_kind = request.query_params.get('scopeKind')
         entry_status = request.query_params.get('status')
         cursor = request.query_params.get('cursor')
 
-        if scope:
-            entries = entries.filter(scope__kind=scope)
-        if project_id:
-            entries = entries.filter(scope__area_key=project_id)
+        if scope_kind:
+            entries = entries.filter(scope__kind=scope_kind)
+        if scope_id:
+            try:
+                entries = entries.filter(scope_id=int(scope_id))
+            except ValueError:
+                raise ValidationError({'scopeId': 'invalid scopeId'})
         if entry_status:
             entries = entries.filter(status=entry_status)
         if cursor:
