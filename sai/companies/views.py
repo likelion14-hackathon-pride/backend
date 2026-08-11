@@ -117,3 +117,16 @@ class CompanySettingsView(APIView):
 
         serializer = CompanySettingsSerializer(company)
         return Response(serializer.data, status=status.HTTP_200_OK)
+
+    def patch(self, request, company_id):
+        company = get_object_or_404(Company, id=company_id)
+        is_owner = Membership.objects.filter(user=request.user, company=company, role=Membership.Role.OWNER, left_at__isnull=True).exists()
+
+        if not is_owner:
+            raise PermissionDenied('owner permission required')
+
+        serializer = CompanySettingsSerializer(company, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+
+        return Response(serializer.data, status=status.HTTP_200_OK)
