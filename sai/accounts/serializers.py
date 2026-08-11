@@ -109,3 +109,46 @@ class AuthSerializer(serializers.Serializer):
 
         attrs['membership'] = membership
         return attrs
+
+
+# 사용자 정보 조회용 시리얼라이저
+class UserSerializer(serializers.ModelSerializer):
+    name = serializers.CharField(source='display_name', read_only=True)
+    locale = serializers.CharField(source='ui_language', read_only=True)
+
+    class Meta:
+        model = User
+        fields = ['id', 'email', 'name', 'locale', 'timezone']
+
+
+# 회사 정보 조회용 시리얼라이저
+class CompanySerializer(serializers.ModelSerializer):
+    onboardingStatus = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Company
+        fields = ['id', 'name', 'code', 'timezone', 'onboardingStatus']
+
+    def get_onboardingStatus(self, obj):
+        if obj.onboarding_step == 0:
+            return 'NOT_STARTED'
+        if obj.onboarding_step >= 4:
+            return 'COMPLETED'
+        return 'IN_PROGRESS'
+
+
+# 회사 구성원 정보 조회용 시리얼라이저
+class MembershipSerializer(serializers.ModelSerializer):
+    userId = serializers.IntegerField(source='user_id', read_only=True)
+    companyId = serializers.IntegerField(source='company_id', read_only=True)
+    status = serializers.SerializerMethodField()
+    user = UserSerializer(read_only=True)
+
+    class Meta:
+        model = Membership
+        fields = ['id', 'userId', 'companyId', 'role', 'status', 'user']
+
+    def get_status(self, obj):
+        if obj.left_at:
+            return 'LEFT'
+        return 'ACTIVE'
