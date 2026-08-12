@@ -21,6 +21,7 @@ from rest_framework import permissions
 from drf_yasg.views import get_schema_view 
 from drf_yasg import openapi 
 from accounts.views import MeView
+from sources.views import slack_events
 
 # Swagger 설정
 schema_view = get_schema_view(
@@ -43,5 +44,5 @@ urlpatterns = [
     path('api/companies/', include('policy.urls')),
     path('api/companies/', include('handbook.urls')),
     path('swagger/', schema_view.with_ui('swagger', cache_timeout=0), name='schema-swagger-ui'),
-    path("api/slack/", slack_events),
+    path("api/slack/events/", slack_events),
 ]
