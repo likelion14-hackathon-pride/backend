@@ -233,3 +233,5 @@ MAILERS = {
 }
 AWS_STORAGE_BUCKET_NAME = get_secret('S3_BUCKET', 'saisai-sources')
 AWS_S3_REGION_NAME = 'ap-northeast-2'
+SLACK_SIGNING_SECRET = get_secret('SLACK_SIGNING_SECRET')
+SLACK_BOT_TOKEN = get_secret('SLACK_BOT_TOKEN')
