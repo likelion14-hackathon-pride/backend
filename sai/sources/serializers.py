@@ -32,6 +32,22 @@ class ChannelListSerializer(serializers.Serializer):
     items = ChannelSerializer(many=True)
 
 
+# 아직 등록되지 않은 워크스페이스 채널
+class AvailableChannelSerializer(serializers.Serializer):
+    externalId = serializers.CharField(read_only=True)
+    label = serializers.CharField(read_only=True)
+    isPrivate = serializers.BooleanField(read_only=True)
+    isMember = serializers.BooleanField(read_only=True)
+
+
+class AvailableChannelListSerializer(serializers.Serializer):
+    items = AvailableChannelSerializer(many=True)
+
+
+class ChannelAddSerializer(serializers.Serializer):
+    externalId = serializers.CharField(trim_whitespace=True)
+
+
 # 소스 연결 응답용 시리얼라이저.
 # 토큰과 시그닝 시크릿은 어떤 경우에도 응답에 넣지 않는다.
 class ConnectionSerializer(serializers.ModelSerializer):

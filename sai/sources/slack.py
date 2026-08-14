@@ -22,12 +22,18 @@ class SlackClient:
         self.bot_token = bot_token
         self.timeout = timeout
 
-    def _get(self, method, **params):
+    def _call(self, method, data=None, **params):
         url = SLACK_API_BASE + method
         if params:
             url += '?' + urllib.parse.urlencode(params)
 
-        request = urllib.request.Request(url, headers={'Authorization': f'Bearer {self.bot_token}'})
+        headers = {'Authorization': f'Bearer {self.bot_token}'}
+        body_bytes = None
+        if data is not None:
+            body_bytes = urllib.parse.urlencode(data).encode()
+            headers['Content-Type'] = 'application/x-www-form-urlencoded'
+
+        request = urllib.request.Request(url, data=body_bytes, headers=headers)
         try:
             with urllib.request.urlopen(request, timeout=self.timeout) as response:
                 body = json.loads(response.read())
@@ -39,13 +45,16 @@ class SlackClient:
 
         return body
 
+    def _get(self, method, **params):
+        return self._call(method, **params)
+
     # 토큰 유효성 확인 + 워크스페이스 식별. 연결 저장 전에 반드시 호출한다.
     def auth_test(self):
         return self._get('auth.test')
 
-    # 봇이 참여 중인 채널만 돌려준다.
-    # conversations.list는 참여하지 않은 공개 채널도 함께 주므로 is_member로 거른다.
-    def joined_channels(self, max_pages=20):
+    # 워크스페이스 채널 전체. is_member / is_private 플래그가 함께 온다.
+    # 비공개 채널은 봇이 이미 멤버인 것만 응답에 포함된다(슬랙 동작).
+    def list_channels(self, max_pages=20):
         channels = []
         cursor = None
 
@@ -59,10 +68,15 @@ class SlackClient:
                 params['cursor'] = cursor
 
             body = self._get('conversations.list', **params)
-            channels += [c for c in body.get('channels', []) if c.get('is_member')]
+            channels += body.get('channels', [])
 
             cursor = (body.get('response_metadata') or {}).get('next_cursor')
             if not cursor:
                 break
 
         return channels
+
+    # 봇이 공개 채널에 스스로 참여한다. 비공개 채널에는 쓸 수 없다.
+    # 이미 들어가 있어도 ok로 응답하므로 재호출해도 안전하다.
+    def join_channel(self, channel_id):
+        return self._call('conversations.join', data={'channel': channel_id})
