@@ -15,13 +15,22 @@ from companies.models import Company
 
 from .models import Connection, Item
 from .serializers import (
+    AvailableChannelListSerializer,
+    AvailableChannelSerializer,
+    ChannelAddSerializer,
     ChannelListSerializer,
     ChannelSerializer,
     ConnectionListSerializer,
     ConnectionSerializer,
     SlackConnectionCreateSerializer,
 )
-from .services import sync_channels_recording_error, sync_slack_channels
+from .services import (
+    add_channel,
+    clear_connection_error,
+    list_available_channels,
+    register_channels_recording_error,
+    remove_channel,
+)
 from .slack import SlackClient, SlackError
 
 
@@ -124,7 +133,8 @@ class SourceConnectionListCreateView(APIView):
         try:
             auth = SlackClient(bot_token).auth_test()
         except SlackError as exc:
-            raise ValidationError({'botToken': exc.code})
+            # 시리얼라이저 검증 오류와 같은 {"field": ["code"]} 형태로 맞춘다.
+            raise ValidationError({'botToken': [exc.code]})
 
         workspace_id = auth.get('team_id')
 
@@ -137,7 +147,7 @@ class SourceConnectionListCreateView(APIView):
             .exists()
         )
         if is_taken:
-            raise ValidationError({'botToken': 'workspace already connected to another company'})
+            raise ValidationError({'botToken': ['workspace already connected to another company']})
 
         connection = Connection.objects.filter(
             company=company, kind=Connection.Kind.SLACK, disconnected_at__isnull=True
@@ -155,8 +165,9 @@ class SourceConnectionListCreateView(APIView):
         connection.error_message = None
         connection.save()
 
-        # 연동 직후 채널 목록을 바로 가져온다. 실패해도 연결은 유지하고 status에 남긴다.
-        sync_channels_recording_error(connection)
+        # 봇이 이미 들어가 있는 채널을 바로 등록한다. 실패해도 연결은 유지하고 status에 남긴다.
+        if is_created:
+            register_channels_recording_error(connection)
 
         response_serializer = ConnectionSerializer(connection)
         response_status = status.HTTP_201_CREATED if is_created else status.HTTP_200_OK
@@ -188,30 +199,21 @@ class SourceChannelListView(APIView):
     def get(self, request, company_id, connection_id):
         company = get_owner_company(request.user, company_id)
         connection = get_connection(company, connection_id)
-        channels = (
-            Item.objects.filter(connection=connection, removed_at__isnull=True)
-            .select_related('scope')
-            .order_by('label')
-        )
-        serializer = ChannelSerializer(channels, many=True)
+        serializer = ChannelSerializer(_registered_channels(connection), many=True)
 
         return Response({'items': serializer.data}, status=status.HTTP_200_OK)
 
-
-# 채널 목록 재동기화 view
-class SourceChannelSyncView(APIView):
-    permission_classes = [IsAuthenticated]
-
     @swagger_auto_schema(
-        operation_summary='채널 목록 재동기화',
+        operation_summary='채널 추가',
         operation_description=(
-            '슬랙에서 채널 목록을 다시 가져옵니다. 봇을 새 채널에 초대한 뒤 호출하세요. '
-            '대표가 지정해 둔 지식공간 매핑은 유지됩니다.'
+            '채널을 수집 대상으로 추가합니다. 봇이 아직 참여하지 않은 공개 채널이면 봇이 스스로 참여합니다. '
+            '이때 해당 채널에 봇 참여 알림이 표시됩니다. '
+            '비공개 채널은 봇이 스스로 들어갈 수 없으므로 슬랙에서 먼저 초대해야 합니다.'
         ),
-        request_body=no_body,
+        request_body=ChannelAddSerializer,
         responses={
-            200: ChannelListSerializer(),
-            400: '슬랙 조회 실패',
+            201: ChannelSerializer(),
+            400: '잘못된 요청 (없는 채널 / 비공개 채널 참여 불가 / 슬랙 오류)',
             401: '인증되지 않음',
             403: 'Owner 권한 없음',
             404: '회사 또는 연결을 찾을 수 없음',
@@ -221,26 +223,86 @@ class SourceChannelSyncView(APIView):
     def post(self, request, company_id, connection_id):
         company = get_owner_company(request.user, company_id)
         connection = get_connection(company, connection_id)
+        serializer = ChannelAddSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
 
-        # 수동 재동기화는 실패를 그대로 알려 준다. 대표가 직접 누른 동작이기 때문.
         try:
-            sync_slack_channels(connection)
+            item = add_channel(connection, serializer.validated_data['externalId'])
         except SlackError as exc:
-            connection.status = Connection.Status.ERROR
-            connection.error_message = exc.code
-            connection.save(update_fields=['status', 'error_message'])
-            raise ValidationError({'slack': exc.code})
+            raise ValidationError({'externalId': [exc.code]})
 
-        if connection.status != Connection.Status.CONNECTED or connection.error_message:
-            connection.status = Connection.Status.CONNECTED
-            connection.error_message = None
-            connection.save(update_fields=['status', 'error_message'])
+        clear_connection_error(connection)
+        response_serializer = ChannelSerializer(item)
 
-        channels = (
-            Item.objects.filter(connection=connection, removed_at__isnull=True)
-            .select_related('scope')
-            .order_by('label')
-        )
-        serializer = ChannelSerializer(channels, many=True)
+        return Response(response_serializer.data, status=status.HTTP_201_CREATED)
+
+
+# 추가 가능한 채널 목록 view
+class SourceAvailableChannelListView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    @swagger_auto_schema(
+        operation_summary='추가 가능한 채널 목록',
+        operation_description=(
+            '아직 수집 대상으로 등록되지 않은 워크스페이스 채널입니다. '
+            'isMember가 false인 공개 채널은 추가 시 봇이 자동으로 참여합니다. '
+            '봇이 참여하지 않은 비공개 채널은 슬랙 특성상 목록에 나타나지 않습니다.'
+        ),
+        responses={
+            200: AvailableChannelListSerializer(),
+            400: '슬랙 조회 실패',
+            401: '인증되지 않음',
+            403: 'Owner 권한 없음',
+            404: '회사 또는 연결을 찾을 수 없음',
+        },
+        tags=['Source'],
+    )
+    def get(self, request, company_id, connection_id):
+        company = get_owner_company(request.user, company_id)
+        connection = get_connection(company, connection_id)
+
+        try:
+            channels = list_available_channels(connection)
+        except SlackError as exc:
+            raise ValidationError({'slack': [exc.code]})
+
+        serializer = AvailableChannelSerializer(channels, many=True)
 
         return Response({'items': serializer.data}, status=status.HTTP_200_OK)
+
+
+# 수집 대상 채널 제외 view
+class SourceChannelDetailView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    @swagger_auto_schema(
+        operation_summary='수집 대상에서 제외',
+        operation_description=(
+            '채널을 수집 대상에서 제외합니다. 봇은 채널에 그대로 남으며 슬랙에는 아무 알림도 가지 않습니다. '
+            '이미 수집한 문서는 삭제하지 않습니다. 같은 채널을 다시 추가하면 되살아납니다.'
+        ),
+        responses={
+            204: '제외 완료',
+            401: '인증되지 않음',
+            403: 'Owner 권한 없음',
+            404: '회사, 연결 또는 채널을 찾을 수 없음',
+        },
+        tags=['Source'],
+    )
+    def delete(self, request, company_id, connection_id, item_id):
+        company = get_owner_company(request.user, company_id)
+        connection = get_connection(company, connection_id)
+        item = get_object_or_404(
+            Item, id=item_id, connection=connection, removed_at__isnull=True
+        )
+        remove_channel(item)
+
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+def _registered_channels(connection):
+    return (
+        Item.objects.filter(connection=connection, removed_at__isnull=True)
+        .select_related('scope')
+        .order_by('label')
+    )
