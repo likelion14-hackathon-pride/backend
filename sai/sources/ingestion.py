@@ -1,8 +1,10 @@
 import hashlib
 from datetime import datetime, timezone as dt_timezone
 
+from django.core.exceptions import ImproperlyConfigured
 from django.utils import timezone
 
+from .classifier import classify_documents
 from .models import Identity, IngestionJob, Item, RawDocument
 from .slack import SlackClient, SlackError
 
@@ -164,7 +166,17 @@ def run_ingestion(job, connection):
         job.progress = int(index / len(items) * 100)
         job.save(update_fields=['progress'])
 
-    if errors and len(errors) == len(items):
+    collection_failed = bool(errors) and len(errors) == len(items)
+
+    # 수집한 원문을 바로 분류한다. 분류가 실패해도 수집 결과는 남긴다.
+    if not collection_failed:
+        try:
+            _, classify_errors = classify_documents(job.company_id)
+            errors += classify_errors
+        except ImproperlyConfigured:
+            errors.append({'scope': 'classify', 'code': 'openai_not_configured'})
+
+    if collection_failed:
         job.status = IngestionJob.Status.FAILED
     elif errors:
         job.status = IngestionJob.Status.PARTIAL
