@@ -3,7 +3,7 @@ import hmac, hashlib, time, json
 from django.views.decorators.csrf import csrf_exempt
 from django.http import JsonResponse, HttpResponseForbidden
 from django.conf import settings
-from drf_yasg.utils import swagger_auto_schema
+from drf_yasg.utils import no_body, swagger_auto_schema
 from rest_framework import status
 from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.permissions import IsAuthenticated
@@ -13,12 +13,15 @@ from rest_framework.views import APIView
 from accounts.models import Membership
 from companies.models import Company
 
-from .models import Connection
+from .models import Connection, Item
 from .serializers import (
+    ChannelListSerializer,
+    ChannelSerializer,
     ConnectionListSerializer,
     ConnectionSerializer,
     SlackConnectionCreateSerializer,
 )
+from .services import sync_channels_recording_error, sync_slack_channels
 from .slack import SlackClient, SlackError
 
 
@@ -149,9 +152,95 @@ class SourceConnectionListCreateView(APIView):
         connection.display_name = auth.get('team')
         connection.bot_token = bot_token
         connection.signing_secret = signing_secret
+        connection.error_message = None
         connection.save()
+
+        # 연동 직후 채널 목록을 바로 가져온다. 실패해도 연결은 유지하고 status에 남긴다.
+        sync_channels_recording_error(connection)
 
         response_serializer = ConnectionSerializer(connection)
         response_status = status.HTTP_201_CREATED if is_created else status.HTTP_200_OK
 
         return Response(response_serializer.data, status=response_status)
+
+
+def get_connection(company, connection_id):
+    return get_object_or_404(
+        Connection, id=connection_id, company=company, disconnected_at__isnull=True
+    )
+
+
+# 수집 대상 채널 목록 조회 view
+class SourceChannelListView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    @swagger_auto_schema(
+        operation_summary='수집 대상 채널 목록 조회',
+        operation_description='봇이 참여 중인 슬랙 채널 목록입니다. 봇이 나간 채널은 목록에서 빠집니다.',
+        responses={
+            200: ChannelListSerializer(),
+            401: '인증되지 않음',
+            403: 'Owner 권한 없음',
+            404: '회사 또는 연결을 찾을 수 없음',
+        },
+        tags=['Source'],
+    )
+    def get(self, request, company_id, connection_id):
+        company = get_owner_company(request.user, company_id)
+        connection = get_connection(company, connection_id)
+        channels = (
+            Item.objects.filter(connection=connection, removed_at__isnull=True)
+            .select_related('scope')
+            .order_by('label')
+        )
+        serializer = ChannelSerializer(channels, many=True)
+
+        return Response({'items': serializer.data}, status=status.HTTP_200_OK)
+
+
+# 채널 목록 재동기화 view
+class SourceChannelSyncView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    @swagger_auto_schema(
+        operation_summary='채널 목록 재동기화',
+        operation_description=(
+            '슬랙에서 채널 목록을 다시 가져옵니다. 봇을 새 채널에 초대한 뒤 호출하세요. '
+            '대표가 지정해 둔 지식공간 매핑은 유지됩니다.'
+        ),
+        request_body=no_body,
+        responses={
+            200: ChannelListSerializer(),
+            400: '슬랙 조회 실패',
+            401: '인증되지 않음',
+            403: 'Owner 권한 없음',
+            404: '회사 또는 연결을 찾을 수 없음',
+        },
+        tags=['Source'],
+    )
+    def post(self, request, company_id, connection_id):
+        company = get_owner_company(request.user, company_id)
+        connection = get_connection(company, connection_id)
+
+        # 수동 재동기화는 실패를 그대로 알려 준다. 대표가 직접 누른 동작이기 때문.
+        try:
+            sync_slack_channels(connection)
+        except SlackError as exc:
+            connection.status = Connection.Status.ERROR
+            connection.error_message = exc.code
+            connection.save(update_fields=['status', 'error_message'])
+            raise ValidationError({'slack': exc.code})
+
+        if connection.status != Connection.Status.CONNECTED or connection.error_message:
+            connection.status = Connection.Status.CONNECTED
+            connection.error_message = None
+            connection.save(update_fields=['status', 'error_message'])
+
+        channels = (
+            Item.objects.filter(connection=connection, removed_at__isnull=True)
+            .select_related('scope')
+            .order_by('label')
+        )
+        serializer = ChannelSerializer(channels, many=True)
+
+        return Response({'items': serializer.data}, status=status.HTTP_200_OK)
