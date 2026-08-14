@@ -80,3 +80,61 @@ class SlackClient:
     # 이미 들어가 있어도 ok로 응답하므로 재호출해도 안전하다.
     def join_channel(self, channel_id):
         return self._call('conversations.join', data={'channel': channel_id})
+
+    # 채널의 최상위 메시지. 스레드 답글은 포함되지 않는다(thread_replies로 따로 가져온다).
+    # max_messages는 실수로 거대한 워크스페이스를 붙였을 때의 안전장치다.
+    def channel_history(self, channel_id, max_messages=1000):
+        messages = []
+        cursor = None
+
+        while len(messages) < max_messages:
+            params = {'channel': channel_id, 'limit': 200}
+            if cursor:
+                params['cursor'] = cursor
+
+            body = self._get('conversations.history', **params)
+            messages += body.get('messages', [])
+
+            cursor = (body.get('response_metadata') or {}).get('next_cursor')
+            if not cursor:
+                break
+
+        return messages[:max_messages]
+
+    # 스레드 답글. 첫 항목은 부모 메시지라 호출한 쪽에서 걸러야 한다.
+    def thread_replies(self, channel_id, thread_ts, max_messages=500):
+        messages = []
+        cursor = None
+
+        while len(messages) < max_messages:
+            params = {'channel': channel_id, 'ts': thread_ts, 'limit': 200}
+            if cursor:
+                params['cursor'] = cursor
+
+            body = self._get('conversations.replies', **params)
+            messages += body.get('messages', [])
+
+            cursor = (body.get('response_metadata') or {}).get('next_cursor')
+            if not cursor:
+                break
+
+        return messages[:max_messages]
+
+    # 워크스페이스 사용자 목록. 슬랙 user_id를 사람 이름으로 바꾸는 데 쓴다.
+    def users_list(self, max_pages=20):
+        members = []
+        cursor = None
+
+        for _ in range(max_pages):
+            params = {'limit': 200}
+            if cursor:
+                params['cursor'] = cursor
+
+            body = self._get('users.list', **params)
+            members += body.get('members', [])
+
+            cursor = (body.get('response_metadata') or {}).get('next_cursor')
+            if not cursor:
+                break
+
+        return members

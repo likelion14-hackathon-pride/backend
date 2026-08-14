@@ -8,7 +8,7 @@ from accounts.models import Membership, User
 from companies.models import Company
 from handbook.models import CompanyScope
 
-from .models import Connection, Item
+from .models import Connection, Identity, Item, RawDocument
 from .services import register_joined_channels
 from .slack import SlackError
 
@@ -455,3 +455,191 @@ class ChannelTests(TestCase):
         )
 
         self.assertEqual(response.status_code, 404)
+
+
+USERS = [
+    {'id': 'U001', 'name': 'kim', 'profile': {'display_name': '김대표', 'real_name': '김대표'}},
+    {'id': 'U002', 'name': 'lee', 'profile': {'display_name': '', 'real_name': 'Lee'}},
+    {'id': 'B001', 'name': 'githubbot', 'is_bot': True, 'profile': {'real_name': 'GitHub'}},
+    {'id': 'U999', 'name': 'gone', 'deleted': True, 'profile': {'real_name': '퇴사자'}},
+]
+HISTORY = [
+    {'ts': '1786700000.000100', 'user': 'U001', 'text': '배포는 제가 직접 돌립니다.'},
+    {'ts': '1786700100.000200', 'user': 'U002', 'text': '넵 알겠습니다', 'reply_count': 2},
+    {'ts': '1786700200.000300', 'user': 'U001', 'text': '', 'subtype': 'channel_join'},
+    {'ts': '1786700300.000400', 'user': 'U001', 'text': '   '},
+]
+REPLIES = [
+    {'ts': '1786700100.000200', 'user': 'U002', 'text': '넵 알겠습니다'},
+    {'ts': '1786700150.000500', 'user': 'U001', 'text': '준비되면 스레드에 올려주세요'},
+    {'ts': '1786700160.000600', 'user': 'U002', 'text': '확인했습니다'},
+]
+AUTH_WITH_URL = {**AUTH_TEST_OK, 'url': 'https://sai-project.slack.com/'}
+
+
+class IngestionTests(TestCase):
+    def setUp(self):
+        self.company = Company.objects.create(name='에코랩', code='TESTCODE1')
+        self.owner = User.objects.create_user(email='owner@example.com', password='pw', display_name='대표')
+        Membership.objects.create(user=self.owner, company=self.company, role=Membership.Role.OWNER)
+        self.connection = Connection.objects.create(
+            company=self.company, kind=Connection.Kind.SLACK, bot_token=BOT_TOKEN
+        )
+        self.item = Item.objects.create(
+            company=self.company, connection=self.connection,
+            external_id='C001', label='#dev',
+        )
+        self.client = APIClient()
+        self.client.force_authenticate(user=self.owner)
+        self.url = f'/api/companies/{self.company.id}/ingestion-jobs'
+
+    def ingest(self, history=None, replies=None, history_error=None, payload=None):
+        with patch('sources.ingestion.SlackClient.auth_test', return_value=AUTH_WITH_URL), \
+             patch('sources.ingestion.SlackClient.users_list', return_value=USERS), \
+             patch('sources.ingestion.SlackClient.channel_history',
+                   return_value=history if history is not None else HISTORY,
+                   side_effect=history_error), \
+             patch('sources.ingestion.SlackClient.thread_replies',
+                   return_value=replies if replies is not None else REPLIES):
+            return self.client.post(self.url, payload or {}, format='json')
+
+    # --- 수집 ---
+
+    def test_collects_messages_and_thread_replies(self):
+        response = self.ingest()
+
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.data['status'], 'SUCCEEDED')
+        self.assertEqual(response.data['progress'], 100)
+        # 최상위 2건 + 스레드 답글 2건. 부모 중복과 빈 메시지는 제외.
+        self.assertEqual(RawDocument.objects.count(), 4)
+
+    def test_skips_system_and_empty_messages(self):
+        self.ingest()
+        stored = set(RawDocument.objects.values_list('external_ref', flat=True))
+
+        self.assertNotIn('1786700200.000300', stored)  # channel_join
+        self.assertNotIn('1786700300.000400', stored)  # 공백만
+
+    def test_thread_reply_keeps_parent_reference(self):
+        self.ingest()
+        reply = RawDocument.objects.get(external_ref='1786700150.000500')
+
+        self.assertEqual(reply.thread_ref, '1786700100.000200')
+        self.assertIsNone(RawDocument.objects.get(external_ref='1786700000.000100').thread_ref)
+
+    def test_stores_author_permalink_and_hash(self):
+        self.ingest()
+        document = RawDocument.objects.get(external_ref='1786700000.000100')
+
+        self.assertEqual(document.author_identity.external_handle, '김대표')
+        self.assertEqual(
+            document.permalink,
+            'https://sai-project.slack.com/archives/C001/p1786700000000100',
+        )
+        self.assertEqual(len(document.content_hash), 64)
+        self.assertEqual(document.classified_as, RawDocument.ClassifiedAs.UNCLASSIFIED)
+
+    # 같은 메시지를 두 번 수집해도 행이 늘어나면 안 된다.
+    def test_reingest_is_idempotent(self):
+        self.ingest()
+        self.ingest()
+
+        self.assertEqual(RawDocument.objects.count(), 4)
+
+    # 원문이 바뀌면 내용과 해시가 갱신된다.
+    def test_edited_message_is_updated(self):
+        self.ingest()
+        before = RawDocument.objects.get(external_ref='1786700000.000100').content_hash
+
+        edited = [{**HISTORY[0], 'text': '배포는 이제 각자 하셔도 됩니다.'}]
+        self.ingest(history=edited, replies=[])
+
+        document = RawDocument.objects.get(external_ref='1786700000.000100')
+        self.assertEqual(document.raw_text, '배포는 이제 각자 하셔도 됩니다.')
+        self.assertNotEqual(document.content_hash, before)
+
+    def test_updates_item_counters(self):
+        self.ingest()
+        self.item.refresh_from_db()
+
+        self.assertEqual(self.item.item_count, 4)
+        self.assertIsNotNone(self.item.last_synced_at)
+
+    # --- Identity ---
+
+    def test_builds_identities(self):
+        self.ingest()
+
+        self.assertEqual(Identity.objects.count(), 3)  # 삭제된 사용자 제외
+        self.assertTrue(Identity.objects.get(external_user_id='B001').is_bot)
+        # display_name이 비면 real_name으로 대체한다.
+        self.assertEqual(Identity.objects.get(external_user_id='U002').external_handle, 'Lee')
+
+    # --- 작업 상태 ---
+
+    def test_job_detail_is_pollable(self):
+        job_id = self.ingest().data['id']
+
+        response = self.client.get(f'{self.url}/{job_id}')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data['status'], 'SUCCEEDED')
+        self.assertEqual(response.data['documentCount'], 4)
+        self.assertIsNotNone(response.data['completedAt'])
+
+    def test_channel_failure_is_recorded(self):
+        response = self.ingest(history_error=SlackError('not_in_channel'))
+
+        self.assertEqual(response.data['status'], 'FAILED')
+        self.assertEqual(response.data['errors'][0]['code'], 'not_in_channel')
+        self.assertEqual(RawDocument.objects.count(), 0)
+
+    # 채널 하나는 성공, 하나는 실패면 PARTIAL.
+    def test_partial_failure(self):
+        other = Item.objects.create(
+            company=self.company, connection=self.connection,
+            external_id='C002', label='#payment',
+        )
+
+        def history(channel_id, max_messages=None):
+            if channel_id == other.external_id:
+                raise SlackError('not_in_channel')
+            return HISTORY
+
+        with patch('sources.ingestion.SlackClient.auth_test', return_value=AUTH_WITH_URL), \
+             patch('sources.ingestion.SlackClient.users_list', return_value=USERS), \
+             patch('sources.ingestion.SlackClient.channel_history', side_effect=history), \
+             patch('sources.ingestion.SlackClient.thread_replies', return_value=REPLIES):
+            response = self.client.post(self.url, {}, format='json')
+
+        self.assertEqual(response.data['status'], 'PARTIAL')
+        self.assertEqual(len(response.data['errors']), 1)
+
+    def test_only_targets_selected_channels(self):
+        Item.objects.create(
+            company=self.company, connection=self.connection,
+            external_id='C002', label='#payment',
+        )
+
+        response = self.ingest(payload={'itemIds': [self.item.id]})
+
+        self.assertEqual(response.data['itemIds'], [self.item.id])
+
+    def test_removed_channel_is_not_ingested(self):
+        self.item.removed_at = timezone.now()
+        self.item.save()
+
+        response = self.ingest()
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(RawDocument.objects.count(), 0)
+
+    def test_member_cannot_ingest(self):
+        member = User.objects.create_user(email='m@example.com', password='pw', display_name='팀원')
+        Membership.objects.create(user=member, company=self.company, role=Membership.Role.MEMBER)
+        self.client.force_authenticate(user=member)
+
+        response = self.ingest()
+
+        self.assertEqual(response.status_code, 403)

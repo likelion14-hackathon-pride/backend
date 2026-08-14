@@ -2,7 +2,7 @@ from rest_framework import serializers
 
 from handbook.models import CompanyScope
 
-from .models import Connection, Item
+from .models import Connection, IngestionJob, Item
 
 
 # 수집 대상 채널 응답용 시리얼라이저
@@ -72,6 +72,41 @@ class ChannelScopeUpdateSerializer(serializers.Serializer):
         instance.save(update_fields=['scope', 'is_scope_confirmed'])
 
         return instance
+
+
+# 수집 작업 응답용 시리얼라이저
+class IngestionJobSerializer(serializers.ModelSerializer):
+    itemIds = serializers.JSONField(source='item_ids', read_only=True)
+    documentCount = serializers.SerializerMethodField()
+    candidateCount = serializers.IntegerField(source='entry_count', read_only=True)
+    createdAt = serializers.DateTimeField(source='created_at', read_only=True)
+    completedAt = serializers.DateTimeField(source='completed_at', read_only=True)
+
+    class Meta:
+        model = IngestionJob
+        fields = [
+            'id',
+            'status',
+            'progress',
+            'itemIds',
+            'documentCount',
+            'candidateCount',
+            'errors',
+            'createdAt',
+            'completedAt',
+        ]
+
+    # 이 작업이 대상으로 삼은 채널들이 지금까지 모아 둔 원문 수.
+    def get_documentCount(self, obj):
+        return sum(
+            Item.objects.filter(id__in=obj.item_ids or []).values_list('item_count', flat=True)
+        )
+
+
+# 수집 작업 시작 요청.
+# itemIds를 생략하면 수집 대상 채널 전체를 대상으로 한다.
+class IngestionJobCreateSerializer(serializers.Serializer):
+    itemIds = serializers.ListField(child=serializers.IntegerField(), required=False)
 
 
 # 소스 연결 응답용 시리얼라이저.
