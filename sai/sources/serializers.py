@@ -1,5 +1,7 @@
 from rest_framework import serializers
 
+from handbook.models import CompanyScope
+
 from .models import Connection, Item
 
 
@@ -46,6 +48,30 @@ class AvailableChannelListSerializer(serializers.Serializer):
 
 class ChannelAddSerializer(serializers.Serializer):
     externalId = serializers.CharField(trim_whitespace=True)
+
+
+# 채널을 지식공간에 연결한다.
+# 여기서 정한 범위가 나중에 이 채널에서 뽑은 규칙 초안의 기본 범위가 된다.
+class ChannelScopeUpdateSerializer(serializers.Serializer):
+    scopeId = serializers.PrimaryKeyRelatedField(
+        source='scope',
+        queryset=CompanyScope.objects.all(),
+        allow_null=True,
+    )
+
+    def validate_scopeId(self, value):
+        if value is not None and value.company_id != self.context['company'].id:
+            raise serializers.ValidationError('scope not found')
+
+        return value
+
+    def update(self, instance, validated_data):
+        instance.scope = validated_data['scope']
+        # 대표가 직접 지정한 것이므로 확정으로 표시한다. 해제하면 미확정으로 되돌린다.
+        instance.is_scope_confirmed = instance.scope is not None
+        instance.save(update_fields=['scope', 'is_scope_confirmed'])
+
+        return instance
 
 
 # 소스 연결 응답용 시리얼라이저.

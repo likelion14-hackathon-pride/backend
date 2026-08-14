@@ -335,6 +335,96 @@ class ChannelTests(TestCase):
 
         self.assertEqual(response.status_code, 404)
 
+    # --- 지식공간 연결 ---
+
+    def test_map_channel_to_project_scope(self):
+        self.register()
+        scope = CompanyScope.objects.create(
+            company=self.company, kind=CompanyScope.Kind.PROJECT, name='결제 시스템'
+        )
+        item = Item.objects.get(external_id='C002')
+
+        response = self.client.patch(f'{self.base}/{item.id}', {'scopeId': scope.id}, format='json')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data['scopeId'], scope.id)
+        self.assertEqual(response.data['scopeName'], '결제 시스템')
+        self.assertEqual(response.data['scopeKind'], 'PROJECT')
+        self.assertTrue(response.data['isScopeConfirmed'])
+
+    # #general 처럼 회사 전반 규칙 범위로도 연결할 수 있어야 한다.
+    def test_map_channel_to_company_scope(self):
+        self.register()
+        scope = CompanyScope.objects.create(
+            company=self.company,
+            kind=CompanyScope.Kind.COMPANY,
+            area_key=CompanyScope.AreaKey.COMPANY,
+            name='Company',
+        )
+        item = Item.objects.get(external_id='C001')
+
+        response = self.client.patch(f'{self.base}/{item.id}', {'scopeId': scope.id}, format='json')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data['scopeKind'], 'COMPANY')
+
+    def test_unmap_channel(self):
+        self.register()
+        scope = CompanyScope.objects.create(
+            company=self.company, kind=CompanyScope.Kind.PROJECT, name='결제 시스템'
+        )
+        item = Item.objects.get(external_id='C002')
+        self.client.patch(f'{self.base}/{item.id}', {'scopeId': scope.id}, format='json')
+
+        response = self.client.patch(f'{self.base}/{item.id}', {'scopeId': None}, format='json')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIsNone(response.data['scopeId'])
+        self.assertFalse(response.data['isScopeConfirmed'])
+
+    # 다른 회사의 범위를 붙이면 회사 간 데이터가 섞인다.
+    def test_other_company_scope_rejected(self):
+        self.register()
+        other = Company.objects.create(name='다른회사', code='TESTCODE9')
+        foreign_scope = CompanyScope.objects.create(
+            company=other, kind=CompanyScope.Kind.PROJECT, name='남의 프로젝트'
+        )
+        item = Item.objects.get(external_id='C002')
+
+        response = self.client.patch(
+            f'{self.base}/{item.id}', {'scopeId': foreign_scope.id}, format='json'
+        )
+
+        self.assertEqual(response.status_code, 400)
+        item.refresh_from_db()
+        self.assertIsNone(item.scope_id)
+
+    def test_map_removed_channel_is_404(self):
+        self.register()
+        item = Item.objects.get(external_id='C001')
+        self.client.delete(f'{self.base}/{item.id}')
+        scope = CompanyScope.objects.create(
+            company=self.company, kind=CompanyScope.Kind.PROJECT, name='결제 시스템'
+        )
+
+        response = self.client.patch(f'{self.base}/{item.id}', {'scopeId': scope.id}, format='json')
+
+        self.assertEqual(response.status_code, 404)
+
+    def test_member_cannot_map(self):
+        self.register()
+        member = User.objects.create_user(email='m@example.com', password='pw', display_name='팀원')
+        Membership.objects.create(user=member, company=self.company, role=Membership.Role.MEMBER)
+        scope = CompanyScope.objects.create(
+            company=self.company, kind=CompanyScope.Kind.PROJECT, name='결제 시스템'
+        )
+        item = Item.objects.get(external_id='C002')
+
+        self.client.force_authenticate(user=member)
+        response = self.client.patch(f'{self.base}/{item.id}', {'scopeId': scope.id}, format='json')
+
+        self.assertEqual(response.status_code, 403)
+
     # --- 스코프 보존 / 권한 ---
 
     # 대표가 지정한 지식공간 매핑이 재추가로 날아가면 안 된다.

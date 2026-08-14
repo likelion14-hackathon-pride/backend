@@ -19,6 +19,7 @@ from .serializers import (
     AvailableChannelSerializer,
     ChannelAddSerializer,
     ChannelListSerializer,
+    ChannelScopeUpdateSerializer,
     ChannelSerializer,
     ConnectionListSerializer,
     ConnectionSerializer,
@@ -271,9 +272,41 @@ class SourceAvailableChannelListView(APIView):
         return Response({'items': serializer.data}, status=status.HTTP_200_OK)
 
 
-# 수집 대상 채널 제외 view
+# 수집 대상 채널 지식공간 연결 / 제외 view
 class SourceChannelDetailView(APIView):
     permission_classes = [IsAuthenticated]
+
+    @swagger_auto_schema(
+        operation_summary='채널 지식공간 연결',
+        operation_description=(
+            '채널을 회사 전반 규칙 범위나 프로젝트 범위에 연결합니다. '
+            '이 채널에서 뽑아낸 규칙 초안은 여기서 지정한 범위를 기본값으로 갖습니다. '
+            'scopeId를 null로 보내면 연결이 해제됩니다.'
+        ),
+        request_body=ChannelScopeUpdateSerializer,
+        responses={
+            200: ChannelSerializer(),
+            400: '잘못된 요청 (없는 범위 / 다른 회사의 범위)',
+            401: '인증되지 않음',
+            403: 'Owner 권한 없음',
+            404: '회사, 연결 또는 채널을 찾을 수 없음',
+        },
+        tags=['Source'],
+    )
+    def patch(self, request, company_id, connection_id, item_id):
+        company = get_owner_company(request.user, company_id)
+        connection = get_connection(company, connection_id)
+        item = get_object_or_404(
+            Item, id=item_id, connection=connection, removed_at__isnull=True
+        )
+        serializer = ChannelScopeUpdateSerializer(
+            item, data=request.data, context={'company': company}
+        )
+        serializer.is_valid(raise_exception=True)
+        item = serializer.save()
+        response_serializer = ChannelSerializer(item)
+
+        return Response(response_serializer.data, status=status.HTTP_200_OK)
 
     @swagger_auto_schema(
         operation_summary='수집 대상에서 제외',
