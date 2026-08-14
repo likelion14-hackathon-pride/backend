@@ -13,7 +13,8 @@ from rest_framework.views import APIView
 from accounts.models import Membership
 from companies.models import Company
 
-from .models import Connection, Item
+from .ingestion import run_ingestion
+from .models import Connection, IngestionJob, Item
 from .serializers import (
     AvailableChannelListSerializer,
     AvailableChannelSerializer,
@@ -23,6 +24,8 @@ from .serializers import (
     ChannelSerializer,
     ConnectionListSerializer,
     ConnectionSerializer,
+    IngestionJobCreateSerializer,
+    IngestionJobSerializer,
     SlackConnectionCreateSerializer,
 )
 from .services import (
@@ -339,3 +342,76 @@ def _registered_channels(connection):
         .select_related('scope')
         .order_by('label')
     )
+
+
+# 슬랙 메시지 수집 작업 view
+class IngestionJobListCreateView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    @swagger_auto_schema(
+        operation_summary='슬랙 메시지 수집 시작',
+        operation_description=(
+            '수집 대상 채널의 메시지를 원문으로 가져옵니다. 스레드 답글도 함께 수집합니다. '
+            'itemIds를 생략하면 등록된 채널 전체가 대상입니다. '
+            '이미 가져온 메시지는 다시 저장하지 않습니다(내용이 바뀌면 갱신). '
+            '현재는 요청 안에서 동기로 처리하며 채널당 최대 1000건까지만 가져옵니다.'
+        ),
+        request_body=IngestionJobCreateSerializer,
+        responses={
+            201: IngestionJobSerializer(),
+            400: '잘못된 요청 (수집 대상 채널 없음)',
+            401: '인증되지 않음',
+            403: 'Owner 권한 없음',
+            404: '회사 또는 연결을 찾을 수 없음',
+        },
+        tags=['Source'],
+    )
+    def post(self, request, company_id):
+        company = get_owner_company(request.user, company_id)
+        connection = get_object_or_404(
+            Connection,
+            company=company,
+            kind=Connection.Kind.SLACK,
+            disconnected_at__isnull=True,
+        )
+        serializer = IngestionJobCreateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        items = Item.objects.filter(connection=connection, removed_at__isnull=True)
+        requested_ids = serializer.validated_data.get('itemIds')
+        if requested_ids is not None:
+            items = items.filter(id__in=requested_ids)
+
+        item_ids = list(items.values_list('id', flat=True))
+        if not item_ids:
+            raise ValidationError({'itemIds': ['no channel to ingest']})
+
+        job = IngestionJob.objects.create(company=company, item_ids=item_ids)
+        # 지금은 동기 실행. 데이터가 커지면 이 한 줄만 큐 적재로 바꾸면 된다.
+        run_ingestion(job, connection)
+
+        response_serializer = IngestionJobSerializer(job)
+
+        return Response(response_serializer.data, status=status.HTTP_201_CREATED)
+
+
+# 수집 작업 상태 조회 view
+class IngestionJobDetailView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    @swagger_auto_schema(
+        operation_summary='수집 작업 상태 조회',
+        responses={
+            200: IngestionJobSerializer(),
+            401: '인증되지 않음',
+            403: 'Owner 권한 없음',
+            404: '회사 또는 작업을 찾을 수 없음',
+        },
+        tags=['Source'],
+    )
+    def get(self, request, company_id, job_id):
+        company = get_owner_company(request.user, company_id)
+        job = get_object_or_404(IngestionJob, id=job_id, company=company)
+        serializer = IngestionJobSerializer(job)
+
+        return Response(serializer.data, status=status.HTTP_200_OK)
