@@ -235,3 +235,8 @@ AWS_STORAGE_BUCKET_NAME = get_secret('S3_BUCKET', 'saisai-sources')
 AWS_S3_REGION_NAME = 'ap-northeast-2'
 SLACK_SIGNING_SECRET = get_secret('SLACK_SIGNING_SECRET')
 SLACK_BOT_TOKEN = get_secret('SLACK_BOT_TOKEN')
+
+# 키가 없어도 서버는 뜬다. 분류를 실행하는 시점에만 필요하고,
+# 그때 ImproperlyConfigured로 실패하며 수집 결과는 그대로 남는다.
+OPENAI_API_KEY = get_secret('OPENAI_API_KEY', '')
+OPENAI_CLASSIFIER_MODEL = get_secret('OPENAI_CLASSIFIER_MODEL', 'gpt-4o-mini')

@@ -1,6 +1,8 @@
+from types import SimpleNamespace
 from unittest.mock import patch
 
-from django.test import TestCase
+from django.core.exceptions import ImproperlyConfigured
+from django.test import SimpleTestCase, TestCase, override_settings
 from django.utils import timezone
 from rest_framework.test import APIClient
 
@@ -8,9 +10,16 @@ from accounts.models import Membership, User
 from companies.models import Company
 from handbook.models import CompanyScope
 
+from .classifier import (
+    CLASSIFIER_VERSION,
+    ClassificationResult,
+    MessageLabel,
+    classify_documents,
+)
 from .models import Connection, Identity, Item, RawDocument
 from .services import register_joined_channels
 from .slack import SlackError
+from .text import normalize_slack_text
 
 BOT_TOKEN = 'xoxb-test-token-0123456789'
 SIGNING_SECRET = 'a' * 32
@@ -494,13 +503,16 @@ class IngestionTests(TestCase):
         self.url = f'/api/companies/{self.company.id}/ingestion-jobs'
 
     def ingest(self, history=None, replies=None, history_error=None, payload=None):
+        # 분류는 여기서 검증 대상이 아니다. 막지 않으면 실제 OpenAI를 호출한다.
         with patch('sources.ingestion.SlackClient.auth_test', return_value=AUTH_WITH_URL), \
              patch('sources.ingestion.SlackClient.users_list', return_value=USERS), \
              patch('sources.ingestion.SlackClient.channel_history',
                    return_value=history if history is not None else HISTORY,
                    side_effect=history_error), \
              patch('sources.ingestion.SlackClient.thread_replies',
-                   return_value=replies if replies is not None else REPLIES):
+                   return_value=replies if replies is not None else REPLIES), \
+             patch('sources.ingestion.classify_documents', return_value=(0, [])) as classify:
+            self.classify_mock = classify
             return self.client.post(self.url, payload or {}, format='json')
 
     # --- 수집 ---
@@ -610,7 +622,8 @@ class IngestionTests(TestCase):
         with patch('sources.ingestion.SlackClient.auth_test', return_value=AUTH_WITH_URL), \
              patch('sources.ingestion.SlackClient.users_list', return_value=USERS), \
              patch('sources.ingestion.SlackClient.channel_history', side_effect=history), \
-             patch('sources.ingestion.SlackClient.thread_replies', return_value=REPLIES):
+             patch('sources.ingestion.SlackClient.thread_replies', return_value=REPLIES), \
+             patch('sources.ingestion.classify_documents', return_value=(0, [])):
             response = self.client.post(self.url, {}, format='json')
 
         self.assertEqual(response.data['status'], 'PARTIAL')
@@ -643,3 +656,168 @@ class IngestionTests(TestCase):
         response = self.ingest()
 
         self.assertEqual(response.status_code, 403)
+
+    # --- 분류 연동 ---
+
+    def test_ingestion_triggers_classification(self):
+        self.ingest()
+
+        self.classify_mock.assert_called_once_with(self.company.id)
+
+    # 분류가 실패해도 수집한 원문은 남고 작업만 PARTIAL이 된다.
+    def test_classification_failure_is_partial(self):
+        with patch('sources.ingestion.SlackClient.auth_test', return_value=AUTH_WITH_URL), \
+             patch('sources.ingestion.SlackClient.users_list', return_value=USERS), \
+             patch('sources.ingestion.SlackClient.channel_history', return_value=HISTORY), \
+             patch('sources.ingestion.SlackClient.thread_replies', return_value=REPLIES), \
+             patch('sources.ingestion.classify_documents',
+                   side_effect=ImproperlyConfigured('no key')):
+            response = self.client.post(self.url, {}, format='json')
+
+        self.assertEqual(response.data['status'], 'PARTIAL')
+        self.assertEqual(response.data['errors'][0]['code'], 'openai_not_configured')
+        self.assertEqual(RawDocument.objects.count(), 4)
+
+    # 수집이 통째로 실패하면 분류를 시도하지 않는다.
+    def test_no_classification_when_collection_failed(self):
+        self.ingest(history_error=SlackError('not_in_channel'))
+
+        self.classify_mock.assert_not_called()
+
+
+class NormalizeSlackTextTests(SimpleTestCase):
+    CHANNELS = {'C001': '#dev'}
+    USERS = {'U001': '조상원'}
+
+    def normalize(self, text):
+        return normalize_slack_text(text, self.CHANNELS, self.USERS)
+
+    def test_channel_mention_becomes_label(self):
+        self.assertEqual(self.normalize('<#C001> 에 공지'), '#dev 에 공지')
+
+    def test_channel_mention_uses_inline_name_when_present(self):
+        self.assertEqual(self.normalize('<#C999|payment> 확인'), '#payment 확인')
+
+    def test_unknown_channel_falls_back(self):
+        self.assertEqual(self.normalize('<#C999> 확인'), '#채널 확인')
+
+    def test_user_mention(self):
+        self.assertEqual(self.normalize('<@U001> 님 확인 부탁'), '@조상원 님 확인 부탁')
+
+    # <url|표시텍스트> 는 표시텍스트만 남긴다. URL이 두 번 들어가는 걸 막는다.
+    def test_link_with_label(self):
+        self.assertEqual(
+            self.normalize('문서 <https://example.com/a|여기> 참고'), '문서 여기 참고'
+        )
+
+    def test_link_without_label(self):
+        self.assertEqual(
+            self.normalize('<https://example.com/a> 참고'), 'https://example.com/a 참고'
+        )
+
+    def test_special_mention(self):
+        self.assertEqual(self.normalize('<!here> 공지합니다'), '@here 공지합니다')
+
+    def test_html_entities_are_unescaped(self):
+        self.assertEqual(self.normalize('&gt; 인용문 &amp; 기타'), '> 인용문 & 기타')
+
+    # 이스케이프를 먼저 풀면 &lt;#C001&gt; 이 진짜 멘션처럼 보인다. 순서가 중요하다.
+    def test_escaped_markup_is_not_treated_as_markup(self):
+        self.assertEqual(self.normalize('&lt;#C001&gt; 는 채널 문법입니다'), '<#C001> 는 채널 문법입니다')
+
+    def test_empty(self):
+        self.assertEqual(normalize_slack_text(''), '')
+        self.assertEqual(normalize_slack_text(None), '')
+
+
+class ClassifierTests(TestCase):
+    def setUp(self):
+        self.company = Company.objects.create(name='에코랩', code='TESTCODE1')
+        connection = Connection.objects.create(
+            company=self.company, kind=Connection.Kind.SLACK, bot_token=BOT_TOKEN
+        )
+        self.item = Item.objects.create(
+            company=self.company, connection=connection, external_id='C001', label='#dev'
+        )
+        identity = Identity.objects.create(
+            company=self.company, connection=connection,
+            external_user_id='U001', external_handle='조상원',
+        )
+        self.parent = RawDocument.objects.create(
+            company=self.company, item=self.item, external_ref='100.1',
+            author_identity=identity, raw_text='PR 리뷰 기준 정할까요?', content_hash='a' * 64,
+            occurred_at=timezone.now(),
+        )
+        self.reply = RawDocument.objects.create(
+            company=self.company, item=self.item, external_ref='100.2', thread_ref='100.1',
+            author_identity=identity, raw_text='승인 1명으로 하죠', content_hash='b' * 64,
+            occurred_at=timezone.now(),
+        )
+
+    def run_classify(self, labels):
+        parsed = ClassificationResult(labels=[MessageLabel(**item) for item in labels])
+        completion = SimpleNamespace(
+            choices=[SimpleNamespace(message=SimpleNamespace(parsed=parsed))]
+        )
+        with patch('sources.classifier.OpenAI') as client:
+            client.return_value.chat.completions.parse.return_value = completion
+            result = classify_documents(self.company.id)
+            call = client.return_value.chat.completions.parse.call_args
+        return result, call
+
+    @override_settings(OPENAI_API_KEY='test-key')
+    def test_stores_labels_and_version(self):
+        (count, errors), _ = self.run_classify(
+            [{'index': 0, 'label': 'AMBIGUOUS'}, {'index': 1, 'label': 'INSTRUCTION'}]
+        )
+
+        self.assertEqual((count, errors), (2, []))
+        self.parent.refresh_from_db()
+        self.reply.refresh_from_db()
+        self.assertEqual(self.parent.classified_as, 'AMBIGUOUS')
+        self.assertEqual(self.reply.classified_as, 'INSTRUCTION')
+        self.assertEqual(self.reply.classifier_version, CLASSIFIER_VERSION)
+
+    # 스레드 답글은 부모 발언이 있어야 의미가 잡힌다.
+    @override_settings(OPENAI_API_KEY='test-key')
+    def test_thread_reply_prompt_includes_parent(self):
+        _, call = self.run_classify(
+            [{'index': 0, 'label': 'AMBIGUOUS'}, {'index': 1, 'label': 'INSTRUCTION'}]
+        )
+        prompt = call.kwargs['messages'][1]['content']
+
+        self.assertIn('parent: PR 리뷰 기준 정할까요?', prompt)
+        self.assertIn('채널=#dev', prompt)
+        self.assertIn('작성자=조상원', prompt)
+
+    # 이미 현재 버전으로 분류된 것은 다시 부르지 않는다.
+    @override_settings(OPENAI_API_KEY='test-key')
+    def test_skips_already_classified(self):
+        self.run_classify([{'index': 0, 'label': 'CONTEXT'}, {'index': 1, 'label': 'CONTEXT'}])
+        (count, _), _ = self.run_classify([])
+
+        self.assertEqual(count, 0)
+
+    # 프롬프트 버전이 오르면 다시 분류한다.
+    @override_settings(OPENAI_API_KEY='test-key')
+    def test_old_version_is_reclassified(self):
+        RawDocument.objects.update(classified_as='CONTEXT', classifier_version='clf-v0')
+        (count, _), _ = self.run_classify(
+            [{'index': 0, 'label': 'INSTRUCTION'}, {'index': 1, 'label': 'INSTRUCTION'}]
+        )
+
+        self.assertEqual(count, 2)
+
+    @override_settings(OPENAI_API_KEY='')
+    def test_missing_api_key_raises(self):
+        with self.assertRaises(ImproperlyConfigured):
+            classify_documents(self.company.id)
+
+    # 응답에 빠진 index는 미분류로 남는다. 잘못된 라벨을 추측해 채우지 않는다.
+    @override_settings(OPENAI_API_KEY='test-key')
+    def test_missing_index_left_unclassified(self):
+        (count, _), _ = self.run_classify([{'index': 0, 'label': 'CONTEXT'}])
+
+        self.reply.refresh_from_db()
+        self.assertEqual(count, 1)
+        self.assertEqual(self.reply.classified_as, RawDocument.ClassifiedAs.UNCLASSIFIED)
