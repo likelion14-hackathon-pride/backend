@@ -6,6 +6,7 @@ from rest_framework import serializers
 
 from companies.models import Company
 from companies.utils import generate_company_code
+from handbook.services import seed_default_scopes
 
 from .models import Membership
 
@@ -53,6 +54,8 @@ class OwnerSignupSerializer(SignupSerializer):
         company = Company.objects.create(
             name=validated_data['companyName'].strip(), code=generate_company_code()
         )
+        # 핸드북 항목은 범위 없이 만들 수 없으므로 회사 전반 규칙 범위를 함께 만든다.
+        seed_default_scopes(company)
         user = self.create_user(validated_data, 'ko')
         return Membership.objects.create(
             user=user, company=company, role=Membership.Role.OWNER
