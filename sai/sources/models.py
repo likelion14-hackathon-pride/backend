@@ -17,11 +17,29 @@ class Connection(models.Model):
     kind = models.CharField(max_length=10, choices=Kind.choices)
     status = models.CharField(max_length=12, choices=Status.choices, default=Status.CONNECTED)
     credential_ref = models.CharField(max_length=200, null=True, blank=True)
+    external_workspace_id = models.CharField(max_length=32, null=True, blank=True, db_index=True)
+    display_name = models.CharField(max_length=200, null=True, blank=True)
+    bot_token = models.CharField(max_length=200, null=True, blank=True)
+    signing_secret = models.CharField(max_length=100, null=True, blank=True)
     disconnected_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
         db_table = 'sources_connection'
+        constraints = [
+            # 회사당 소스 종류별로 살아 있는 연결은 하나.
+            models.UniqueConstraint(
+                fields=['company', 'kind'],
+                condition=models.Q(disconnected_at__isnull=True),
+                name='uniq_active_connection_per_kind',
+            ),
+            # 한 워크스페이스가 두 회사에 연결되면 웹훅이 어느 회사인지 정할 수 없다.
+            models.UniqueConstraint(
+                fields=['external_workspace_id'],
+                condition=models.Q(disconnected_at__isnull=True),
+                name='uniq_active_workspace',
+            ),
+        ]
 
 
 # 외부 계정 <-> SAI 사용자 매핑
