@@ -1,6 +1,8 @@
 from django.db import IntegrityError
 from django.test import TestCase
+from rest_framework.test import APIClient
 
+from accounts.models import Membership, User
 from accounts.serializers import OwnerSignupSerializer
 from companies.models import Company
 
@@ -68,6 +70,72 @@ class SeedDefaultScopesTests(TestCase):
             ).count(),
             3,
         )
+
+
+class CreateProjectScopeTests(TestCase):
+    def setUp(self):
+        self.company = Company.objects.create(name='에코랩', code='TESTCODE1')
+        seed_default_scopes(self.company)
+
+        self.owner = User.objects.create_user(email='owner@example.com', password='pw', display_name='대표')
+        Membership.objects.create(user=self.owner, company=self.company, role=Membership.Role.OWNER)
+
+        self.member = User.objects.create_user(email='member@example.com', password='pw', display_name='팀원')
+        Membership.objects.create(user=self.member, company=self.company, role=Membership.Role.MEMBER)
+
+        self.url = f'/api/companies/{self.company.id}/handbook/scopes'
+        self.client = APIClient()
+
+    def post(self, user, payload):
+        self.client.force_authenticate(user=user)
+        return self.client.post(self.url, payload, format='json')
+
+    def test_owner_creates_project_scope(self):
+        response = self.post(self.owner, {'kind': 'PROJECT', 'name': 'payment-api', 'description': '결제 시스템'})
+
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.data['kind'], 'PROJECT')
+        self.assertEqual(response.data['name'], 'payment-api')
+        # 프로젝트 범위는 회사규칙 카테고리를 갖지 않는다.
+        self.assertIsNone(response.data['areaKey'])
+
+    def test_multiple_project_scopes_allowed(self):
+        for name in ('payment-api', 'admin-web', 'landing'):
+            self.assertEqual(self.post(self.owner, {'kind': 'PROJECT', 'name': name}).status_code, 201)
+
+        self.assertEqual(
+            CompanyScope.objects.filter(company=self.company, kind=CompanyScope.Kind.PROJECT).count(), 3
+        )
+
+    def test_company_scope_cannot_be_created(self):
+        response = self.post(self.owner, {'kind': 'COMPANY', 'name': '새 회사 규칙'})
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(CompanyScope.objects.filter(company=self.company).count(), len(DEFAULT_COMPANY_SCOPES))
+
+    def test_duplicate_name_rejected(self):
+        self.post(self.owner, {'kind': 'PROJECT', 'name': 'payment-api'})
+        response = self.post(self.owner, {'kind': 'PROJECT', 'name': 'Payment-API'})
+
+        self.assertEqual(response.status_code, 400)
+
+    # 시딩된 회사 규칙 범위와 같은 이름도 막혀야 한다.
+    def test_name_colliding_with_seeded_scope_rejected(self):
+        response = self.post(self.owner, {'kind': 'PROJECT', 'name': 'Security'})
+
+        self.assertEqual(response.status_code, 400)
+
+    def test_member_cannot_create(self):
+        response = self.post(self.member, {'kind': 'PROJECT', 'name': 'payment-api'})
+
+        self.assertEqual(response.status_code, 403)
+        self.assertFalse(CompanyScope.objects.filter(name='payment-api').exists())
+
+    def test_outsider_cannot_create(self):
+        outsider = User.objects.create_user(email='out@example.com', password='pw', display_name='외부인')
+        response = self.post(outsider, {'kind': 'PROJECT', 'name': 'payment-api'})
+
+        self.assertEqual(response.status_code, 403)
 
 
 class OwnerSignupScopeTests(TestCase):

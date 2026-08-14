@@ -27,6 +27,8 @@ class CompanyScope(models.Model):
             # 회사 전반 규칙은 카테고리당 하나. PROJECT 범위는 area_key가 null이라
             # 이 제약에 걸리지 않는다(Postgres는 null을 서로 다른 값으로 취급).
             models.UniqueConstraint(fields=['company', 'area_key'], name='uniq_company_area_key'),
+            # 채널을 범위에 연결할 때 이름으로 고르므로 같은 회사 안에서 중복되면 안 된다.
+            models.UniqueConstraint(fields=['company', 'name'], name='uniq_company_scope_name'),
         ]
 
 

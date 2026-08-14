@@ -11,6 +11,7 @@ from companies.models import Company
 
 from .models import CompanyScope, HandbookEntry
 from .serializers import (
+    CompanyScopeCreateSerializer,
     CompanyScopeListSerializer,
     CompanyScopeSerializer,
     HandbookEntryCreateSerializer,
@@ -238,3 +239,28 @@ class CompanyScopeListView(APIView):
         serializer = CompanyScopeSerializer(scopes, many=True)
 
         return Response({'items': serializer.data}, status=status.HTTP_200_OK)
+
+    @swagger_auto_schema(
+        operation_summary='프로젝트 범위 생성',
+        operation_description=(
+            '프로젝트별 규칙을 담을 범위를 만듭니다. '
+            '회사 전반 규칙 범위는 회사 생성 시 고정 생성되므로 kind는 PROJECT만 허용합니다.'
+        ),
+        request_body=CompanyScopeCreateSerializer,
+        responses={
+            201: CompanyScopeSerializer(),
+            400: '잘못된 요청',
+            401: '인증되지 않음',
+            403: 'Owner 권한 없음',
+            404: '회사를 찾을 수 없음',
+        },
+        tags=['Handbook'],
+    )
+    def post(self, request, company_id):
+        company = get_owner_company(request.user, company_id)
+        serializer = CompanyScopeCreateSerializer(data=request.data, context={'company': company})
+        serializer.is_valid(raise_exception=True)
+        scope = serializer.save()
+        response_serializer = CompanyScopeSerializer(scope)
+
+        return Response(response_serializer.data, status=status.HTTP_201_CREATED)
