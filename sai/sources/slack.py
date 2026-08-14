@@ -42,3 +42,27 @@ class SlackClient:
     # 토큰 유효성 확인 + 워크스페이스 식별. 연결 저장 전에 반드시 호출한다.
     def auth_test(self):
         return self._get('auth.test')
+
+    # 봇이 참여 중인 채널만 돌려준다.
+    # conversations.list는 참여하지 않은 공개 채널도 함께 주므로 is_member로 거른다.
+    def joined_channels(self, max_pages=20):
+        channels = []
+        cursor = None
+
+        for _ in range(max_pages):
+            params = {
+                'types': 'public_channel,private_channel',
+                'exclude_archived': 'true',
+                'limit': 200,
+            }
+            if cursor:
+                params['cursor'] = cursor
+
+            body = self._get('conversations.list', **params)
+            channels += [c for c in body.get('channels', []) if c.get('is_member')]
+
+            cursor = (body.get('response_metadata') or {}).get('next_cursor')
+            if not cursor:
+                break
+
+        return channels
