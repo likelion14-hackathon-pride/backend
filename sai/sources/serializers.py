@@ -162,16 +162,19 @@ class IngestionJobListSerializer(serializers.Serializer):
     nextCursor = serializers.CharField(allow_null=True)
 
 
-# 수집 작업 시작 요청.
-# itemIds를 생략하면 수집 대상 채널 전체를 대상으로 한다.
+# 수집 작업 시작 요청. provider를 생략하면 기존과 같이 Slack을 수집한다.
 class IngestionJobCreateSerializer(serializers.Serializer):
+    provider = serializers.ChoiceField(
+        choices=[Connection.Kind.SLACK, Connection.Kind.GITHUB],
+        required=False,
+        default=Connection.Kind.SLACK,
+    )
     itemIds = serializers.ListField(
         child=serializers.IntegerField(),
         required=False,
         allow_empty=False,
         help_text=(
-            '수집할 채널 ID 목록. 생략하면 등록된 채널 전체가 대상입니다. '
-            'ID는 GET /source-connections/{connectionId}/channels 로 확인하세요.'
+            '수집할 채널 또는 레포 ID 목록. 생략하면 해당 소스에 등록된 전체 Item이 대상입니다.'
         ),
     )
 

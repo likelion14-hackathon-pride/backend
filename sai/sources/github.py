@@ -26,6 +26,7 @@ class GitHubClient:
         self.private_key = private_key.replace('\\n', '\n')
         self.installation_id = str(installation_id)
         self.timeout = timeout
+        self.installation_token = None
 
     def _app_jwt(self):
         if not self.app_id or not self.private_key or not self.installation_id:
@@ -75,6 +76,9 @@ class GitHubClient:
 
     # App JWT로 설치 토큰을 발급받는다. 이 토큰은 GitHub API 호출에만 잠깐 사용한다.
     def _installation_token(self):
+        if self.installation_token:
+            return self.installation_token
+
         body = self._request(
             'POST',
             f'/app/installations/{self.installation_id}/access_tokens',
@@ -84,7 +88,9 @@ class GitHubClient:
         if not token:
             raise GitHubError('github_auth_failed')
 
-        return token
+        self.installation_token = token
+
+        return self.installation_token
 
     # 목록 API는 한 번에 최대 100개만 주므로 끝까지 나눠서 가져온다.
     def _paginate(self, path, token, max_pages=20):

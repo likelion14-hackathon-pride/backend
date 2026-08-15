@@ -1,10 +1,12 @@
 import hashlib
 from datetime import datetime
 
+from django.conf import settings
 from django.db import transaction
 from django.utils import timezone
 
-from .models import Identity, RawDocument
+from .github import GitHubClient, GitHubError
+from .models import Identity, IngestionJob, Item, RawDocument
 
 
 INTERNAL_ASSOCIATIONS = {'OWNER', 'MEMBER', 'COLLABORATOR'}
@@ -213,3 +215,49 @@ def ingest_repository(item, client):
     records = _repository_records(item.label, client)
 
     return _sync_records(item, records)
+
+
+def run_github_ingestion(job, connection):
+    items = list(
+        Item.objects.filter(
+            connection=connection,
+            removed_at__isnull=True,
+            id__in=job.item_ids or [],
+        ).order_by('id')
+    )
+    if not items:
+        job.status = IngestionJob.Status.FAILED
+        job.errors = [{'scope': 'github', 'code': 'no_repository_registered'}]
+        job.progress = 100
+        job.completed_at = timezone.now()
+        job.save(update_fields=['status', 'errors', 'progress', 'completed_at'])
+        return job
+
+    client = GitHubClient(
+        settings.GITHUB_APP_ID,
+        settings.GITHUB_PRIVATE_KEY,
+        settings.GITHUB_INSTALLATION_ID,
+    )
+    errors = []
+
+    for index, item in enumerate(items, start=1):
+        try:
+            ingest_repository(item, client)
+        except GitHubError as exc:
+            errors.append({'itemId': item.id, 'label': item.label, 'code': exc.code})
+
+        job.progress = int(100 * index / len(items))
+        job.save(update_fields=['progress'])
+
+    if len(errors) == len(items):
+        job.status = IngestionJob.Status.FAILED
+    elif errors:
+        job.status = IngestionJob.Status.PARTIAL
+    else:
+        job.status = IngestionJob.Status.SUCCEEDED
+
+    job.errors = errors or None
+    job.completed_at = timezone.now()
+    job.save(update_fields=['status', 'errors', 'completed_at'])
+
+    return job

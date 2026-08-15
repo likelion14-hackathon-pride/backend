@@ -1,6 +1,7 @@
 import json
 import logging
 
+from django.conf import settings
 from django.shortcuts import get_object_or_404
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_POST
@@ -535,12 +536,17 @@ JOB_STATUS_PARAMETER = enum_parameter('status', IngestionJob.Status)
 INGESTION_JOB_REQUEST_BODY = openapi.Schema(
     type=openapi.TYPE_OBJECT,
     properties={
+        'provider': openapi.Schema(
+            type=openapi.TYPE_STRING,
+            enum=[Connection.Kind.SLACK, Connection.Kind.GITHUB],
+            description='수집할 소스 종류. 생략하면 SLACK입니다.',
+        ),
         'itemIds': openapi.Schema(
             type=openapi.TYPE_ARRAY,
             items=openapi.Items(type=openapi.TYPE_INTEGER),
             description=(
-                '수집할 채널 ID 목록. 생략하면 등록된 채널 전체가 대상입니다. '
-                'ID는 GET /source-connections/{connectionId}/channels 로 확인하세요.'
+                '수집할 채널 또는 레포 Item ID 목록. '
+                '생략하면 선택한 소스에 등록된 전체 Item이 대상입니다.'
             ),
         ),
     },
@@ -597,14 +603,15 @@ class IngestionJobListCreateView(APIView):
     )
     def post(self, request, company_id):
         company = get_owner_company(request.user, company_id)
+        serializer = IngestionJobCreateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        provider = serializer.validated_data['provider']
         connection = get_object_or_404(
             Connection,
             company=company,
-            kind=Connection.Kind.SLACK,
+            kind=provider,
             disconnected_at__isnull=True,
         )
-        serializer = IngestionJobCreateSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
 
         items = Item.objects.filter(connection=connection, removed_at__isnull=True)
         requested_ids = serializer.validated_data.get('itemIds')
@@ -613,8 +620,7 @@ class IngestionJobListCreateView(APIView):
 
         item_ids = list(items.values_list('id', flat=True))
         if not item_ids:
-            # 어느 쪽이 문제인지 구분해 준다. Swagger 기본값 [0] 을 그대로 보내는 일이 흔하다.
-            code = 'no matching channel' if requested_ids else 'no channel registered'
+            code = 'no matching item' if requested_ids else 'no item registered'
             raise ValidationError({'itemIds': [code]})
 
         job = IngestionJob.objects.create(company=company, item_ids=item_ids)
