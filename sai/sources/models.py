@@ -137,6 +137,10 @@ class Chunk(models.Model):
 
     class Meta:
         db_table = 'sources_chunk'
+        constraints = [
+            # 재수집 때 같은 문서에 청크가 겹쳐 쌓이지 않게 한다.
+            models.UniqueConstraint(fields=['document', 'ord'], name='uniq_chunk_document_ord'),
+        ]
         indexes = [
             HnswIndex(
                 name='chunk_emb_idx',

@@ -7,6 +7,7 @@ from django.utils import timezone
 
 from handbook.drafting import draft_entries
 
+from .chunking import sync_chunks
 from .classifier import classify_documents
 from .models import Identity, IngestionJob, Item, RawDocument
 from .slack import SlackClient, SlackError
@@ -213,6 +214,9 @@ def run_ingestion(job, connection):
         try:
             _, classify_errors = classify_documents(job.company_id)
             errors += classify_errors
+            # 과거 사례 검색용 벡터. 말투 해석과 사례 기반 답변이 여기에 기댄다.
+            _, chunk_errors = sync_chunks(job.company)
+            errors += chunk_errors
         except ImproperlyConfigured:
             errors.append({'scope': 'classify', 'code': 'openai_not_configured'})
         else:

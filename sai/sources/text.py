@@ -39,3 +39,31 @@ def normalize_slack_text(text, channels=None, users=None):
     # 슬랙은 & < > 를 이스케이프해서 보낸다. 마크업을 먼저 처리한 뒤에 풀어야
     # 본문에 있던 &lt; 가 새 태그처럼 보이는 일이 없다.
     return html.unescape(text).strip()
+
+
+# 채팅에 실수로 붙여넣는 자격증명들. 임베딩은 외부로 나가는 경로라 그 전에 지운다.
+# 한 번 나가면 회수할 수 없으므로, 놓치는 것보다 과하게 가리는 쪽을 택한다.
+SECRET_PATTERNS = [
+    re.compile(r'xox[baprse]-[A-Za-z0-9-]{10,}'),          # 슬랙 토큰
+    re.compile(r'sk-[A-Za-z0-9_-]{20,}'),                   # OpenAI 키
+    re.compile(r'AKIA[0-9A-Z]{16}'),                        # AWS 액세스 키 ID
+    re.compile(r'ghp_[A-Za-z0-9]{20,}'),                    # GitHub 토큰
+    re.compile(r'eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]+'),  # JWT
+    re.compile(
+        r'-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----',
+        re.DOTALL,
+    ),
+]
+REDACTED = '[비밀정보 제거됨]'
+
+
+# (가린 텍스트, 가린 것이 있었는지) 반환.
+def redact_secrets(text):
+    if not text:
+        return text, False
+
+    redacted = text
+    for pattern in SECRET_PATTERNS:
+        redacted = pattern.sub(REDACTED, redacted)
+
+    return redacted, redacted != text
