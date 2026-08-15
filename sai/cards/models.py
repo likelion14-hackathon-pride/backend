@@ -49,7 +49,6 @@ class InstructionCard(models.Model):
         db_table = 'cards_instructioncard'
 
 
-# 말투 해석의 근거가 된 과거 사례
 class ToneEvidence(models.Model):
     company = models.ForeignKey('companies.Company', on_delete=models.CASCADE, related_name='tone_evidences')
     card = models.ForeignKey(InstructionCard, on_delete=models.CASCADE, related_name='tone_evidences')

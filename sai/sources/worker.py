@@ -11,11 +11,9 @@ from .scheduling import enqueue_due_jobs
 
 logger = logging.getLogger(__name__)
 
-# 큐가 비었을 때 다시 확인하기까지 기다리는 시간.
 IDLE_SECONDS = 3
 
-# 밀린 작업을 큐에 넣고 멈춘 작업을 정리하는 주기.
-# 큐 확인만큼 자주 할 일이 아니다.
+# 밀린 작업을 큐에 넣는 주기. 큐 확인만큼 자주 할 일이 아니다.
 SCHEDULE_EVERY = timedelta(seconds=60)
 
 # 이보다 오래 RUNNING 인 작업은 워커가 죽은 것으로 본다.
@@ -23,7 +21,6 @@ SCHEDULE_EVERY = timedelta(seconds=60)
 STALE_AFTER = timedelta(minutes=30)
 
 
-# 잡은 채로 죽은 작업을 정리한다.
 # 워커가 중간에 내려가면 status 가 RUNNING 에 멈춘 채 아무도 손대지 않는다.
 # 화면에서는 영원히 진행 중으로 보이고 다시 실행할 방법도 없다.
 def reap_stale_jobs(now=None):
@@ -40,7 +37,6 @@ def reap_stale_jobs(now=None):
     return len(stale)
 
 
-# 대기 중인 작업 하나를 잡아 RUNNING 으로 바꾼다.
 # skip_locked 덕분에 워커를 여러 개 띄워도 같은 작업을 두 번 잡지 않는다.
 def claim_job():
     with transaction.atomic():
@@ -70,7 +66,6 @@ def _fail(job, code):
     return job
 
 
-# 작업 하나를 끝까지 실행한다.
 # 여기서 예외가 새어 나가면 워커 루프가 죽고 큐가 멈춘다. 전부 잡아서 작업만 실패시킨다.
 def run_job(job):
     connection = Connection.objects.filter(
@@ -88,7 +83,6 @@ def run_job(job):
         return _fail(job, 'unexpected_error')
 
 
-# 큐에 쌓인 것을 다 처리하고 돌아온다. 처리한 작업 수 반환.
 def drain(limit=None):
     processed = 0
     while limit is None or processed < limit:
@@ -101,7 +95,6 @@ def drain(limit=None):
     return processed
 
 
-# 워커 프로세스 본체.
 def work_forever(idle_seconds=IDLE_SECONDS, stop_after_idle=None):
     idle_rounds = 0
     next_schedule = timezone.now()

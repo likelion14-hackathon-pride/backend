@@ -148,7 +148,6 @@ def _get_client():
     return OpenAI(api_key=settings.OPENAI_API_KEY, max_retries=0, timeout=30)
 
 
-# 확정된 규칙 중 질문과 가까운 것을 찾는다.
 # 한국어/영어 임베딩을 모두 뒤져 항목별로 더 가까운 쪽을 쓴다.
 # 영어 질문이 한국어로만 쓰인 규칙을 찾을 수 있어야 하기 때문.
 def retrieve_rules(vector, company, scope=None):
@@ -173,7 +172,6 @@ def retrieve_rules(vector, company, scope=None):
     return sorted(best.values(), key=lambda entry: entry.distance)[:TOP_K]
 
 
-# 확정 규칙이 없을 때 기댈 과거 대화.
 # 같은 말이 여러 번 올라온 경우 한 번만 쓴다. 같은 문장이 두 줄 뜨면 근거가 빈약해 보인다.
 def retrieve_cases(vector, company, scope=None):
     chunks = Chunk.objects.filter(company=company, embedding__isnull=False)

@@ -57,7 +57,6 @@ def _cards(company):
     )
 
 
-# 지시 카드 목록 view
 class CardListView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -118,7 +117,6 @@ class CardListView(APIView):
         )
 
 
-# 지시 카드 상세 / 상태 변경 view
 class CardDetailView(APIView):
     permission_classes = [IsAuthenticated]
 
