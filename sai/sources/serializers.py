@@ -106,6 +106,11 @@ class IngestionJobSerializer(serializers.ModelSerializer):
         )
 
 
+class IngestionJobListSerializer(serializers.Serializer):
+    items = IngestionJobSerializer(many=True)
+    nextCursor = serializers.CharField(allow_null=True)
+
+
 # 수집 작업 시작 요청.
 # itemIds를 생략하면 수집 대상 채널 전체를 대상으로 한다.
 class IngestionJobCreateSerializer(serializers.Serializer):

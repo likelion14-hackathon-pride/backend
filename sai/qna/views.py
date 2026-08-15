@@ -6,14 +6,14 @@ from drf_yasg import openapi
 from drf_yasg.utils import no_body, swagger_auto_schema
 from openai import OpenAIError
 from rest_framework import status
-from rest_framework.exceptions import APIException, PermissionDenied, ValidationError
+from rest_framework.exceptions import APIException, ValidationError
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from accounts.models import Membership
 from cards.models import Blank
-from companies.models import Company
+from companies.access import get_member_company, get_owner_company
 from handbook.models import CompanyScope, HandbookEntry, HandbookEvidence
 from sources.models import Item
 from sources.slack import SlackError
@@ -52,16 +52,6 @@ NEEDS_OWNER = {'NO_SOURCE', 'NEEDS_DECISION'}
 class AnswerUnavailable(APIException):
     status_code = status.HTTP_503_SERVICE_UNAVAILABLE
     default_detail = '답변 생성을 사용할 수 없습니다.'
-
-
-def get_member_company(user, company_id):
-    company = get_object_or_404(Company, id=company_id)
-    is_member = Membership.objects.filter(user=user, company=company, left_at__isnull=True).exists()
-
-    if not is_member:
-        raise PermissionDenied('company permission required')
-
-    return company
 
 
 def _citation_payload(source):
@@ -172,18 +162,6 @@ class AskView(APIView):
         }
 
         return Response(AskResultSerializer(payload).data, status=status.HTTP_200_OK)
-
-
-def get_owner_company(user, company_id):
-    company = get_object_or_404(Company, id=company_id)
-    is_owner = Membership.objects.filter(
-        user=user, company=company, role=Membership.Role.OWNER, left_at__isnull=True
-    ).exists()
-
-    if not is_owner:
-        raise PermissionDenied('owner permission required')
-
-    return company
 
 
 def _visible_escalations(company, user):
@@ -339,6 +317,37 @@ class EscalationDetailView(APIView):
         serializer = EscalationDraftUpdateSerializer(escalation, data=request.data)
         serializer.is_valid(raise_exception=True)
         escalation = serializer.save()
+
+        return Response(EscalationSerializer(escalation).data, status=status.HTTP_200_OK)
+
+
+class EscalationDismissView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    @swagger_auto_schema(
+        operation_summary='대표 확인 질문 물리기',
+        operation_description=(
+            '답할 필요가 없다고 판단한 질문을 목록에서 내립니다. '
+            '이미 규칙으로 승격된 질문은 물릴 수 없습니다. 대표만 할 수 있습니다.'
+        ),
+        request_body=no_body,
+        responses={
+            200: EscalationSerializer(), 400: '이미 승격됨',
+            401: '인증되지 않음', 403: 'Owner 권한 없음', 404: '질문을 찾을 수 없음',
+        },
+        tags=['Question'],
+    )
+    def post(self, request, company_id, escalation_id):
+        company = get_owner_company(request.user, company_id)
+        escalation = get_object_or_404(
+            Escalation.objects.filter(company=company), id=escalation_id
+        )
+
+        if escalation.status == Escalation.Status.APPROVED:
+            raise ValidationError({'status': ['already approved']})
+
+        escalation.status = Escalation.Status.DISMISSED
+        escalation.save(update_fields=['status'])
 
         return Response(EscalationSerializer(escalation).data, status=status.HTTP_200_OK)
 

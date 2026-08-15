@@ -400,3 +400,44 @@ class EscalationTests(TestCase):
         self.client.force_authenticate(user=outsider)
 
         self.assertEqual(self.client.get(self.base).status_code, 403)
+
+    # --- 물리기 ---
+
+    # 답할 필요가 없다고 판단한 질문이 목록에 계속 남으면 안 된다.
+    def test_dismiss(self):
+        escalation_id = self.create().data['id']
+        self.client.force_authenticate(user=self.owner)
+
+        response = self.client.post(f'{self.base}/{escalation_id}/dismiss')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data['status'], 'DISMISSED')
+
+    def test_dismissed_is_filtered_out(self):
+        escalation_id = self.create().data['id']
+        self.client.force_authenticate(user=self.owner)
+        self.client.post(f'{self.base}/{escalation_id}/dismiss')
+
+        response = self.client.get(f'{self.base}?status=DRAFT')
+
+        self.assertEqual(response.data['items'], [])
+
+    # 이미 규칙이 된 답변을 물리면 규칙만 남고 출처가 사라진다.
+    def test_approved_cannot_be_dismissed(self):
+        escalation = Escalation.objects.create(
+            company=self.company, asked_by=self.member, question_en='q', draft_ko='초안',
+            status=Escalation.Status.APPROVED,
+        )
+        self.client.force_authenticate(user=self.owner)
+
+        response = self.client.post(f'{self.base}/{escalation.id}/dismiss')
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.data['error']['field'], 'status')
+
+    def test_member_cannot_dismiss(self):
+        escalation_id = self.create().data['id']
+
+        response = self.client.post(f'{self.base}/{escalation_id}/dismiss')
+
+        self.assertEqual(response.status_code, 403)

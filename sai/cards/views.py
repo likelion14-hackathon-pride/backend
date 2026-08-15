@@ -3,20 +3,20 @@ from django.shortcuts import get_object_or_404
 from drf_yasg import openapi
 from drf_yasg.utils import swagger_auto_schema
 from rest_framework import status
-from rest_framework.exceptions import PermissionDenied, ValidationError
+from rest_framework.exceptions import ValidationError
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from accounts.models import Membership
-from companies.models import Company
+from companies.access import get_member_company
+from config.pagination import CURSOR_PARAMETER, LIMIT_PARAMETER, paginate
 
 from .models import InstructionCard
 from .serializers import (
     CardDetailSerializer,
     CardListItemSerializer,
     CardListSerializer,
-    CardStatusUpdateSerializer,
+    CardUpdateSerializer,
 )
 
 STATUS_PARAMETER = openapi.Parameter(
@@ -28,22 +28,6 @@ MINE_PARAMETER = openapi.Parameter(
     description='true 면 나에게 배정된 카드만 봅니다.',
     type=openapi.TYPE_BOOLEAN,
 )
-CURSOR_PARAMETER = openapi.Parameter('cursor', openapi.IN_QUERY, type=openapi.TYPE_STRING)
-LIMIT_PARAMETER = openapi.Parameter(
-    'limit', openapi.IN_QUERY, type=openapi.TYPE_INTEGER, default=20
-)
-
-
-def get_member_company(user, company_id):
-    company = get_object_or_404(Company, id=company_id)
-    is_member = Membership.objects.filter(
-        user=user, company=company, left_at__isnull=True
-    ).exists()
-
-    if not is_member:
-        raise PermissionDenied('company permission required')
-
-    return company
 
 
 def _cards(company):
@@ -91,29 +75,11 @@ class CardListView(APIView):
         if request.query_params.get('mine', '').lower() in ('1', 'true'):
             cards = cards.filter(assignee=request.user)
 
-        cursor = request.query_params.get('cursor')
-        if cursor:
-            try:
-                cards = cards.filter(id__lt=int(cursor))
-            except ValueError:
-                raise ValidationError({'cursor': ['invalid cursor']})
-
-        try:
-            limit = int(request.query_params.get('limit', 20))
-        except ValueError:
-            raise ValidationError({'limit': ['limit must be an integer']})
-
-        if limit < 1 or limit > 100:
-            raise ValidationError({'limit': ['limit must be between 1 and 100']})
-
-        rows = list(cards.order_by('-id')[:limit + 1])
-        has_next = len(rows) > limit
-        items = rows[:limit]
-        serializer = CardListItemSerializer(items, many=True)
-        next_cursor = str(items[-1].id) if has_next else None
+        items, next_cursor = paginate(cards, request)
 
         return Response(
-            {'items': serializer.data, 'nextCursor': next_cursor}, status=status.HTTP_200_OK
+            {'items': CardListItemSerializer(items, many=True).data, 'nextCursor': next_cursor},
+            status=status.HTTP_200_OK,
         )
 
 
@@ -145,11 +111,16 @@ class CardDetailView(APIView):
         return Response(CardDetailSerializer(card).data, status=status.HTTP_200_OK)
 
     @swagger_auto_schema(
-        operation_summary='지시 카드 상태 변경',
-        request_body=CardStatusUpdateSerializer,
+        operation_summary='지시 카드 상태 · 담당자 변경',
+        operation_description=(
+            'status 와 assigneeId 를 각각 또는 함께 보낼 수 있습니다. '
+            '담당자는 슬랙 멘션으로 자동 지정되므로 멘션이 없었거나 잘못 잡힌 경우 여기서 고칩니다. '
+            'assigneeId 를 null 로 보내면 담당자를 비웁니다.'
+        ),
+        request_body=CardUpdateSerializer,
         responses={
             200: CardDetailSerializer(),
-            400: '잘못된 상태',
+            400: '잘못된 요청',
             401: '인증되지 않음',
             403: '회사 접근 권한 없음',
             404: '회사 또는 카드를 찾을 수 없음',
@@ -159,7 +130,9 @@ class CardDetailView(APIView):
     def patch(self, request, company_id, card_id):
         company = get_member_company(request.user, company_id)
         card = get_object_or_404(_cards(company), id=card_id)
-        serializer = CardStatusUpdateSerializer(card, data=request.data)
+        serializer = CardUpdateSerializer(
+            card, data=request.data, context={'company': company}
+        )
         serializer.is_valid(raise_exception=True)
         card = serializer.save()
 

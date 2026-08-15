@@ -5,6 +5,7 @@ from .views import (
     EscalationApproveView,
     EscalationCheckAnswerView,
     EscalationDetailView,
+    EscalationDismissView,
     EscalationListCreateView,
     EscalationSendView,
     ThreadMessageListView,
@@ -19,4 +20,5 @@ urlpatterns = [
     path('<int:company_id>/questions/<int:escalation_id>/send', EscalationSendView.as_view()),
     path('<int:company_id>/questions/<int:escalation_id>/check-answer', EscalationCheckAnswerView.as_view()),
     path('<int:company_id>/questions/<int:escalation_id>/approve', EscalationApproveView.as_view()),
+    path('<int:company_id>/questions/<int:escalation_id>/dismiss', EscalationDismissView.as_view()),
 ]

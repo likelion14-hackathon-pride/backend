@@ -3,12 +3,12 @@ from django.utils import timezone
 from drf_yasg import openapi
 from drf_yasg.utils import swagger_auto_schema
 from rest_framework import status
-from rest_framework.exceptions import PermissionDenied, ValidationError
+from rest_framework.exceptions import ValidationError
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from accounts.models import Membership
-from companies.models import Company
+from companies.access import get_member_company, get_owner_company
+from config.pagination import CURSOR_PARAMETER, LIMIT_PARAMETER, paginate
 
 from .finalizing import finalize_entries
 from .models import CompanyScope, HandbookEntry, HandbookEvidence
@@ -58,28 +58,6 @@ REVIEW_STATUS_PARAMETER = openapi.Parameter(
     type=openapi.TYPE_STRING,
     enum=['PENDING', 'APPROVED', 'REJECTED', 'HELD'],
 )
-CURSOR_PARAMETER = openapi.Parameter(
-    'cursor',
-    openapi.IN_QUERY,
-    type=openapi.TYPE_STRING,
-)
-LIMIT_PARAMETER = openapi.Parameter(
-    'limit',
-    openapi.IN_QUERY,
-    type=openapi.TYPE_INTEGER,
-    default=20,
-)
-
-
-# 요청한 사용자가 해당 회사의 대표인지 확인
-def get_owner_company(user, company_id):
-    company = get_object_or_404(Company, id=company_id)
-    is_owner = Membership.objects.filter(user=user, company=company, role=Membership.Role.OWNER, left_at__isnull=True).exists()
-
-    if not is_owner:
-        raise PermissionDenied('owner permission required')
-
-    return company
 
 
 # review_status는 status와 reviewed_at에서 파생되므로 쿼리로도 같은 규칙을 따른다.
@@ -98,17 +76,6 @@ def _filter_by_review_status(entries, review_status):
         return reviewable.filter(reviewed_at__isnull=True)
 
     raise ValidationError({'reviewStatus': ['invalid reviewStatus']})
-
-
-# 요청한 사용자가 해당 회사의 구성원인지 확인
-def get_member_company(user, company_id):
-    company = get_object_or_404(Company, id=company_id)
-    is_member = Membership.objects.filter(user=user, company=company, left_at__isnull=True).exists()
-
-    if not is_member:
-        raise PermissionDenied('company permission required')
-
-    return company
 
 
 # 핸드북 항목 직접 등록 view
@@ -139,7 +106,6 @@ class HandbookEntryListCreateView(APIView):
         scope_id = request.query_params.get('scopeId')
         scope_kind = request.query_params.get('scopeKind')
         entry_status = request.query_params.get('status')
-        cursor = request.query_params.get('cursor')
 
         if scope_kind:
             entries = entries.filter(scope__kind=scope_kind)
@@ -155,27 +121,12 @@ class HandbookEntryListCreateView(APIView):
         if review_status:
             entries = _filter_by_review_status(entries, review_status)
 
-        if cursor:
-            try:
-                entries = entries.filter(id__lt=int(cursor))
-            except ValueError:
-                raise ValidationError({'cursor': ['invalid cursor']})
+        items, next_cursor = paginate(entries, request)
 
-        try:
-            limit = int(request.query_params.get('limit', 20))
-        except ValueError:
-            raise ValidationError({'limit': ['limit must be an integer']})
-
-        if limit < 1 or limit > 100:
-            raise ValidationError({'limit': ['limit must be between 1 and 100']})
-
-        entries = entries.order_by('-id')[:limit + 1]
-        has_next = len(entries) > limit
-        items = entries[:limit]
-        serializer = HandbookEntrySerializer(items, many=True)
-        next_cursor = str(items[-1].id) if has_next else None
-
-        return Response({'items': serializer.data, 'nextCursor': next_cursor}, status=status.HTTP_200_OK)
+        return Response(
+            {'items': HandbookEntrySerializer(items, many=True).data, 'nextCursor': next_cursor},
+            status=status.HTTP_200_OK,
+        )
 
     @swagger_auto_schema(
         operation_summary='핸드북 항목 직접 추가',

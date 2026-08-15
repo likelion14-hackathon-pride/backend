@@ -1,8 +1,13 @@
 from django.test import TestCase
+from rest_framework.exceptions import ValidationError
+from rest_framework.request import Request
 from rest_framework.test import APIClient
 
 from accounts.models import Membership, User
+from cards.models import InstructionCard
 from companies.models import Company
+
+from .pagination import paginate
 
 
 # 에러 응답은 종류를 가리지 않고 한 가지 모양으로 나가야 한다.
@@ -95,3 +100,47 @@ class ErrorEnvelopeTests(TestCase):
 
         self.assertEqual(response.status_code, 400)
         self.assertEnvelope(response, field=None)
+
+
+class PaginationTests(TestCase):
+    def setUp(self):
+        self.company = Company.objects.create(name='에코랩', code='TESTCODE1')
+        self.cards = [
+            InstructionCard.objects.create(company=self.company, purpose=f'일 {i}')
+            for i in range(5)
+        ]
+        self.factory = APIClient()
+
+    def paginate(self, query=''):
+        request = Request(self.factory.get(f'/?{query}').wsgi_request)
+
+        return paginate(InstructionCard.objects.all(), request)
+
+    # 커서는 마지막 항목의 id 다. 오프셋과 달리 앞에 행이 늘어도 페이지가 밀리지 않는다.
+    def test_pages_do_not_overlap(self):
+        first, cursor = self.paginate('limit=2')
+        second, _ = self.paginate(f'limit=2&cursor={cursor}')
+
+        self.assertEqual([c.id for c in first], [self.cards[4].id, self.cards[3].id])
+        self.assertEqual([c.id for c in second], [self.cards[2].id, self.cards[1].id])
+
+    # 마지막 페이지에서는 더 없다고 알려야 한다.
+    def test_last_page_has_no_cursor(self):
+        items, cursor = self.paginate('limit=10')
+
+        self.assertEqual(len(items), 5)
+        self.assertIsNone(cursor)
+
+    def test_invalid_limit(self):
+        with self.assertRaises(ValidationError):
+            self.paginate('limit=abc')
+
+    def test_limit_out_of_range(self):
+        with self.assertRaises(ValidationError):
+            self.paginate('limit=0')
+        with self.assertRaises(ValidationError):
+            self.paginate('limit=101')
+
+    def test_invalid_cursor(self):
+        with self.assertRaises(ValidationError):
+            self.paginate('cursor=nope')
