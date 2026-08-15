@@ -35,6 +35,45 @@ answer_en - the same in plain workplace English, for the employee to read.
   When is_answer is false: empty string."""
 
 
+BLANK_PROMPT = """A foreign employee received a work request in Korean on Slack. SAI turned it into
+a card, and one thing is missing before they can start. Write the question they should send to the
+person who made the request.
+
+Write it in Korean, as that employee would write it. Polite workplace Korean, one or two sentences.
+
+- Name the work you are asking about, using the words from the original Slack message, so the
+  reader knows which request this is about without scrolling back.
+- Ask only what is missing. Do not restate the whole request and do not add pleasantries.
+- Do not invent details. If the English question is vague, keep the Korean question equally narrow.
+
+Return only the question text."""
+
+
+# 카드의 미정 항목을 대표에게 보낼 한국어 질문으로 바꾼다.
+# 영어 질문을 그대로 보내면 대표가 무슨 건인지 모른다. 원문과 목적을 함께 넣는다.
+def draft_from_blank(blank):
+    card = blank.card
+    original = (card.document.raw_text if card.document else '') or ''
+
+    completion = _get_client().chat.completions.create(
+        model=settings.OPENAI_TRANSLATOR_MODEL,
+        messages=[
+            {'role': 'system', 'content': BLANK_PROMPT},
+            {
+                'role': 'user',
+                'content': (
+                    f'Original Slack request:\n{original[:500]}\n\n'
+                    f'What the card says the work is:\n{card.purpose}\n\n'
+                    f'What the employee needs to know:\n{blank.question_en}'
+                ),
+            },
+        ],
+        temperature=0,
+    )
+
+    return (completion.choices[0].message.content or '').strip() or None
+
+
 # 필드 순서가 곧 생성 순서다. 근거를 먼저 쓰게 두면 판정 품질도 같이 올라간다.
 class AnswerJudgement(BaseModel):
     reason: str = Field(description='판정 근거 한 문장. 비워 두면 안 된다.')
