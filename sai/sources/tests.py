@@ -657,7 +657,32 @@ class IngestionTests(TestCase):
         response = self.ingest()
 
         self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.data['itemIds'][0], 'no channel registered')
         self.assertEqual(RawDocument.objects.count(), 0)
+
+    # Swagger 기본 예시 [0] 을 그대로 보내는 일이 흔하다. 원인이 구분되어야 한다.
+    def test_unknown_item_id_reports_no_match(self):
+        response = self.ingest(payload={'itemIds': [0]})
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.data['itemIds'][0], 'no matching channel')
+
+    def test_empty_item_ids_rejected(self):
+        response = self.ingest(payload={'itemIds': []})
+
+        self.assertEqual(response.status_code, 400)
+
+    # 본문을 비워 보내면 등록된 채널 전체가 대상이다. Swagger 기본 사용 방식.
+    def test_empty_body_targets_all_channels(self):
+        other = Item.objects.create(
+            company=self.company, connection=self.connection,
+            external_id='C002', label='#payment',
+        )
+
+        response = self.ingest(payload={})
+
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(set(response.data['itemIds']), {self.item.id, other.id})
 
     def test_member_cannot_ingest(self):
         member = User.objects.create_user(email='m@example.com', password='pw', display_name='팀원')

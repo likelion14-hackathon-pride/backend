@@ -106,7 +106,15 @@ class IngestionJobSerializer(serializers.ModelSerializer):
 # 수집 작업 시작 요청.
 # itemIds를 생략하면 수집 대상 채널 전체를 대상으로 한다.
 class IngestionJobCreateSerializer(serializers.Serializer):
-    itemIds = serializers.ListField(child=serializers.IntegerField(), required=False)
+    itemIds = serializers.ListField(
+        child=serializers.IntegerField(),
+        required=False,
+        allow_empty=False,
+        help_text=(
+            '수집할 채널 ID 목록. 생략하면 등록된 채널 전체가 대상입니다. '
+            'ID는 GET /source-connections/{connectionId}/channels 로 확인하세요.'
+        ),
+    )
 
 
 # 소스 연결 응답용 시리얼라이저.
