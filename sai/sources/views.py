@@ -5,6 +5,7 @@ from django.shortcuts import get_object_or_404
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_POST
 from django.http import JsonResponse, HttpResponseForbidden
+from drf_yasg import openapi
 from drf_yasg.utils import no_body, swagger_auto_schema
 from rest_framework import status
 from rest_framework.exceptions import PermissionDenied, ValidationError
@@ -360,6 +361,24 @@ def _registered_channels(connection):
     )
 
 
+# Swagger는 정수 배열 필드에 [0] 을 예시로 채워 넣는다.
+# 그대로 보내면 없는 채널이라 400이 나므로, 기본 예시를 빈 객체로 지정한다.
+INGESTION_JOB_REQUEST_BODY = openapi.Schema(
+    type=openapi.TYPE_OBJECT,
+    properties={
+        'itemIds': openapi.Schema(
+            type=openapi.TYPE_ARRAY,
+            items=openapi.Items(type=openapi.TYPE_INTEGER),
+            description=(
+                '수집할 채널 ID 목록. 생략하면 등록된 채널 전체가 대상입니다. '
+                'ID는 GET /source-connections/{connectionId}/channels 로 확인하세요.'
+            ),
+        ),
+    },
+    example={},
+)
+
+
 # 슬랙 메시지 수집 작업 view
 class IngestionJobListCreateView(APIView):
     permission_classes = [IsAuthenticated]
@@ -372,7 +391,7 @@ class IngestionJobListCreateView(APIView):
             '이미 가져온 메시지는 다시 저장하지 않습니다(내용이 바뀌면 갱신). '
             '현재는 요청 안에서 동기로 처리하며 채널당 최대 1000건까지만 가져옵니다.'
         ),
-        request_body=IngestionJobCreateSerializer,
+        request_body=INGESTION_JOB_REQUEST_BODY,
         responses={
             201: IngestionJobSerializer(),
             400: '잘못된 요청 (수집 대상 채널 없음)',
@@ -400,7 +419,9 @@ class IngestionJobListCreateView(APIView):
 
         item_ids = list(items.values_list('id', flat=True))
         if not item_ids:
-            raise ValidationError({'itemIds': ['no channel to ingest']})
+            # 어느 쪽이 문제인지 구분해 준다. Swagger 기본값 [0] 을 그대로 보내는 일이 흔하다.
+            code = 'no matching channel' if requested_ids else 'no channel registered'
+            raise ValidationError({'itemIds': [code]})
 
         job = IngestionJob.objects.create(company=company, item_ids=item_ids)
         # 지금은 동기 실행. 데이터가 커지면 이 한 줄만 큐 적재로 바꾸면 된다.
