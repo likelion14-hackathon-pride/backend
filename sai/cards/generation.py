@@ -27,6 +27,12 @@ JUDGE_BATCH_SIZE = 25
 MAX_RULES = 4
 MAX_TONE_CASES = 5
 
+# 같은 요청으로 볼 코사인 거리. 실측에서 같은 요청은 0.09, 다른 요청은 0.31 이상이었다.
+DUPLICATE_DISTANCE = 0.15
+
+# 이 기간이 지나 다시 올라온 같은 요청은 새 일로 본다.
+DUPLICATE_WINDOW = timedelta(days=14)
+
 MENTION = re.compile(r'<@([UWB][A-Z0-9]+)>')
 
 JUDGE_PROMPT = """You decide whether a Slack message hands a specific piece of work to a person.
@@ -59,7 +65,9 @@ Korean requests are softened - '~해주실 수 있을까요', '~부탁드려요'
 are still real requests. But softening alone does not make a rule into a task.
 
 When you cannot point to a specific piece of work that someone will finish, answer false.
-A wrong card puts something on a person's to-do list that was never asked of them."""
+A wrong card puts something on a person's to-do list that was never asked of them.
+
+Return a judgement for every index given in the input, including the ones you answer false for."""
 
 CARD_PROMPT = """You turn a Slack message into a card that a foreign employee can act on.
 
@@ -92,13 +100,29 @@ deadline_at - that deadline as an ISO 8601 datetime in the company timezone give
 is_deadline_inferred - true when you had to guess. '내일 오전까지' is explicit. '이번 주 안에' and
   '시간 되실 때' are inferred. If deadline_at is empty, false.
 
+urgency - pick one before you write tone_note, then keep tone_note consistent with it.
+  URGENT   - the requester needs it now and other work should yield.
+  SOON     - there is a real deadline, but the normal working order is fine.
+  WHENEVER - the requester said it can wait. '급한 건 아닌데', '천천히', '시간 되실 때',
+             '여유 되실 때'. Take them at their word.
+  UNCLEAR  - the message does not say and the past cases do not tell you.
+
+  A message that denies urgency is not urgent. '급한 건 아닌데 시간 되실 때 봐주세요' is WHENEVER,
+  never URGENT and never SOON.
+  Politeness is not urgency. '~해주실 수 있을까요', '~부탁드려요' are how every request is phrased
+  here. Judge urgency from the stated deadline and from the past cases, not from politeness.
+  When you are between two levels, pick the lower one. Telling a new hire to drop everything for
+  work that could have waited costs more than the reverse.
+
 tone_note / tone_note_en - what this phrasing actually means in practice at this company. Use the
   past cases below as your basis. This is the most valuable field: Korean requests are softened,
-  and a foreign reader will misjudge urgency. Say plainly whether this is urgent, and what the
-  softening words really signal. In tone_note_en you may quote the Korean phrase and then explain
-  it - "'가능하시면' reads as optional but here it is not" - because the reader is looking at that
-  phrase in Slack. If the past cases do not support a reading, say the tone is unclear rather than
-  guessing. Empty strings when the message is already direct and needs no interpretation.
+  and a foreign reader will misjudge urgency. Explain what the softening words really signal here.
+  In tone_note_en you may quote the Korean phrase and then explain it - "'가능하시면' reads as
+  optional but here it is not" - because the reader is looking at that phrase in Slack.
+  Never contradict urgency. If urgency is WHENEVER, do not write that it should be handled soon
+  or quickly. If urgency is UNCLEAR, say the tone cannot be read from what is available rather
+  than guessing at it.
+  Empty strings when the message is already direct and needs no interpretation.
 
 steps - concrete actions in order. Two to five. Each has text (Korean) and text_en (English).
   rule_index points at a company rule below that governs that step, or -1 when none applies.
@@ -148,6 +172,7 @@ class CardDraft(BaseModel):
     deadline_text_en: str
     deadline_at: str
     is_deadline_inferred: bool
+    urgency: Literal['URGENT', 'SOON', 'WHENEVER', 'UNCLEAR']
     tone_note: str
     tone_note_en: str
     steps: list[CardStep]
@@ -195,28 +220,62 @@ def _parse_deadline(value, company):
     return parsed
 
 
+# 배치 하나를 판정해 {인덱스: 지시 여부}를 돌려준다.
+def _judge_batch(client, batch, channels, users):
+    prompt = '\n'.join(
+        f'[{index}] {normalize_slack_text(document.raw_text, channels, users)[:300]}'
+        for index, document in enumerate(batch)
+    )
+    completion = client.chat.completions.parse(
+        model=settings.OPENAI_CLASSIFIER_MODEL,
+        messages=[
+            {'role': 'system', 'content': JUDGE_PROMPT},
+            {'role': 'user', 'content': prompt},
+        ],
+        response_format=JudgementResult,
+        temperature=0,
+    )
+
+    return {
+        judgement.index: judgement.is_instruction
+        for judgement in completion.choices[0].message.parsed.judgements
+        if 0 <= judgement.index < len(batch)
+    }
+
+
 # 판정 단계. 지시인 문서만 골라 낸다.
+# 지시가 아닌 것에는 판정 버전을 남긴다. 남기지 않으면 다음 실행에서 같은 문서를 또 판정한다.
+# 지시인 것에는 남기지 않는다. 카드 생성이 실패하면 다음 실행에서 다시 시도해야 한다.
 def _judge(client, documents, channels, users):
     instructions = []
 
     for start in range(0, len(documents), JUDGE_BATCH_SIZE):
         batch = documents[start:start + JUDGE_BATCH_SIZE]
-        prompt = '\n'.join(
-            f'[{index}] {normalize_slack_text(document.raw_text, channels, users)[:300]}'
-            for index, document in enumerate(batch)
-        )
-        completion = client.chat.completions.parse(
-            model=settings.OPENAI_CLASSIFIER_MODEL,
-            messages=[
-                {'role': 'system', 'content': JUDGE_PROMPT},
-                {'role': 'user', 'content': prompt},
-            ],
-            response_format=JudgementResult,
-            temperature=0,
-        )
-        for judgement in completion.choices[0].message.parsed.judgements:
-            if judgement.is_instruction and 0 <= judgement.index < len(batch):
-                instructions.append(batch[judgement.index])
+        decided = _judge_batch(client, batch, channels, users)
+
+        # 응답에서 통째로 빠지는 항목이 실제로 있었다. 빠진 것만 한 번 더 묻는다.
+        # 여기서 놓치면 진짜 지시가 카드가 되지 못한 채 조용히 사라진다.
+        missing = [index for index in range(len(batch)) if index not in decided]
+        if missing:
+            retried = _judge_batch(client, [batch[index] for index in missing], channels, users)
+            decided.update({
+                missing[local]: value for local, value in retried.items() if local < len(missing)
+            })
+
+        # 인덱스 순으로 돈다. 중복 판정에서 먼저 온 것이 원본이 되므로 순서가 뒤집히면 안 된다.
+        judged = []
+        for index in range(len(batch)):
+            if index not in decided:
+                continue
+            document = batch[index]
+            if decided[index]:
+                instructions.append(document)
+                continue
+            document.card_version = GENERATOR_VERSION
+            judged.append(document)
+
+        # 배치마다 저장한다. 뒤 배치가 실패해도 앞 배치의 판정은 남는다.
+        RawDocument.objects.bulk_update(judged, ['card_version'])
 
     return instructions
 
@@ -265,6 +324,51 @@ def _find_tone_cases(company, vector, document):
     return cases
 
 
+# 같은 요청을 슬랙에 두 번 올리면 카드도 두 장이 된다. 화면에는 같은 카드가 두 번 뜬다.
+# 이미 있는 카드 중 충분히 가까운 것을 찾는다. 담당자가 다르면 다른 사람의 일이므로 별개로 둔다.
+# 끝난 일과 같은 요청이 다시 오면 그것은 새 일이다.
+def find_duplicate(company, vector, assignee, occurred_at):
+    since = (occurred_at or timezone.now()) - DUPLICATE_WINDOW
+
+    return (
+        InstructionCard.objects.filter(
+            company=company,
+            assignee=assignee,
+            embedding__isnull=False,
+            duplicate_of__isnull=True,
+            document__occurred_at__gte=since,
+        )
+        .exclude(status=InstructionCard.Status.DONE)
+        .annotate(distance=CosineDistance('embedding', vector))
+        .filter(distance__lte=DUPLICATE_DISTANCE)
+        .order_by('distance')
+        .first()
+    )
+
+
+# 중복은 내용을 새로 만들지 않는다. 원본을 그대로 복사하고 원본을 가리킨다.
+# 카드를 남기지 않으면 다음 실행에서 같은 원문을 또 후보로 집어 판정 비용이 계속 든다.
+def _save_duplicate(company, document, original):
+    return InstructionCard.objects.create(
+        company=company,
+        scope=document.item.scope,
+        document=document,
+        assignee=original.assignee,
+        duplicate_of=original,
+        purpose=original.purpose,
+        purpose_en=original.purpose_en,
+        deliverable=original.deliverable,
+        deliverable_en=original.deliverable_en,
+        deadline_text=original.deadline_text,
+        deadline_text_en=original.deadline_text_en,
+        deadline_at=original.deadline_at,
+        is_deadline_inferred=original.is_deadline_inferred,
+        urgency=original.urgency,
+        tone_note=original.tone_note,
+        tone_note_en=original.tone_note_en,
+    )
+
+
 def _render_rules(rules):
     if not rules:
         return '(no rules)'
@@ -292,13 +396,15 @@ def _render_cases(cases):
 
 
 @transaction.atomic
-def _save_card(company, document, draft, rules, cases, assignee):
+def _save_card(company, document, draft, rules, cases, assignee, vector):
     card, _ = InstructionCard.objects.update_or_create(
         document=document,
         defaults={
             'company': company,
             'scope': document.item.scope,
             'assignee': assignee,
+            'embedding': vector,
+            'urgency': draft.urgency,
             'purpose': draft.purpose,
             'purpose_en': draft.purpose_en or None,
             'deliverable': draft.deliverable or None,
@@ -356,6 +462,13 @@ def _save_card(company, document, draft, rules, cases, assignee):
 def _build_card(client, company, document, channels, users):
     text = normalize_slack_text(document.raw_text, channels, users)
     rules, vector = _find_rules(client, company, text, document.item.scope)
+
+    # 카드 생성 호출 전에 거른다. 중복 한 건마다 gpt-4o 호출이 통째로 절약된다.
+    assignee = resolve_assignee(company, document.raw_text)
+    original = find_duplicate(company, vector, assignee, document.occurred_at)
+    if original is not None:
+        return _save_duplicate(company, document, original)
+
     cases = _find_tone_cases(company, vector, document)
 
     author = document.author_identity.external_handle if document.author_identity else '?'
@@ -392,9 +505,7 @@ def _build_card(client, company, document, channels, users):
     if not draft.purpose.strip():
         return None
 
-    assignee = resolve_assignee(company, document.raw_text)
-
-    return _save_card(company, document, draft, rules, cases, assignee)
+    return _save_card(company, document, draft, rules, cases, assignee, vector)
 
 
 # 아직 카드가 없는 원문에서 지시를 찾아 카드를 만든다.
@@ -409,6 +520,9 @@ def generate_cards(company, documents=None):
         # 분류기가 상시 규칙으로 본 것은 지시가 아니다. 규칙은 핸드북이 맡는다.
         # 후보를 줄여 판정 비용도 함께 아낀다.
         .exclude(classified_as=RawDocument.ClassifiedAs.INSTRUCTION)
+        # 이미 지시가 아니라고 본 것은 다시 보지 않는다.
+        # 프롬프트를 고쳐 GENERATOR_VERSION 을 올리면 전부 다시 판정한다.
+        .exclude(card_version=GENERATOR_VERSION)
         .select_related('item', 'item__scope', 'author_identity')
         # 판정 결과가 인덱스로 돌아온다. 동시각 문서가 있으면 순서를 id 로 고정해야 한다.
         .order_by('occurred_at', 'id')

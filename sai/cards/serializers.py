@@ -51,6 +51,8 @@ class CardListItemSerializer(serializers.ModelSerializer):
     isDeadlineInferred = serializers.BooleanField(source='is_deadline_inferred', read_only=True)
     toneNote = serializers.CharField(source='tone_note', read_only=True)
     toneNoteEn = serializers.CharField(source='tone_note_en', read_only=True)
+    duplicateOfId = serializers.IntegerField(source='duplicate_of_id', read_only=True)
+    duplicateCount = serializers.SerializerMethodField()
     sourceLabel = serializers.CharField(source='document.item.label', read_only=True, default=None)
     requestedBy = serializers.CharField(
         source='document.author_identity.external_handle', read_only=True, default=None
@@ -71,8 +73,11 @@ class CardListItemSerializer(serializers.ModelSerializer):
             'deadlineTextEn',
             'deadlineAt',
             'isDeadlineInferred',
+            'urgency',
             'toneNote',
             'toneNoteEn',
+            'duplicateOfId',
+            'duplicateCount',
             'assigneeId',
             'assigneeName',
             'scopeId',
@@ -86,6 +91,13 @@ class CardListItemSerializer(serializers.ModelSerializer):
     def get_blankCount(self, obj):
         return obj.blanks.count()
 
+    # 같은 요청이 슬랙에 올라온 횟수. 1이면 한 번만 올라온 것이다.
+    # 목록에서는 view 가 미리 세어 둔다. 없으면 직접 세되 그만큼 쿼리가 늘어난다.
+    def get_duplicateCount(self, obj):
+        counted = getattr(obj, 'duplicate_count', None)
+
+        return (obj.duplicates.count() if counted is None else counted) + 1
+
 
 class CardDetailSerializer(CardListItemSerializer):
     documentId = serializers.IntegerField(source='document_id', read_only=True)
@@ -94,10 +106,23 @@ class CardDetailSerializer(CardListItemSerializer):
     steps = StepSerializer(many=True, read_only=True)
     blanks = BlankSerializer(many=True, read_only=True)
     toneEvidences = ToneEvidenceSerializer(source='tone_evidences', many=True, read_only=True)
+    duplicateSources = serializers.SerializerMethodField()
 
     class Meta(CardListItemSerializer.Meta):
         fields = CardListItemSerializer.Meta.fields + [
             'documentId', 'permalink', 'originalText', 'steps', 'blanks', 'toneEvidences',
+            'duplicateSources',
+        ]
+
+    # 같은 요청이 다시 올라온 슬랙 원문들. 언제 또 재촉했는지 볼 수 있어야 한다.
+    def get_duplicateSources(self, obj):
+        return [
+            {
+                'documentId': card.document_id,
+                'permalink': card.document.permalink if card.document else None,
+                'occurredAt': card.document.occurred_at if card.document else None,
+            }
+            for card in obj.duplicates.select_related('document').order_by('id')
         ]
 
 

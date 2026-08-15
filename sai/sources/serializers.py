@@ -80,6 +80,7 @@ class IngestionJobSerializer(serializers.ModelSerializer):
     documentCount = serializers.SerializerMethodField()
     candidateCount = serializers.IntegerField(source='entry_count', read_only=True)
     createdAt = serializers.DateTimeField(source='created_at', read_only=True)
+    startedAt = serializers.DateTimeField(source='started_at', read_only=True)
     completedAt = serializers.DateTimeField(source='completed_at', read_only=True)
 
     class Meta:
@@ -93,6 +94,7 @@ class IngestionJobSerializer(serializers.ModelSerializer):
             'candidateCount',
             'errors',
             'createdAt',
+            'startedAt',
             'completedAt',
         ]
 

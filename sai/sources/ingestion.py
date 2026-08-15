@@ -187,7 +187,9 @@ def _set_progress(job, value):
 # 수집 작업 실행. 워커가 큐에서 꺼내 호출한다.
 def run_ingestion(job, connection):
     job.status = IngestionJob.Status.RUNNING
-    job.save(update_fields=['status'])
+    # 요청 안에서 바로 돌리는 경우에는 워커를 거치지 않는다. 여기서도 시작 시각을 남긴다.
+    job.started_at = job.started_at or timezone.now()
+    job.save(update_fields=['status', 'started_at'])
 
     items = list(
         Item.objects.filter(

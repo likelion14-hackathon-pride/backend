@@ -12,6 +12,7 @@ from handbook.models import CompanyScope, HandbookEntry
 from sources.models import Chunk, Connection, Identity, Item, RawDocument
 
 from .generation import (
+    GENERATOR_VERSION,
     CardBlank,
     CardDraft,
     CardStep,
@@ -37,6 +38,7 @@ def draft(**overrides):
         'deadline_text_en': 'by tomorrow morning',
         'deadline_at': '2026-08-16T12:00:00',
         'is_deadline_inferred': False,
+        'urgency': 'SOON',
         'tone_note': '완곡하게 말했지만 내일 오전이 실제 기한입니다.',
         'tone_note_en': 'Phrased softly, but tomorrow morning is a real deadline.',
         'steps': [CardStep(
@@ -198,6 +200,122 @@ class CardGenerationTests(TestCase):
         self.assertIsNone(card.deadline_text_en)
         self.assertIsNone(card.tone_note_en)
         self.assertIsNone(card.steps.get().text_en)
+
+    @override_settings(OPENAI_API_KEY='test-key')
+    def test_urgency_is_stored(self):
+        self.generate(card=draft(urgency='WHENEVER'))
+
+        self.assertEqual(InstructionCard.objects.get().urgency, 'WHENEVER')
+
+    # 모델이 일부 인덱스를 통째로 빼고 답하는 일이 실제로 있었다.
+    # 그대로 두면 진짜 지시가 카드가 되지 못한 채 조용히 사라진다.
+    @override_settings(OPENAI_API_KEY='test-key')
+    def test_missing_judgements_are_asked_again(self):
+        first = JudgementResult(
+            judgements=[Judgement(index=0, reason='상시 규칙입니다', is_instruction=False)]
+        )
+        # 재요청에는 빠졌던 것 하나만 넘어가므로 인덱스가 0으로 다시 매겨진다.
+        retry = JudgementResult(
+            judgements=[Judgement(index=0, reason='끝나는 일입니다', is_instruction=True)]
+        )
+        results = [
+            SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(parsed=first))]),
+            SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(parsed=retry))]),
+            SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(parsed=draft()))]),
+        ]
+        with patch('cards.generation.OpenAI') as client:
+            client.return_value.chat.completions.parse.side_effect = results
+            client.return_value.embeddings.create.return_value = SimpleNamespace(
+                data=[SimpleNamespace(embedding=VECTOR)]
+            )
+            cards, _ = generate_cards(self.company)
+
+        self.assertEqual(len(cards), 1)
+        self.assertEqual(cards[0].document, self.document)
+
+    # 지시가 아니라고 본 문서에 표시를 남기지 않으면 실행할 때마다 과거 전체를 다시 판정한다.
+    @override_settings(OPENAI_API_KEY='test-key')
+    def test_rejected_documents_are_not_judged_again(self):
+        self.generate()
+        self.past.refresh_from_db()
+        self.document.refresh_from_db()
+
+        self.assertEqual(self.past.card_version, GENERATOR_VERSION)
+        # 지시인 것에는 남기지 않는다. 카드 생성이 실패하면 다시 시도해야 한다.
+        self.assertIsNone(self.document.card_version)
+
+        with patch('cards.generation.OpenAI') as client:
+            generate_cards(self.company)
+
+        self.assertFalse(client.return_value.chat.completions.parse.called)
+
+    # 프롬프트를 고쳐 버전을 올리면 다시 판정한다.
+    @override_settings(OPENAI_API_KEY='test-key')
+    def test_new_generator_version_judges_again(self):
+        self.generate()
+        RawDocument.objects.filter(id=self.past.id).update(card_version='card-v1')
+
+        with patch('cards.generation.OpenAI') as client:
+            client.return_value.chat.completions.parse.return_value = SimpleNamespace(
+                choices=[SimpleNamespace(message=SimpleNamespace(parsed=JudgementResult(
+                    judgements=[Judgement(index=0, reason='상시 규칙입니다', is_instruction=False)]
+                )))]
+            )
+            generate_cards(self.company)
+
+        self.assertTrue(client.return_value.chat.completions.parse.called)
+
+    # --- 중복 요청 ---
+
+    # 같은 요청을 슬랙에 두 번 올리면 화면에 같은 카드가 두 장 뜬다.
+    @override_settings(OPENAI_API_KEY='test-key')
+    def test_repeated_request_is_linked_to_the_first(self):
+        self.generate()
+        original = InstructionCard.objects.get()
+
+        again = self._document('2.1', '<@U001> 결제 실패 로그 원인 좀 봐주세요. 내일 오전까지 부탁드려요')
+        # 앞선 실행에서 self.past 는 판정이 끝나 후보에서 빠진다. 남은 후보는 이것 하나다.
+        self.generate(judgements=[Judgement(index=0, reason='끝나는 일입니다', is_instruction=True)])
+
+        duplicate = InstructionCard.objects.get(document=again)
+        self.assertEqual(duplicate.duplicate_of, original)
+        self.assertEqual(duplicate.purpose, original.purpose)
+        self.assertEqual(duplicate.purpose_en, original.purpose_en)
+
+    # 같은 말이라도 다른 사람에게 시켰으면 다른 일이다.
+    @override_settings(OPENAI_API_KEY='test-key')
+    def test_same_request_to_another_person_is_a_new_card(self):
+        self.generate()
+        other = User.objects.create_user(
+            email='mina@example.com', password='pw', display_name='민아'
+        )
+        Membership.objects.create(
+            user=other, company=self.company, role=Membership.Role.MEMBER
+        )
+        Identity.objects.create(
+            company=self.company, connection=self.connection,
+            external_user_id='U003', external_handle='민아', user=other,
+        )
+
+        again = self._document('2.1', '<@U003> 결제 실패 로그 좀 봐주실 수 있을까요?')
+        # 앞선 실행에서 self.past 는 판정이 끝나 후보에서 빠진다. 남은 후보는 이것 하나다.
+        self.generate(judgements=[Judgement(index=0, reason='끝나는 일입니다', is_instruction=True)])
+
+        card = InstructionCard.objects.get(document=again)
+        self.assertIsNone(card.duplicate_of)
+        self.assertEqual(card.assignee, other)
+
+    # 끝난 일과 같은 요청이 다시 오면 그것은 새 일이다.
+    @override_settings(OPENAI_API_KEY='test-key')
+    def test_request_after_the_work_is_done_is_a_new_card(self):
+        self.generate()
+        InstructionCard.objects.update(status=InstructionCard.Status.DONE)
+
+        again = self._document('2.1', '<@U001> 결제 실패 로그 다시 좀 봐주세요')
+        # 앞선 실행에서 self.past 는 판정이 끝나 후보에서 빠진다. 남은 후보는 이것 하나다.
+        self.generate(judgements=[Judgement(index=0, reason='끝나는 일입니다', is_instruction=True)])
+
+        self.assertIsNone(InstructionCard.objects.get(document=again).duplicate_of)
 
     # 멘션된 사람 중 SAI 계정이 이어진 사람이 담당자다.
     @override_settings(OPENAI_API_KEY='test-key')
@@ -384,6 +502,30 @@ class CardApiTests(TestCase):
 
         self.assertEqual(detail['purposeEn'], 'Find the cause of the payment failures')
         self.assertEqual(detail['steps'][0]['textEn'], 'Check Sentry')
+
+    # 같은 요청이 세 번 올라왔어도 목록에는 한 장만 나와야 한다.
+    def test_duplicates_are_folded_into_one_row(self):
+        for ref in ('1.2', '1.3'):
+            InstructionCard.objects.create(
+                company=self.company, document=RawDocument.objects.create(
+                    company=self.company, item=self.item, external_ref=ref,
+                    raw_text='결제 로그 다시 봐주세요', content_hash=ref.ljust(64, '0'),
+                    occurred_at=timezone.now(), permalink=f'https://slack/{ref}',
+                ),
+                assignee=self.member, purpose='결제 실패 로그 원인 파악',
+                duplicate_of=self.card,
+            )
+
+        items = self.client.get(self.base).data['items']
+
+        self.assertEqual([i['id'] for i in items], [self.card.id])
+        self.assertEqual(items[0]['duplicateCount'], 3)
+
+        detail = self.client.get(f'{self.base}/{self.card.id}').data
+        self.assertEqual(
+            [s['permalink'] for s in detail['duplicateSources']],
+            ['https://slack/1.2', 'https://slack/1.3'],
+        )
 
     def test_mine_filter(self):
         other_card = InstructionCard.objects.create(
