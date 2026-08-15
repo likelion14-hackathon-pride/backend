@@ -38,6 +38,7 @@ class RiskKeywordListCreateView(APIView):
             403: 'Owner 권한 없음',
             404: '회사를 찾을 수 없음',
         },
+        tags=['Setting'],
     )
     def get(self, request, company_id):
         company = get_owner_company(request.user, company_id)
@@ -56,6 +57,7 @@ class RiskKeywordListCreateView(APIView):
             403: 'Owner 권한 없음',
             404: '회사를 찾을 수 없음',
         },
+        tags=['Setting'],
     )
     def post(self, request, company_id):
         company = get_owner_company(request.user, company_id)
@@ -81,6 +83,7 @@ class RiskKeywordDeleteView(APIView):
             403: 'Owner 권한 없음',
             404: '회사 또는 키워드를 찾을 수 없음',
         },
+        tags=['Setting'],
     )
     def delete(self, request, company_id, keyword_id):
         company = get_owner_company(request.user, company_id)
