@@ -235,6 +235,13 @@ AWS_S3_REGION_NAME = 'ap-northeast-2'
 SLACK_SIGNING_SECRET = get_secret('SLACK_SIGNING_SECRET')
 SLACK_BOT_TOKEN = get_secret('SLACK_BOT_TOKEN')
 
+# GitHub App 자격증명은 서버 환경변수(또는 secrets.json)에만 둔다.
+# 심사자는 별도 GitHub 로그인 없이, 미리 설치해 둔 데모 레포 데이터를 조회한다.
+GITHUB_APP_ID = get_secret('GITHUB_APP_ID', '')
+GITHUB_PRIVATE_KEY = get_secret('GITHUB_PRIVATE_KEY', '')
+GITHUB_INSTALLATION_ID = get_secret('GITHUB_INSTALLATION_ID', '')
+GITHUB_WEBHOOK_SECRET = get_secret('GITHUB_WEBHOOK_SECRET', '')
+
 # 키가 없어도 서버는 뜬다. 분류를 실행하는 시점에만 필요하고,
 # 그때 ImproperlyConfigured로 실패하며 수집 결과는 그대로 남는다.
 # 수집 작업을 요청 안에서 바로 돌린다. 워커(manage.py run_jobs)를 띄우기 번거로운
