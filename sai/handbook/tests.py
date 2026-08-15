@@ -1,10 +1,12 @@
 from types import SimpleNamespace
 from unittest.mock import patch
 
+from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
 from django.db import IntegrityError
 from django.test import TestCase, override_settings
 from django.utils import timezone
+from openai import OpenAIError
 from rest_framework.test import APIClient
 
 from accounts.models import Membership, User
@@ -13,6 +15,7 @@ from companies.models import Company
 from sources.models import Connection, Identity, Item, RawDocument
 
 from .drafting import DraftResult, DraftRule, draft_entries
+from .finalizing import Translation, TranslationResult, finalize_entries
 from .models import CompanyScope, HandbookEntry, HandbookEvidence
 from .services import DEFAULT_COMPANY_SCOPES, seed_default_scopes
 
@@ -520,6 +523,166 @@ class HandbookReviewTests(TestCase):
         self.assertEqual(response.data['approvedCount'], 0)
         foreign.refresh_from_db()
         self.assertEqual(foreign.status, HandbookEntry.Status.DRAFT)
+
+
+class FinalizeEntriesTests(TestCase):
+    def setUp(self):
+        self.company = Company.objects.create(name='에코랩', code='TESTCODE1')
+        seed_default_scopes(self.company)
+        self.scope = CompanyScope.objects.get(
+            company=self.company, area_key=CompanyScope.AreaKey.PRODUCT_ENG
+        )
+        self.entry = HandbookEntry.objects.create(
+            company=self.company, scope=self.scope, title='금요일 오후 배포 금지',
+            body_ko='배포는 금요일 오후에 하지 않습니다.', original_lang='ko',
+            status=HandbookEntry.Status.CONFIRMED, origin=HandbookEntry.Origin.SLACK,
+        )
+
+    def finalize(self, entries=None, translation='We do not deploy on Friday afternoons.',
+                 translate_error=None, embed_error=None):
+        parsed = TranslationResult(translations=[Translation(index=0, text=translation)])
+        chat = SimpleNamespace(
+            choices=[SimpleNamespace(message=SimpleNamespace(parsed=parsed))]
+        )
+        embeddings = SimpleNamespace(data=[SimpleNamespace(embedding=[0.1] * 1536) for _ in range(4)])
+
+        with patch('handbook.finalizing.OpenAI') as client:
+            client.return_value.chat.completions.parse.return_value = chat
+            client.return_value.chat.completions.parse.side_effect = translate_error
+            client.return_value.embeddings.create.return_value = embeddings
+            client.return_value.embeddings.create.side_effect = embed_error
+            return finalize_entries(entries if entries is not None else [self.entry])
+
+    @override_settings(OPENAI_API_KEY='test-key')
+    def test_translates_and_embeds(self):
+        result = self.finalize()
+
+        self.assertEqual(result['errors'], [])
+        self.entry.refresh_from_db()
+        self.assertEqual(self.entry.body_en, 'We do not deploy on Friday afternoons.')
+        self.assertIsNotNone(self.entry.translated_at)
+        self.assertIsNotNone(self.entry.embedded_at)
+        self.assertEqual(len(self.entry.embedding_ko), 1536)
+        self.assertEqual(len(self.entry.embedding_en), 1536)
+        self.assertEqual(self.entry.embedding_model, settings.OPENAI_EMBEDDING_MODEL)
+
+    # 확정되지 않은 항목은 검색 대상이 아니다.
+    @override_settings(OPENAI_API_KEY='test-key')
+    def test_draft_is_not_finalized(self):
+        self.entry.status = HandbookEntry.Status.DRAFT
+        self.entry.save()
+
+        result = self.finalize()
+
+        self.assertEqual(result, {'translated': 0, 'embedded': 0, 'errors': []})
+
+    # 이미 번역된 항목은 다시 번역하지 않는다.
+    @override_settings(OPENAI_API_KEY='test-key')
+    def test_existing_translation_is_kept(self):
+        self.entry.body_en = '사람이 고친 번역'
+        self.entry.save()
+
+        self.finalize()
+
+        self.entry.refresh_from_db()
+        self.assertEqual(self.entry.body_en, '사람이 고친 번역')
+
+    # OpenAI 장애로 확정을 되돌리지는 않는다. 나중에 다시 부르면 이어서 처리된다.
+    @override_settings(OPENAI_API_KEY='test-key')
+    def test_translate_failure_does_not_raise(self):
+        result = self.finalize(translate_error=OpenAIError('down'))
+
+        self.assertEqual(result['errors'][0]['step'], 'translate')
+        self.entry.refresh_from_db()
+        self.assertEqual(self.entry.status, HandbookEntry.Status.CONFIRMED)
+        self.assertIsNone(self.entry.translated_at)
+        # 번역이 없어도 한국어 본문은 임베딩된다.
+        self.assertIsNotNone(self.entry.embedded_at)
+
+    @override_settings(OPENAI_API_KEY='')
+    def test_missing_key_is_reported_not_raised(self):
+        result = self.finalize()
+
+        self.assertEqual(result['errors'], [{'code': 'openai_not_configured'}])
+
+
+class ReviewFinalizeIntegrationTests(TestCase):
+    def setUp(self):
+        self.company = Company.objects.create(name='에코랩', code='TESTCODE1')
+        seed_default_scopes(self.company)
+        self.scope = CompanyScope.objects.get(
+            company=self.company, area_key=CompanyScope.AreaKey.PRODUCT_ENG
+        )
+        self.owner = User.objects.create_user(email='owner@example.com', password='pw', display_name='대표')
+        Membership.objects.create(user=self.owner, company=self.company, role=Membership.Role.OWNER)
+        self.entry = HandbookEntry.objects.create(
+            company=self.company, scope=self.scope, title='금요일 오후 배포 금지',
+            body_ko='배포는 금요일 오후에 하지 않습니다.', original_lang='ko',
+            status=HandbookEntry.Status.DRAFT, origin=HandbookEntry.Origin.SLACK,
+        )
+        self.client = APIClient()
+        self.client.force_authenticate(user=self.owner)
+        self.base = f'/api/companies/{self.company.id}/handbook/entries'
+
+    def test_approve_triggers_finalize(self):
+        with patch('handbook.views.finalize_entries') as finalize:
+            self.client.post(f'{self.base}/{self.entry.id}/review', {'decision': 'APPROVE'}, format='json')
+
+        finalize.assert_called_once()
+        self.assertEqual(finalize.call_args[0][0][0].id, self.entry.id)
+
+    def test_reject_does_not_finalize(self):
+        with patch('handbook.views.finalize_entries') as finalize:
+            self.client.post(f'{self.base}/{self.entry.id}/review', {'decision': 'REJECT'}, format='json')
+
+        finalize.assert_not_called()
+
+    # 일괄 승인은 항목마다 부르지 않고 한 번에 묶어야 한다.
+    def test_bulk_approve_finalizes_once(self):
+        second = HandbookEntry.objects.create(
+            company=self.company, scope=self.scope, title='PR 승인 규칙',
+            body_ko='승인 1명', status=HandbookEntry.Status.DRAFT,
+            origin=HandbookEntry.Origin.SLACK,
+        )
+
+        with patch('handbook.views.finalize_entries') as finalize:
+            self.client.post(
+                f'{self.base}/review-all',
+                {'entryIds': [self.entry.id, second.id]},
+                format='json',
+            )
+
+        finalize.assert_called_once()
+        self.assertEqual(len(finalize.call_args[0][0]), 2)
+
+    # 본문을 고치면 기존 번역과 벡터는 낡는다. 남겨 두면 검색이 옛 문장을 물어온다.
+    def test_editing_body_clears_translation_and_embedding(self):
+        self.entry.status = HandbookEntry.Status.CONFIRMED
+        self.entry.body_en = 'old translation'
+        self.entry.translated_at = timezone.now()
+        self.entry.embedding_ko = [0.1] * 1536
+        self.entry.embedded_at = timezone.now()
+        self.entry.save()
+
+        self.client.patch(
+            f'{self.base}/{self.entry.id}', {'originalKo': '배포는 금요일에 하지 않습니다.'}, format='json'
+        )
+
+        self.entry.refresh_from_db()
+        self.assertIsNone(self.entry.body_en)
+        self.assertIsNone(self.entry.translated_at)
+        self.assertIsNone(self.entry.embedded_at)
+        self.assertIsNone(self.entry.embedding_ko)
+
+    def test_editing_title_only_keeps_embedding(self):
+        self.entry.status = HandbookEntry.Status.CONFIRMED
+        self.entry.embedded_at = timezone.now()
+        self.entry.save()
+
+        self.client.patch(f'{self.base}/{self.entry.id}', {'title': '새 제목'}, format='json')
+
+        self.entry.refresh_from_db()
+        self.assertIsNotNone(self.entry.embedded_at)
 
 
 class OwnerSignupScopeTests(TestCase):

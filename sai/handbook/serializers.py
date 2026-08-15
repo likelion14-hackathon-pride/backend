@@ -1,6 +1,7 @@
 from django.utils import timezone
 from rest_framework import serializers
 
+from .finalizing import mark_stale
 from .models import CompanyScope, HandbookEntry, HandbookEvidence, HandbookRevision
 
 
@@ -83,6 +84,8 @@ class HandbookEntrySerializer(serializers.ModelSerializer):
     originalKo = serializers.CharField(source='body_ko', read_only=True)
     questionCount = serializers.IntegerField(source='ask_count', read_only=True)
     sourceType = serializers.CharField(source='origin', read_only=True)
+    translatedAt = serializers.DateTimeField(source='translated_at', read_only=True)
+    embeddedAt = serializers.DateTimeField(source='embedded_at', read_only=True)
     createdAt = serializers.DateTimeField(source='created_at', read_only=True)
     updatedAt = serializers.DateTimeField(source='updated_at', read_only=True)
 
@@ -99,8 +102,11 @@ class HandbookEntrySerializer(serializers.ModelSerializer):
             'ruleEn',
             'originalKo',
             'status',
+            'confidence',
             'questionCount',
             'sourceType',
+            'translatedAt',
+            'embeddedAt',
             'createdAt',
             'updatedAt',
         ]
@@ -141,6 +147,12 @@ class HandbookEntryUpdateSerializer(serializers.ModelSerializer):
                 'status': instance.status,
             },
         )
+
+        # 원문 언어 본문이 바뀌면 기존 번역과 임베딩은 더 이상 그 내용이 아니다.
+        # 낡은 벡터를 남겨 두면 검색이 옛 문장을 물어온다.
+        source_field = 'body_ko' if instance.original_lang == 'ko' else 'body_en'
+        if source_field in validated_data and validated_data[source_field] != getattr(instance, source_field):
+            mark_stale(instance)
 
         return super().update(instance, validated_data)
 
