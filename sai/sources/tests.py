@@ -283,7 +283,8 @@ class ChannelTests(TestCase):
         response, join = self.add('G002', channels=ALL_CHANNELS + [NOT_JOINED_PRIVATE])
 
         self.assertEqual(response.status_code, 400)
-        self.assertEqual(response.data['externalId'][0], 'cannot_join_private_channel')
+        self.assertEqual(response.data['error']['field'], 'externalId')
+        self.assertEqual(response.data['error']['message'], 'cannot_join_private_channel')
         join.assert_not_called()
         self.assertFalse(Item.objects.filter(external_id='G002').exists())
 
@@ -298,7 +299,8 @@ class ChannelTests(TestCase):
         response, _ = self.add('C999')
 
         self.assertEqual(response.status_code, 400)
-        self.assertEqual(response.data['externalId'][0], 'channel_not_found')
+        self.assertEqual(response.data['error']['field'], 'externalId')
+        self.assertEqual(response.data['error']['message'], 'channel_not_found')
 
     # --- 제외 ---
 
@@ -752,7 +754,8 @@ class IngestionTests(TestCase):
         response = self.ingest()
 
         self.assertEqual(response.status_code, 400)
-        self.assertEqual(response.data['itemIds'][0], 'no channel registered')
+        self.assertEqual(response.data['error']['field'], 'itemIds')
+        self.assertEqual(response.data['error']['message'], 'no channel registered')
         self.assertEqual(RawDocument.objects.count(), 0)
 
     # Swagger 기본 예시 [0] 을 그대로 보내는 일이 흔하다. 원인이 구분되어야 한다.
@@ -760,7 +763,8 @@ class IngestionTests(TestCase):
         response = self.ingest(payload={'itemIds': [0]})
 
         self.assertEqual(response.status_code, 400)
-        self.assertEqual(response.data['itemIds'][0], 'no matching channel')
+        self.assertEqual(response.data['error']['field'], 'itemIds')
+        self.assertEqual(response.data['error']['message'], 'no matching channel')
 
     def test_empty_item_ids_rejected(self):
         response = self.ingest(payload={'itemIds': []})

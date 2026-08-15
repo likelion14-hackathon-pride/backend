@@ -168,11 +168,11 @@ class EscalationCreateSerializer(serializers.Serializer):
 
     def validate(self, attrs):
         if attrs.get('messageId') and attrs.get('blankId'):
-            raise serializers.ValidationError('messageId 와 blankId 는 함께 쓸 수 없습니다')
+            raise serializers.ValidationError('messageId and blankId cannot be used together')
 
         if not any(attrs.get(key) for key in ('messageId', 'blankId', 'questionEn')):
             raise serializers.ValidationError(
-                'messageId, blankId, questionEn 중 하나는 필요합니다'
+                'one of messageId, blankId, questionEn is required'
             )
 
         return attrs

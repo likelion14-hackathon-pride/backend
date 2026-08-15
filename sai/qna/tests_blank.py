@@ -104,7 +104,8 @@ class BlankEscalationTests(TestCase):
         response = self.escalate()
 
         self.assertEqual(response.status_code, 400)
-        self.assertEqual(response.data['blankId'][0], 'already escalated')
+        self.assertEqual(response.data['error']['field'], 'blankId')
+        self.assertEqual(response.data['error']['message'], 'already escalated')
 
     # 직접 쓴 초안이 있으면 AI를 부르지 않는다.
     def test_given_draft_is_used_as_is(self):
