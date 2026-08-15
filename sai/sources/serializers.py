@@ -75,6 +75,57 @@ class ChannelScopeUpdateSerializer(serializers.Serializer):
         return instance
 
 
+# GitHub 수집 대상 레포 응답용 시리얼라이저
+class RepositorySerializer(serializers.ModelSerializer):
+    externalId = serializers.CharField(source='external_id', read_only=True)
+    scopeId = serializers.IntegerField(source='scope_id', read_only=True)
+    scopeName = serializers.CharField(source='scope.name', read_only=True, default=None)
+    scopeKind = serializers.CharField(source='scope.kind', read_only=True, default=None)
+    isScopeConfirmed = serializers.BooleanField(source='is_scope_confirmed', read_only=True)
+    itemCount = serializers.IntegerField(source='item_count', read_only=True)
+    lastSyncedAt = serializers.DateTimeField(source='last_synced_at', read_only=True)
+
+    class Meta:
+        model = Item
+        fields = [
+            'id',
+            'externalId',
+            'label',
+            'scopeId',
+            'scopeName',
+            'scopeKind',
+            'isScopeConfirmed',
+            'itemCount',
+            'lastSyncedAt',
+        ]
+
+
+class RepositoryListSerializer(serializers.Serializer):
+    items = RepositorySerializer(many=True)
+    nextCursor = serializers.CharField(allow_null=True)
+
+
+# GitHub App이 접근 가능하지만 아직 수집 대상으로 등록하지 않은 레포
+class AvailableRepositorySerializer(serializers.Serializer):
+    externalId = serializers.CharField(read_only=True)
+    label = serializers.CharField(read_only=True)
+    isPrivate = serializers.BooleanField(read_only=True)
+
+
+class AvailableRepositoryListSerializer(serializers.Serializer):
+    items = AvailableRepositorySerializer(many=True)
+    nextCursor = serializers.CharField(allow_null=True)
+
+
+class RepositoryAddSerializer(serializers.Serializer):
+    externalId = serializers.CharField(trim_whitespace=True)
+
+
+# 레포도 채널과 같이 기존 회사/프로젝트 범위 하나에 연결한다.
+class RepositoryScopeUpdateSerializer(ChannelScopeUpdateSerializer):
+    pass
+
+
 class IngestionJobSerializer(serializers.ModelSerializer):
     itemIds = serializers.JSONField(source='item_ids', read_only=True)
     documentCount = serializers.SerializerMethodField()

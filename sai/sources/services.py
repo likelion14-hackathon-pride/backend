@@ -214,3 +214,55 @@ def disconnect(connection):
     connection.save(update_fields=['disconnected_at', 'status'])
 
     return connection
+
+
+def _repository_label(repository):
+    return repository['full_name']
+
+
+# 아직 수집 대상으로 등록되지 않은 GitHub App 접근 가능 레포
+def list_available_repositories(connection):
+    registered = _registered_ids(connection)
+    repositories = _github_client().repositories()
+
+    return [
+        {
+            'externalId': str(repository['id']),
+            'label': _repository_label(repository),
+            'isPrivate': bool(repository.get('private')),
+        }
+        for repository in repositories
+        if str(repository['id']) not in registered
+    ]
+
+
+# 레포를 수집 대상으로 추가한다. App 설치 범위 밖의 레포는 등록할 수 없다.
+def add_repository(connection, external_id):
+    repositories = _github_client().repositories()
+    repository = next(
+        (repository for repository in repositories if str(repository['id']) == external_id),
+        None,
+    )
+    if repository is None:
+        raise GitHubError('repository_not_found')
+
+    item, _ = Item.objects.update_or_create(
+        connection=connection,
+        external_id=external_id,
+        defaults={
+            'company_id': connection.company_id,
+            'label': _repository_label(repository),
+            # 이전에 제외했던 레포를 다시 추가하는 경우 되살린다.
+            'removed_at': None,
+        },
+    )
+
+    return item
+
+
+# 레포를 제외해도 이후 원문·근거를 보존하기 위해 행은 삭제하지 않는다.
+def remove_repository(item):
+    item.removed_at = timezone.now()
+    item.save(update_fields=['removed_at'])
+
+    return item

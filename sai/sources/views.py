@@ -26,6 +26,8 @@ from .models import Connection, IngestionJob, Item
 from .serializers import (
     AvailableChannelListSerializer,
     AvailableChannelSerializer,
+    AvailableRepositoryListSerializer,
+    AvailableRepositorySerializer,
     ChannelAddSerializer,
     ChannelListSerializer,
     ChannelScopeUpdateSerializer,
@@ -36,17 +38,25 @@ from .serializers import (
     IngestionJobListSerializer,
     IngestionJobSerializer,
     GitHubConnectionCreateSerializer,
+    RepositoryAddSerializer,
+    RepositoryListSerializer,
+    RepositoryScopeUpdateSerializer,
+    RepositorySerializer,
     SlackConnectionCreateSerializer,
 )
 from .services import (
     add_channel,
+    add_repository,
     clear_connection_error,
     connect_github,
     connect_slack,
     disconnect,
     list_available_channels,
+    list_available_repositories,
     remove_channel,
+    remove_repository,
 )
+from .github import GitHubError
 from .slack import SlackError
 from .worker import drain
 from .webhook import (
@@ -236,7 +246,7 @@ class SourceChannelListView(APIView):
     )
     def get(self, request, company_id, connection_id):
         company = get_owner_company(request.user, company_id)
-        connection = get_connection(company, connection_id)
+        connection = get_connection(company, connection_id, Connection.Kind.SLACK)
         return page_response(ChannelSerializer, _registered_channels(connection))
 
     @swagger_auto_schema(
@@ -258,7 +268,7 @@ class SourceChannelListView(APIView):
     )
     def post(self, request, company_id, connection_id):
         company = get_owner_company(request.user, company_id)
-        connection = get_connection(company, connection_id)
+        connection = get_connection(company, connection_id, Connection.Kind.SLACK)
         serializer = ChannelAddSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
@@ -294,7 +304,7 @@ class SourceAvailableChannelListView(APIView):
     )
     def get(self, request, company_id, connection_id):
         company = get_owner_company(request.user, company_id)
-        connection = get_connection(company, connection_id)
+        connection = get_connection(company, connection_id, Connection.Kind.SLACK)
 
         try:
             channels = list_available_channels(connection)
@@ -326,7 +336,7 @@ class SourceChannelDetailView(APIView):
     )
     def patch(self, request, company_id, connection_id, item_id):
         company = get_owner_company(request.user, company_id)
-        connection = get_connection(company, connection_id)
+        connection = get_connection(company, connection_id, Connection.Kind.SLACK)
         item = get_object_or_404(
             Item, id=item_id, connection=connection, removed_at__isnull=True
         )
@@ -355,7 +365,7 @@ class SourceChannelDetailView(APIView):
     )
     def delete(self, request, company_id, connection_id, item_id):
         company = get_owner_company(request.user, company_id)
-        connection = get_connection(company, connection_id)
+        connection = get_connection(company, connection_id, Connection.Kind.SLACK)
         item = get_object_or_404(
             Item, id=item_id, connection=connection, removed_at__isnull=True
         )
@@ -370,6 +380,152 @@ def _registered_channels(connection):
         .select_related('scope')
         .order_by('label')
     )
+
+
+# GitHub 수집 대상 레포 목록 조회 / 추가 view
+class SourceRepositoryListView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    @swagger_auto_schema(
+        operation_summary='수집 대상 레포 목록 조회',
+        operation_description='GitHub에서 수집할 레포 목록입니다. 제외한 레포는 목록에서 빠집니다.',
+        responses={
+            200: RepositoryListSerializer(),
+            401: '인증되지 않음',
+            403: 'Owner 권한 없음',
+            404: '회사 또는 GitHub 연결을 찾을 수 없음',
+        },
+        tags=['Source'],
+    )
+    def get(self, request, company_id, connection_id):
+        company = get_owner_company(request.user, company_id)
+        connection = get_connection(company, connection_id, Connection.Kind.GITHUB)
+        repositories = (
+            Item.objects.filter(connection=connection, removed_at__isnull=True)
+            .select_related('scope')
+            .order_by('label')
+        )
+        return page_response(RepositorySerializer, repositories)
+
+    @swagger_auto_schema(
+        operation_summary='레포 추가',
+        operation_description=(
+            'GitHub App이 접근 가능한 레포를 수집 대상으로 추가합니다. '
+            'App 설치 범위에 없는 레포는 추가할 수 없습니다.'
+        ),
+        request_body=RepositoryAddSerializer,
+        responses={
+            201: RepositorySerializer(),
+            400: '잘못된 요청 (없는 레포 / GitHub API 오류)',
+            401: '인증되지 않음',
+            403: 'Owner 권한 없음',
+            404: '회사 또는 GitHub 연결을 찾을 수 없음',
+        },
+        tags=['Source'],
+    )
+    def post(self, request, company_id, connection_id):
+        company = get_owner_company(request.user, company_id)
+        connection = get_connection(company, connection_id, Connection.Kind.GITHUB)
+        serializer = RepositoryAddSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        try:
+            repository = add_repository(connection, serializer.validated_data['externalId'])
+        except GitHubError as exc:
+            raise ValidationError({'externalId': [exc.code]})
+
+        response_serializer = RepositorySerializer(repository)
+
+        return Response(response_serializer.data, status=status.HTTP_201_CREATED)
+
+
+# 아직 등록되지 않은 GitHub App 접근 가능 레포
+class SourceAvailableRepositoryListView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    @swagger_auto_schema(
+        operation_summary='추가 가능한 레포 목록',
+        operation_description='GitHub App이 접근 가능하지만 아직 수집 대상으로 등록하지 않은 레포입니다.',
+        responses={
+            200: AvailableRepositoryListSerializer(),
+            400: 'GitHub API 오류',
+            401: '인증되지 않음',
+            403: 'Owner 권한 없음',
+            404: '회사 또는 GitHub 연결을 찾을 수 없음',
+        },
+        tags=['Source'],
+    )
+    def get(self, request, company_id, connection_id):
+        company = get_owner_company(request.user, company_id)
+        connection = get_connection(company, connection_id, Connection.Kind.GITHUB)
+
+        try:
+            repositories = list_available_repositories(connection)
+        except GitHubError as exc:
+            raise ValidationError({'github': [exc.code]})
+
+        return page_response(AvailableRepositorySerializer, repositories)
+
+
+# 수집 대상 레포 범위 연결 / 제외 view
+class SourceRepositoryDetailView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    @swagger_auto_schema(
+        operation_summary='레포 지식공간 연결',
+        operation_description=(
+            '레포를 회사 전반 규칙 범위나 프로젝트 범위에 연결합니다. '
+            '이 레포에서 뽑아낸 규칙 초안은 여기서 지정한 범위를 기본값으로 갖습니다. '
+            'scopeId를 null로 보내면 연결이 해제됩니다.'
+        ),
+        request_body=RepositoryScopeUpdateSerializer,
+        responses={
+            200: RepositorySerializer(),
+            400: '잘못된 요청 (없는 범위 / 다른 회사의 범위)',
+            401: '인증되지 않음',
+            403: 'Owner 권한 없음',
+            404: '회사, GitHub 연결 또는 레포를 찾을 수 없음',
+        },
+        tags=['Source'],
+    )
+    def patch(self, request, company_id, connection_id, item_id):
+        company = get_owner_company(request.user, company_id)
+        connection = get_connection(company, connection_id, Connection.Kind.GITHUB)
+        item = get_object_or_404(
+            Item, id=item_id, connection=connection, removed_at__isnull=True
+        )
+        serializer = RepositoryScopeUpdateSerializer(
+            item, data=request.data, context={'company': company}
+        )
+        serializer.is_valid(raise_exception=True)
+        item = serializer.save()
+        response_serializer = RepositorySerializer(item)
+
+        return Response(response_serializer.data, status=status.HTTP_200_OK)
+
+    @swagger_auto_schema(
+        operation_summary='수집 대상 레포에서 제외',
+        operation_description=(
+            '레포를 수집 대상에서 제외합니다. 이미 수집한 문서는 삭제하지 않습니다. '
+            '같은 레포를 다시 추가하면 되살아납니다.'
+        ),
+        responses={
+            204: '제외 완료',
+            401: '인증되지 않음',
+            403: 'Owner 권한 없음',
+            404: '회사, GitHub 연결 또는 레포를 찾을 수 없음',
+        },
+        tags=['Source'],
+    )
+    def delete(self, request, company_id, connection_id, item_id):
+        company = get_owner_company(request.user, company_id)
+        connection = get_connection(company, connection_id, Connection.Kind.GITHUB)
+        item = get_object_or_404(
+            Item, id=item_id, connection=connection, removed_at__isnull=True
+        )
+        remove_repository(item)
+
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 JOB_STATUS_PARAMETER = enum_parameter('status', IngestionJob.Status)
