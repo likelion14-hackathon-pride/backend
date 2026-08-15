@@ -1,8 +1,10 @@
-from django.shortcuts import get_object_or_404, render
-import hmac, hashlib, time, json
+import json
+import logging
+
+from django.shortcuts import get_object_or_404
 from django.views.decorators.csrf import csrf_exempt
+from django.views.decorators.http import require_POST
 from django.http import JsonResponse, HttpResponseForbidden
-from django.conf import settings
 from drf_yasg.utils import no_body, swagger_auto_schema
 from rest_framework import status
 from rest_framework.exceptions import PermissionDenied, ValidationError
@@ -36,39 +38,51 @@ from .services import (
     remove_channel,
 )
 from .slack import SlackClient, SlackError
+from .webhook import (
+    find_connection,
+    handle_event,
+    verify_signature,
+    verify_url_verification,
+)
+
+logger = logging.getLogger(__name__)
 
 
-def _verify(request):
-    secret = settings.SLACK_SIGNING_SECRET
-    if not secret:
-        return False
-    ts = request.headers.get("X-Slack-Request-Timestamp", "")
-    if not ts or abs(time.time() - int(ts)) > 300:
-        return False
-    base = f"v0:{ts}:{request.body.decode()}"
-    mine = "v0=" + hmac.new(secret.encode(), base.encode(), hashlib.sha256).hexdigest()
-    return hmac.compare_digest(mine, request.headers.get("X-Slack-Signature", ""))
-
-
+# 슬랙 이벤트 수신 엔드포인트.
+# 슬랙은 3초 안에 200을 받지 못하면 최대 3회 재시도하므로, 여기서는 저장까지만 하고
+# 분류·초안 생성 같은 AI 작업은 하지 않는다.
+# 재시도로 같은 이벤트가 다시 와도 (item, external_ref) 유니크 제약이 중복을 막는다.
 @csrf_exempt
+@require_POST
 def slack_events(request):
-    if request.method != "POST":
-        return JsonResponse({"ok": True})        # 헬스체크용
+    timestamp = request.headers.get('X-Slack-Request-Timestamp', '')
+    signature = request.headers.get('X-Slack-Signature', '')
 
-    if not _verify(request):
+    try:
+        data = json.loads(request.body)
+    except json.JSONDecodeError:
         return HttpResponseForbidden()
 
-    data = json.loads(request.body)
+    if data.get('type') == 'url_verification':
+        if not verify_url_verification(timestamp, signature, request.body):
+            return HttpResponseForbidden()
+        return JsonResponse({'challenge': data.get('challenge', '')})
 
-    if data.get("type") == "url_verification":
-        return JsonResponse({"challenge": data["challenge"]})
+    # 본문은 아직 신뢰할 수 없다. team_id로 연결을 찾아 그 시크릿으로 서명을 확인한 뒤에야 쓴다.
+    connection = find_connection(data.get('team_id'))
+    if connection is None:
+        return HttpResponseForbidden()
+    if not verify_signature(connection.signing_secret, timestamp, signature, request.body):
+        return HttpResponseForbidden()
 
-    event = data.get("event", {})
-    if event.get("bot_id") or event.get("subtype"):
-        return JsonResponse({"ok": True})
+    try:
+        handle_event(connection, data.get('event') or {})
+    except Exception:
+        # 여기서 500을 내면 슬랙이 같은 이벤트를 세 번 더 보낸다.
+        # 실패는 로그로 남기고 200을 준다. 놓친 메시지는 다음 수집 작업이 주워 온다.
+        logger.exception('슬랙 이벤트 처리 실패 team=%s', data.get('team_id'))
 
-    print("받음:", event.get("text"), "|", event.get("user"))
-    return JsonResponse({"ok": True})
+    return JsonResponse({'ok': True})
 
 
 # 요청한 사용자가 해당 회사의 대표인지 확인
@@ -164,6 +178,8 @@ class SourceConnectionListCreateView(APIView):
         connection.status = Connection.Status.CONNECTED
         connection.external_workspace_id = workspace_id
         connection.display_name = auth.get('team')
+        # 웹훅에서 permalink를 조립할 때 쓴다. 여기서 받아 두면 나중에 부를 일이 없다.
+        connection.workspace_url = auth.get('url')
         connection.bot_token = bot_token
         connection.signing_secret = signing_secret
         connection.error_message = None
