@@ -1,3 +1,4 @@
+import base64
 import json
 import time
 import urllib.error
@@ -85,6 +86,26 @@ class GitHubClient:
 
         return token
 
+    # 목록 API는 한 번에 최대 100개만 주므로 끝까지 나눠서 가져온다.
+    def _paginate(self, path, token, max_pages=20):
+        results = []
+        separator = '&' if '?' in path else '?'
+
+        for page in range(1, max_pages + 1):
+            current = self._request(
+                'GET',
+                f'{path}{separator}per_page=100&page={page}',
+                token,
+            )
+            if not isinstance(current, list):
+                raise GitHubError('github_response_invalid')
+
+            results += current
+            if len(current) < 100:
+                break
+
+        return results
+
     # 연결 화면에 보여 줄 설치 계정 정보.
     def installation(self):
         return self._request(
@@ -111,3 +132,65 @@ class GitHubClient:
                 break
 
         return repositories
+
+    # 레포 최상위 README. README가 없는 레포는 오류 대신 None을 반환한다.
+    def readme(self, repository):
+        token = self._installation_token()
+        try:
+            result = self._request('GET', f'/repos/{repository}/readme', token)
+        except GitHubError as exc:
+            if exc.code == 'github_resource_not_found':
+                return None
+            raise
+
+        if result.get('encoding') != 'base64':
+            raise GitHubError('github_response_invalid')
+
+        try:
+            text = base64.b64decode(result.get('content', '')).decode('utf-8')
+        except (ValueError, UnicodeDecodeError) as exc:
+            raise GitHubError('github_response_invalid') from exc
+
+        return {
+            'path': result.get('path') or 'README.md',
+            'sha': result.get('sha'),
+            'html_url': result.get('html_url'),
+            'text': text,
+        }
+
+    # Issue API에는 PR도 함께 나오므로 실제 Issue만 남긴다.
+    def issues(self, repository, max_pages=20):
+        token = self._installation_token()
+        issues = self._paginate(
+            f'/repos/{repository}/issues?state=all&sort=updated&direction=asc',
+            token,
+            max_pages,
+        )
+
+        return [issue for issue in issues if 'pull_request' not in issue]
+
+    # 일반 Issue 댓글과 PR 대화 댓글은 같은 API에서 조회된다.
+    def issue_comments(self, repository, max_pages=20):
+        token = self._installation_token()
+        return self._paginate(
+            f'/repos/{repository}/issues/comments?sort=updated&direction=asc',
+            token,
+            max_pages,
+        )
+
+    def pull_requests(self, repository, max_pages=20):
+        token = self._installation_token()
+        return self._paginate(
+            f'/repos/{repository}/pulls?state=all&sort=updated&direction=asc',
+            token,
+            max_pages,
+        )
+
+    # 코드 줄에 달린 리뷰 댓글. PR 전체에 단 댓글은 issue_comments에서 가져온다.
+    def pull_review_comments(self, repository, max_pages=20):
+        token = self._installation_token()
+        return self._paginate(
+            f'/repos/{repository}/pulls/comments?sort=updated&direction=asc',
+            token,
+            max_pages,
+        )
