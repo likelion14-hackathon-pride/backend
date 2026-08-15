@@ -231,11 +231,13 @@ def draft_entries(company):
 # 이번 실행에서 다시 만들어지지 않은 AI 초안을 지운다.
 # 채널의 지식공간을 바꾸면 dedupe_key가 달라져 예전 범위에 초안이 남는데,
 # 그대로 두면 같은 규칙이 두 범위에 중복으로 보인다.
-# 대표가 확정하거나 보관한 항목, 사람이 직접 만든 항목은 대상이 아니다.
+# 대표가 확정·보관·보류한 항목과 사람이 직접 만든 항목은 대상이 아니다.
 # 일부 배치가 실패한 실행에서는 호출하지 않는다. 살아 있어야 할 초안을 지울 수 있기 때문.
 def _prune_stale_drafts(company, entries):
     HandbookEntry.objects.filter(
         company=company,
         status=HandbookEntry.Status.DRAFT,
         origin=HandbookEntry.Origin.SLACK,
+        # 보류는 대표가 의도적으로 남겨 둔 것이라 지우면 안 된다.
+        reviewed_at__isnull=True,
     ).exclude(id__in=[entry.id for entry in entries]).delete()

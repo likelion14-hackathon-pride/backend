@@ -51,6 +51,13 @@ STATUS_PARAMETER = openapi.Parameter(
     type=openapi.TYPE_STRING,
     enum=['DRAFT', 'CONFIRMED', 'BLANK', 'ARCHIVED'],
 )
+REVIEW_STATUS_PARAMETER = openapi.Parameter(
+    'reviewStatus',
+    openapi.IN_QUERY,
+    description='검토 상태. PENDING은 아직 보지 않은 초안, HELD는 보고 미뤄 둔 초안입니다.',
+    type=openapi.TYPE_STRING,
+    enum=['PENDING', 'APPROVED', 'REJECTED', 'HELD'],
+)
 CURSOR_PARAMETER = openapi.Parameter(
     'cursor',
     openapi.IN_QUERY,
@@ -75,6 +82,24 @@ def get_owner_company(user, company_id):
     return company
 
 
+# review_status는 status와 reviewed_at에서 파생되므로 쿼리로도 같은 규칙을 따른다.
+def _filter_by_review_status(entries, review_status):
+    Status = HandbookEntry.Status
+    ReviewStatus = HandbookEntry.ReviewStatus
+    reviewable = entries.exclude(status__in=[Status.CONFIRMED, Status.ARCHIVED])
+
+    if review_status == ReviewStatus.APPROVED:
+        return entries.filter(status=Status.CONFIRMED)
+    if review_status == ReviewStatus.REJECTED:
+        return entries.filter(status=Status.ARCHIVED)
+    if review_status == ReviewStatus.HELD:
+        return reviewable.filter(reviewed_at__isnull=False)
+    if review_status == ReviewStatus.PENDING:
+        return reviewable.filter(reviewed_at__isnull=True)
+
+    raise ValidationError({'reviewStatus': ['invalid reviewStatus']})
+
+
 # 요청한 사용자가 해당 회사의 구성원인지 확인
 def get_member_company(user, company_id):
     company = get_object_or_404(Company, id=company_id)
@@ -94,6 +119,7 @@ class HandbookEntryListCreateView(APIView):
             SCOPE_ID_PARAMETER,
             SCOPE_KIND_PARAMETER,
             STATUS_PARAMETER,
+            REVIEW_STATUS_PARAMETER,
             CURSOR_PARAMETER,
             LIMIT_PARAMETER,
         ],
@@ -124,6 +150,11 @@ class HandbookEntryListCreateView(APIView):
                 raise ValidationError({'scopeId': 'invalid scopeId'})
         if entry_status:
             entries = entries.filter(status=entry_status)
+
+        review_status = request.query_params.get('reviewStatus')
+        if review_status:
+            entries = _filter_by_review_status(entries, review_status)
+
         if cursor:
             try:
                 entries = entries.filter(id__lt=int(cursor))
@@ -244,14 +275,20 @@ class HandbookEntryEvidenceView(APIView):
 
 
 def _apply_decision(entry, decision):
+    # 어떤 결정이든 '대표가 봤다'는 사실은 남는다. HOLD가 PENDING과 구분되는 근거다.
+    entry.reviewed_at = timezone.now()
+    fields = ['reviewed_at']
+
     if decision == 'APPROVE':
         entry.status = HandbookEntry.Status.CONFIRMED
-        entry.confirmed_at = timezone.now()
-        entry.save(update_fields=['status', 'confirmed_at'])
+        entry.confirmed_at = entry.reviewed_at
+        fields += ['status', 'confirmed_at']
     elif decision == 'REJECT':
         entry.status = HandbookEntry.Status.ARCHIVED
-        entry.save(update_fields=['status'])
-    # HOLD는 DRAFT를 그대로 둔다. 보류 상태를 따로 담을 컬럼이 없다.
+        fields += ['status']
+    # HOLD는 상태를 바꾸지 않고 검토 시각만 남긴다.
+
+    entry.save(update_fields=fields)
 
     return entry
 

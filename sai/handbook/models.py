@@ -72,6 +72,9 @@ class HandbookEntry(models.Model):
     origin = models.CharField(max_length=16, choices=Origin.choices)
     ask_count = models.SmallIntegerField(default=0)
     drift_status = models.CharField(max_length=16, choices=DriftStatus.choices, default=DriftStatus.CURRENT)
+    # 대표가 이 항목을 검토한 시각. 보류(HOLD)는 상태를 바꾸지 않으므로
+    # 이 값이 있어야 '아직 안 본 것'과 '보고 미뤄둔 것'이 구분된다.
+    reviewed_at = models.DateTimeField(null=True, blank=True)
     confirmed_at = models.DateTimeField(null=True, blank=True)
     embedding_ko = VectorField(dimensions=1536, null=True, blank=True)
     embedding_en = VectorField(dimensions=1536, null=True, blank=True)
@@ -81,6 +84,25 @@ class HandbookEntry(models.Model):
     dedupe_key = models.CharField(max_length=64, null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+
+    # OpenAPI의 CandidateReviewStatus. status와 reviewed_at 에서 파생되므로
+    # 별도 컬럼을 두지 않는다. 두 값이 어긋날 여지를 만들지 않기 위함.
+    class ReviewStatus(models.TextChoices):
+        PENDING = 'PENDING'
+        APPROVED = 'APPROVED'
+        REJECTED = 'REJECTED'
+        HELD = 'HELD'
+
+    @property
+    def review_status(self):
+        if self.status == self.Status.CONFIRMED:
+            return self.ReviewStatus.APPROVED
+        if self.status == self.Status.ARCHIVED:
+            return self.ReviewStatus.REJECTED
+        if self.reviewed_at:
+            return self.ReviewStatus.HELD
+
+        return self.ReviewStatus.PENDING
 
     class Meta:
         db_table = 'handbook_entry'
