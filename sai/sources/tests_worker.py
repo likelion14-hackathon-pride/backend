@@ -82,6 +82,43 @@ class WorkerTests(TestCase):
         self.assertEqual(job.status, IngestionJob.Status.SUCCEEDED)
         self.assertEqual(job.progress, 100)
 
+    # 확정만 되고 검색되지 않는 규칙을 여기서 거둔다.
+    @override_settings(OPENAI_API_KEY='test-key')
+    def test_unfinished_entries_are_finalized(self):
+        job = self.job(kind=IngestionJob.Kind.PROCESS)
+
+        with patch('sources.ingestion.has_pending_work', return_value=True), \
+             patch('sources.ingestion.unfinished_entries', return_value=['entry']), \
+             patch('sources.ingestion.finalize_entries',
+                   return_value={'translated': 1, 'embedded': 1, 'errors': []}) as finalize, \
+             patch('sources.ingestion.classify_documents', return_value=(0, [])), \
+             patch('sources.ingestion.sync_chunks', return_value=(0, [])), \
+             patch('sources.ingestion.draft_entries', return_value=([], [])), \
+             patch('sources.ingestion.generate_cards', return_value=([], [])):
+            run_job(job)
+
+        self.assertEqual(finalize.call_args.args[0], ['entry'])
+
+    @override_settings(OPENAI_API_KEY='test-key')
+    def test_finalize_failure_is_recorded(self):
+        job = self.job(kind=IngestionJob.Kind.PROCESS)
+
+        with patch('sources.ingestion.has_pending_work', return_value=True), \
+             patch('sources.ingestion.unfinished_entries', return_value=['entry']), \
+             patch('sources.ingestion.finalize_entries', return_value={
+                 'translated': 0, 'embedded': 0,
+                 'errors': [{'step': 'embed', 'code': 'RateLimitError'}],
+             }), \
+             patch('sources.ingestion.classify_documents', return_value=(0, [])), \
+             patch('sources.ingestion.sync_chunks', return_value=(0, [])), \
+             patch('sources.ingestion.draft_entries', return_value=([], [])), \
+             patch('sources.ingestion.generate_cards', return_value=([], [])):
+            run_job(job)
+
+        job.refresh_from_db()
+        self.assertEqual(job.status, IngestionJob.Status.PARTIAL)
+        self.assertEqual(job.errors[0]['scope'], 'finalize')
+
     # --- 죽은 워커가 남긴 작업 ---
 
     # 워커가 중간에 내려가면 RUNNING 인 채로 남아 화면에서 영원히 진행 중으로 보인다.

@@ -778,3 +778,48 @@ class OwnerSignupScopeTests(TestCase):
             ).count(),
             len(DEFAULT_COMPANY_SCOPES),
         )
+
+
+class DedupeKeyConstraintTests(TestCase):
+    def setUp(self):
+        self.company = Company.objects.create(name='에코랩', code='TESTCODE1')
+        self.scope = CompanyScope.objects.create(
+            company=self.company, kind=CompanyScope.Kind.COMPANY,
+            area_key=CompanyScope.AreaKey.COMPANY, name='Company',
+        )
+
+    def entry(self, title, dedupe_key):
+        return HandbookEntry.objects.create(
+            company=self.company, scope=self.scope, title=title, body_ko='본문',
+            status=HandbookEntry.Status.DRAFT, origin=HandbookEntry.Origin.SLACK,
+            dedupe_key=dedupe_key,
+        )
+
+    # 같은 규칙인지 가리는 열쇠다. 두 줄이 되면 어느 쪽을 고칠지 알 수 없어진다.
+    def test_same_key_twice_is_rejected(self):
+        self.entry('머지 승인 조건', 'onboarding:1:fq16')
+
+        with self.assertRaises(IntegrityError):
+            self.entry('다른 제목', 'onboarding:1:fq16')
+
+    def test_other_company_may_use_the_same_key(self):
+        other = Company.objects.create(name='다른회사', code='TESTCODE2')
+        other_scope = CompanyScope.objects.create(
+            company=other, kind=CompanyScope.Kind.COMPANY,
+            area_key=CompanyScope.AreaKey.COMPANY, name='Company',
+        )
+        self.entry('머지 승인 조건', 'onboarding:1:fq16')
+        HandbookEntry.objects.create(
+            company=other, scope=other_scope, title='머지 승인 조건', body_ko='본문',
+            status=HandbookEntry.Status.DRAFT, origin=HandbookEntry.Origin.SLACK,
+            dedupe_key='onboarding:1:fq16',
+        )
+
+        self.assertEqual(HandbookEntry.objects.count(), 2)
+
+    # 사람이 직접 만든 항목은 열쇠가 없다. 여러 건이어도 막지 않는다.
+    def test_entries_without_a_key_are_not_limited(self):
+        self.entry('직접 작성 1', None)
+        self.entry('직접 작성 2', None)
+
+        self.assertEqual(HandbookEntry.objects.filter(dedupe_key=None).count(), 2)

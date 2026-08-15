@@ -6,6 +6,7 @@ from django.utils import timezone
 from cards.generation import GENERATOR_VERSION
 from cards.models import InstructionCard
 from companies.models import Company
+from handbook.models import CompanyScope, HandbookEntry
 
 from .classifier import CLASSIFIER_VERSION
 from .ingestion import has_pending_work
@@ -69,6 +70,43 @@ class SchedulingTests(TestCase):
 
     def test_settled_document_is_not_pending(self):
         self.settled_document()
+
+        self.assertFalse(has_pending_work(self.company))
+
+    # 확정 시점에 번역·임베딩이 실패했거나 Day 0 완료를 누르지 않으면 여기 걸린다.
+    # 아무도 챙기지 않으면 외국인 직원은 영어를 못 읽고 Ask SAI 는 찾지 못한다.
+    def test_confirmed_but_unembedded_entry_is_pending(self):
+        self.settled_document()
+        scope = CompanyScope.objects.create(
+            company=self.company, kind=CompanyScope.Kind.COMPANY,
+            area_key=CompanyScope.AreaKey.COMPANY, name='Company',
+        )
+        entry = HandbookEntry.objects.create(
+            company=self.company, scope=scope, title='머지 승인 조건',
+            body_ko='책임자 1인 이상의 승인이 필요합니다.',
+            status=HandbookEntry.Status.CONFIRMED,
+            origin=HandbookEntry.Origin.ONBOARDING,
+        )
+
+        self.assertTrue(has_pending_work(self.company))
+
+        entry.embedded_at = self.now
+        entry.save(update_fields=['embedded_at'])
+
+        self.assertFalse(has_pending_work(self.company))
+
+    # 아직 확정하지 않은 초안은 검색 대상이 아니다. 임베딩할 이유가 없다.
+    def test_draft_entry_is_not_pending(self):
+        self.settled_document()
+        scope = CompanyScope.objects.create(
+            company=self.company, kind=CompanyScope.Kind.COMPANY,
+            area_key=CompanyScope.AreaKey.COMPANY, name='Company',
+        )
+        HandbookEntry.objects.create(
+            company=self.company, scope=scope, title='초안',
+            body_ko='아직 확정 전입니다.', status=HandbookEntry.Status.DRAFT,
+            origin=HandbookEntry.Origin.SLACK,
+        )
 
         self.assertFalse(has_pending_work(self.company))
 

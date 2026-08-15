@@ -7,11 +7,26 @@ from django.utils import timezone
 
 from cards.generation import GENERATOR_VERSION, generate_cards
 from handbook.drafting import draft_entries
+from handbook.finalizing import finalize_entries
+from handbook.models import HandbookEntry
 
 from .chunking import sync_chunks
 from .classifier import CLASSIFIER_VERSION, classify_documents
 from .models import Identity, IngestionJob, Item, RawDocument
 from .slack import SlackClient, SlackError
+
+
+# 확정됐는데 아직 검색되지 않는 규칙.
+# 확정 시점에 번역/임베딩을 걸지만 OpenAI가 죽어 있거나 Day 0 완료를 누르지 않으면 비어 있다.
+# 그대로 두면 외국인 직원은 영어를 못 읽고 Ask SAI는 찾지 못한다.
+def unfinished_entries(company):
+    return list(
+        HandbookEntry.objects.filter(
+            company=company,
+            status=HandbookEntry.Status.CONFIRMED,
+            embedded_at__isnull=True,
+        )
+    )
 
 
 # 파이프라인 각 단계가 후보를 고르는 조건과 같아야 한다.
@@ -22,6 +37,13 @@ def has_pending_work(company):
     )
 
     if documents.exclude(classifier_version=CLASSIFIER_VERSION).exists():
+        return True
+
+    if HandbookEntry.objects.filter(
+        company=company,
+        status=HandbookEntry.Status.CONFIRMED,
+        embedded_at__isnull=True,
+    ).exists():
         return True
 
     return (
@@ -270,6 +292,9 @@ def run_ingestion(job, connection):
             # 과거 사례 검색용 벡터. 말투 해석과 사례 기반 답변이 여기에 기댄다.
             _, chunk_errors = sync_chunks(job.company)
             errors += chunk_errors
+            # 확정 시점에 놓친 규칙을 여기서 거둔다. Day 0 답변이 대부분 여기 걸린다.
+            result = finalize_entries(unfinished_entries(job.company))
+            errors += [{'scope': 'finalize', **error} for error in result['errors']]
             _set_progress(job, PROGRESS_EMBEDDED)
         except ImproperlyConfigured:
             errors.append({'scope': 'classify', 'code': 'openai_not_configured'})
