@@ -398,6 +398,25 @@ class CardGenerationTests(TestCase):
         self.assertEqual(step.text, 'Sentry에서 결제 실패 로그 확인')
         self.assertEqual(step.entry, self.rule)
 
+    # 프로젝트 채널의 지시에도 회사 규칙이 적용된다.
+    # 프로젝트 범위만 뒤지면 '배포 전 공지' 같은 회사 규칙을 단계에 달지 못한다.
+    @override_settings(OPENAI_API_KEY='test-key')
+    def test_company_rule_reaches_a_project_card(self):
+        company_scope = CompanyScope.objects.create(
+            company=self.company, kind=CompanyScope.Kind.COMPANY,
+            area_key=CompanyScope.AreaKey.PRODUCT_ENG, name='Product / Engineering',
+        )
+        self.rule.delete()
+        company_rule = HandbookEntry.objects.create(
+            company=self.company, scope=company_scope, title='배포 전 공지',
+            body_ko='배포 전에 #dev 에 공지합니다.', status=HandbookEntry.Status.CONFIRMED,
+            origin=HandbookEntry.Origin.SLACK, embedding_ko=VECTOR,
+        )
+
+        self.generate()
+
+        self.assertEqual(Step.objects.first().entry, company_rule)
+
     @override_settings(OPENAI_API_KEY='test-key')
     def test_step_without_rule(self):
         self.generate(card=draft(steps=[CardStep(text='로그 확인', text_en='Check the logs', rule_index=-1)]))

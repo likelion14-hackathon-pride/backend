@@ -32,3 +32,22 @@ def seed_default_scopes(company):
     ]
 
     return CompanyScope.objects.bulk_create(scopes)
+
+
+# 검색할 범위. 화면의 '회사 전반 / 프로젝트1 / 프로젝트2' 중 무엇을 골랐는지에 대응한다.
+#
+# 프로젝트를 골라도 회사 규칙은 함께 본다. 프로젝트 규칙은 회사 규칙 위에 얹히는 것이지
+# 대체하는 것이 아니다. 프로젝트만 뒤지면 'PR 승인 몇 명 필요해요?' 같은 회사 규칙을 놓친다.
+#
+# '회사 전반'은 범위 하나가 아니라 Company / People / Product / Security 네 개다.
+# 그래서 아무것도 고르지 않은 것이 곧 회사 전반이다.
+def scopes_in_view(company, scope=None):
+    ids = list(
+        CompanyScope.objects.filter(
+            company=company, kind=CompanyScope.Kind.COMPANY
+        ).values_list('id', flat=True)
+    )
+    if scope is not None and scope.id not in ids:
+        ids.append(scope.id)
+
+    return ids

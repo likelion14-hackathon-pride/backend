@@ -5,11 +5,13 @@ from typing import Literal
 
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
+from django.db.models import Q
 from openai import OpenAI, OpenAIError, RateLimitError
 from pgvector.django import CosineDistance
 from pydantic import BaseModel
 
 from handbook.models import HandbookEntry
+from handbook.services import scopes_in_view
 from policy.models import RiskKeyword
 from sources.models import Chunk
 
@@ -57,6 +59,10 @@ OUT_OF_SCOPE - not a question about company rules or how to work here.
 Prefer a confirmed rule over a past case whenever one applies. Use past cases only when no
 confirmed rule answers the question. A single offhand message is not enough to answer from -
 if the cases do not clearly show a practice, use NO_SOURCE.
+
+Each rule carries the area it belongs to. Company-wide rules apply everywhere; a project's rules
+apply on top of them. When a project rule and a company rule cover the same thing, follow the
+project rule and say that the project does it differently.
 
 Hard requirements
 - Never state a rule that is not in the retrieved list. If nothing covers it, use NO_SOURCE.
@@ -150,12 +156,12 @@ def _get_client():
 
 # 한국어/영어 임베딩을 모두 뒤져 항목별로 더 가까운 쪽을 쓴다.
 # 영어 질문이 한국어로만 쓰인 규칙을 찾을 수 있어야 하기 때문.
-def retrieve_rules(vector, company, scope=None):
+def retrieve_rules(vector, company, scope_ids=None):
     entries = HandbookEntry.objects.filter(
         company=company, status=HandbookEntry.Status.CONFIRMED
     ).select_related('scope')
-    if scope is not None:
-        entries = entries.filter(scope=scope)
+    if scope_ids is not None:
+        entries = entries.filter(scope_id__in=scope_ids)
 
     best = {}
     for field in ('embedding_ko', 'embedding_en'):
@@ -173,10 +179,11 @@ def retrieve_rules(vector, company, scope=None):
 
 
 # 같은 말이 여러 번 올라온 경우 한 번만 쓴다. 같은 문장이 두 줄 뜨면 근거가 빈약해 보인다.
-def retrieve_cases(vector, company, scope=None):
+def retrieve_cases(vector, company, scope_ids=None):
     chunks = Chunk.objects.filter(company=company, embedding__isnull=False)
-    if scope is not None:
-        chunks = chunks.filter(scope=scope)
+    if scope_ids is not None:
+        # 지식공간을 지정하지 않은 채널의 대화는 회사 전반으로 본다. 초안 생성도 같은 규칙을 쓴다.
+        chunks = chunks.filter(Q(scope_id__in=scope_ids) | Q(scope__isnull=True))
 
     rows = (
         chunks.annotate(distance=CosineDistance('embedding', vector))
@@ -198,13 +205,18 @@ def retrieve_cases(vector, company, scope=None):
     return cases
 
 
-def retrieve(client, company, question, scope=None):
-    vector = client.embeddings.create(
+def embed_question(client, question):
+    return client.embeddings.create(
         model=settings.OPENAI_EMBEDDING_MODEL, input=[question]
     ).data[0].embedding
 
-    # 같은 벡터를 두 번 쓴다. 과거 사례를 붙이는 데 OpenAI 호출이 늘지 않는다.
-    return retrieve_rules(vector, company, scope), retrieve_cases(vector, company, scope)
+
+# 같은 벡터를 여러 번 쓴다. 사례를 붙이고 범위를 넓히는 데 임베딩 호출이 늘지 않는다.
+def retrieve(vector, company, scope_ids=None):
+    return (
+        retrieve_rules(vector, company, scope_ids),
+        retrieve_cases(vector, company, scope_ids),
+    )
 
 
 def _render_rule(entry, index, lang):
@@ -240,28 +252,23 @@ def find_risk_warnings(company, *texts):
     return warnings
 
 
-# 질문 하나에 답한다. (AnswerResult, 인용된 근거, 검색 스냅샷, 사용량) 반환.
-# 인용된 근거는 Source 목록이다. 확정 규칙일 수도 과거 대화일 수도 있다.
-def answer_question(company, question, lang='en', scope=None):
-    client = _get_client()
-    started = time.time()
+WIDEN_NOTE = (
+    '\n\nNothing in the area the reader selected answers this. The material below comes from '
+    'elsewhere in the company - answer from it, and say which area it came from.'
+)
 
-    entries, cases = retrieve(client, company, question, scope)
-    # 규칙과 사례가 번호를 나눠 쓴다. 모델이 돌려준 번호를 그대로 되짚을 수 있어야 한다.
-    sources = [Source(entry=entry) for entry in entries]
-    sources += [Source(chunk=chunk) for chunk in cases]
-    retrieval = [source.snapshot() for source in sources]
 
+def _ask(client, question, lang, entries, cases, widened):
     rules = '\n'.join(
         _render_rule(entry, index, lang) for index, entry in enumerate(entries)
     ) or '(no confirmed rules retrieved)'
     past = '\n'.join(
         _render_case(chunk, len(entries) + index) for index, chunk in enumerate(cases)
     ) or '(no past cases retrieved)'
-
     language = 'English' if lang == 'en' else 'Korean'
+
     try:
-        completion = client.chat.completions.parse(
+        return client.chat.completions.parse(
             model=settings.OPENAI_ANSWER_MODEL,
             messages=[
                 {'role': 'system', 'content': SYSTEM_PROMPT},
@@ -269,7 +276,7 @@ def answer_question(company, question, lang='en', scope=None):
                     'role': 'user',
                     'content': (
                         f'Answer in: {language}\n\n'
-                        f'Question:\n{question}\n\n'
+                        f'Question:\n{question}{WIDEN_NOTE if widened else ""}\n\n'
                         f'CONFIRMED RULES:\n{rules}\n\n'
                         f'PAST CASES:\n{past}'
                     ),
@@ -283,6 +290,51 @@ def answer_question(company, question, lang='en', scope=None):
     except (OpenAIError, ValueError) as exc:
         raise RuntimeError(f'answer_failed: {type(exc).__name__}') from exc
 
+
+def _tokens(completion, field):
+    return getattr(completion.usage, field) if completion.usage else None
+
+
+def _ids(rows):
+    return {row.id for row in rows}
+
+
+# 질문 하나에 답한다. (AnswerResult, 인용된 근거, 검색 스냅샷, 사용량) 반환.
+# 인용된 근거는 Source 목록이다. 확정 규칙일 수도 과거 대화일 수도 있다.
+#
+# 고른 범위에서 답이 안 나오면 회사 전체로 넓혀 한 번 더 묻는다.
+# 넓히지 않으면 막다른 길이 된다. 회사 전반을 골라 두고 프로젝트 이야기를 물으면
+# 답이 회사 어딘가에 있는데도 '모르겠습니다'가 나간다. 외국인 신입은 자기 질문이
+# 어느 범주에 속하는지 모르는 것이 정상이다.
+#
+# 검색 결과가 비었는지로는 판단할 수 없다. 엉뚱한 규칙이 거리 안에 몇 건 걸려 들어와도
+# 비어 있지 않기 때문이다. 모델이 답하지 못했을 때만 넓힌다.
+def answer_question(company, question, lang='en', scope=None):
+    client = _get_client()
+    started = time.time()
+
+    vector = embed_question(client, question)
+    scope_ids = scopes_in_view(company, scope)
+    entries, cases = retrieve(vector, company, scope_ids)
+    completion = _ask(client, question, lang, entries, cases, widened=False)
+    prompt_tokens = _tokens(completion, 'prompt_tokens')
+    completion_tokens = _tokens(completion, 'completion_tokens')
+
+    if completion.choices[0].message.parsed.verdict == 'NO_SOURCE':
+        wider_entries, wider_cases = retrieve(vector, company)
+        # 개수로 비교하면 안 된다. 양쪽 다 상한(TOP_K)까지 차 있고 내용만 다른 경우가 흔하다.
+        if _ids(wider_entries) != _ids(entries) or _ids(wider_cases) != _ids(cases):
+            entries, cases = wider_entries, wider_cases
+            completion = _ask(client, question, lang, entries, cases, widened=True)
+            prompt_tokens = (prompt_tokens or 0) + (_tokens(completion, 'prompt_tokens') or 0)
+            completion_tokens = (
+                (completion_tokens or 0) + (_tokens(completion, 'completion_tokens') or 0)
+            )
+
+    # 규칙과 사례가 번호를 나눠 쓴다. 모델이 돌려준 번호를 그대로 되짚을 수 있어야 한다.
+    sources = [Source(entry=entry) for entry in entries]
+    sources += [Source(chunk=chunk) for chunk in cases]
+
     result = completion.choices[0].message.parsed
     # 프롬프트로 막아도 가끔 [0] 같은 인용 표시가 본문에 섞여 나온다.
     result.answer = CITATION_MARKER.sub('', result.answer).strip()
@@ -290,9 +342,9 @@ def answer_question(company, question, lang='en', scope=None):
     cited = [sources[i] for i in result.cited_indexes if 0 <= i < len(sources)]
     usage = {
         'model': settings.OPENAI_ANSWER_MODEL,
-        'promptTokens': completion.usage.prompt_tokens if completion.usage else None,
-        'completionTokens': completion.usage.completion_tokens if completion.usage else None,
+        'promptTokens': prompt_tokens,
+        'completionTokens': completion_tokens,
         'latencyMs': int((time.time() - started) * 1000),
     }
 
-    return result, cited, retrieval, usage
+    return result, cited, [source.snapshot() for source in sources], usage
