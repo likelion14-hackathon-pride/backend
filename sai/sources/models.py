@@ -126,7 +126,7 @@ class Chunk(models.Model):
     ord = models.SmallIntegerField(default=0)
     text = models.TextField()
     lang = models.CharField(max_length=2, default='ko')
-    embedding = VectorField(dimensions=1024, null=True, blank=True)
+    embedding = VectorField(dimensions=1536, null=True, blank=True)
     embedding_model = models.CharField(max_length=40, null=True, blank=True)
     embedded_at = models.DateTimeField(null=True, blank=True)
     token_count = models.SmallIntegerField(default=0)

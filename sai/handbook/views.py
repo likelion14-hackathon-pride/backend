@@ -10,6 +10,7 @@ from rest_framework.views import APIView
 from accounts.models import Membership
 from companies.models import Company
 
+from .finalizing import finalize_entries
 from .models import CompanyScope, HandbookEntry, HandbookEvidence
 from .serializers import (
     CompanyScopeCreateSerializer,
@@ -287,6 +288,10 @@ class HandbookEntryReviewView(APIView):
             raise ValidationError({'decision': ['cannot approve a blank entry']})
 
         entry = _apply_decision(entry, decision)
+        # 확정된 규칙만 번역·임베딩한다. 실패해도 확정은 되돌리지 않는다.
+        if decision == 'APPROVE':
+            finalize_entries([entry])
+
         response_serializer = HandbookEntrySerializer(entry)
 
         return Response(response_serializer.data, status=status.HTTP_200_OK)
@@ -321,7 +326,7 @@ class HandbookEntryBulkReviewView(APIView):
             for entry in HandbookEntry.objects.filter(id__in=requested_ids, company=company)
         }
 
-        approved = 0
+        approved = []
         skipped = []
         for entry_id in requested_ids:
             entry = entries.get(entry_id)
@@ -331,10 +336,14 @@ class HandbookEntryBulkReviewView(APIView):
             if entry.status == HandbookEntry.Status.BLANK:
                 skipped.append({'entryId': entry_id, 'reason': 'blank_entry'})
                 continue
-            _apply_decision(entry, 'APPROVE')
-            approved += 1
+            approved.append(_apply_decision(entry, 'APPROVE'))
 
-        return Response({'approvedCount': approved, 'skipped': skipped}, status=status.HTTP_200_OK)
+        # 항목마다 호출하지 않고 한 번에 묶어서 번역·임베딩한다.
+        finalize_entries(approved)
+
+        return Response(
+            {'approvedCount': len(approved), 'skipped': skipped}, status=status.HTTP_200_OK
+        )
 
 
 # 회사 규칙과 프로젝트 범위 목록 조회 view
