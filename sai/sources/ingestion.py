@@ -1,6 +1,7 @@
 import hashlib
 from datetime import datetime, timezone as dt_timezone
 
+from django.contrib.auth import get_user_model
 from django.core.exceptions import ImproperlyConfigured
 from django.utils import timezone
 
@@ -58,10 +59,23 @@ def is_collectable(message):
 _is_collectable = is_collectable
 
 
+# 이 회사에 소속된 사용자만 {이메일: User} 로 모은다.
+# 다른 회사 사용자와 이메일이 겹치면 남의 슬랙 계정에 연결될 수 있으므로 소속으로 먼저 거른다.
+def _company_users_by_email(company_id):
+    users = get_user_model().objects.filter(
+        memberships__company_id=company_id,
+        memberships__left_at__isnull=True,
+    )
+
+    return {user.email.lower(): user for user in users if user.email}
+
+
 # 슬랙 사용자를 Identity로 등록하고 {slack_user_id: Identity} 맵을 돌려준다.
 # 메시지마다 조회하지 않도록 수집 시작 시 한 번만 만든다.
+# 이메일이 같은 SAI 계정이 있으면 함께 연결한다. 지시 카드의 담당자가 여기서 정해진다.
 def build_identity_map(connection):
     members = SlackClient(connection.bot_token).users_list()
+    users_by_email = _company_users_by_email(connection.company_id)
 
     identities = {}
     for member in members:
@@ -70,16 +84,23 @@ def build_identity_map(connection):
 
         profile = member.get('profile') or {}
         handle = profile.get('display_name') or profile.get('real_name') or member.get('name')
+        defaults = {
+            'company_id': connection.company_id,
+            'external_handle': handle,
+            'is_bot': bool(member.get('is_bot')),
+            # 게스트가 아닌 정식 멤버를 내부인으로 본다.
+            'is_internal': not member.get('is_restricted') and not member.get('is_ultra_restricted'),
+        }
+
+        matched = users_by_email.get((profile.get('email') or '').strip().lower())
+        # 매칭에 실패했다고 기존 연결을 끊지는 않는다. 손으로 이어 둔 것을 지울 수 있다.
+        if matched:
+            defaults['user'] = matched
+
         identity, _ = Identity.objects.update_or_create(
             connection=connection,
             external_user_id=member['id'],
-            defaults={
-                'company_id': connection.company_id,
-                'external_handle': handle,
-                'is_bot': bool(member.get('is_bot')),
-                # 게스트가 아닌 정식 멤버를 내부인으로 본다.
-                'is_internal': not member.get('is_restricted') and not member.get('is_ultra_restricted'),
-            },
+            defaults=defaults,
         )
         identities[member['id']] = identity
 

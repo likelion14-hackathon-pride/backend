@@ -504,10 +504,11 @@ class IngestionTests(TestCase):
         self.client.force_authenticate(user=self.owner)
         self.url = f'/api/companies/{self.company.id}/ingestion-jobs'
 
-    def ingest(self, history=None, replies=None, history_error=None, payload=None):
+    def ingest(self, history=None, replies=None, history_error=None, payload=None, users=None):
         # 분류는 여기서 검증 대상이 아니다. 막지 않으면 실제 OpenAI를 호출한다.
         with patch('sources.ingestion.SlackClient.auth_test', return_value=AUTH_WITH_URL), \
-             patch('sources.ingestion.SlackClient.users_list', return_value=USERS), \
+             patch('sources.ingestion.SlackClient.users_list',
+                   return_value=USERS if users is None else users), \
              patch('sources.ingestion.SlackClient.channel_history',
                    return_value=history if history is not None else HISTORY,
                    side_effect=history_error), \
@@ -598,6 +599,73 @@ class IngestionTests(TestCase):
         self.assertTrue(Identity.objects.get(external_user_id='B001').is_bot)
         # display_name이 비면 real_name으로 대체한다.
         self.assertEqual(Identity.objects.get(external_user_id='U002').external_handle, 'Lee')
+
+    # --- SAI 계정 연결 ---
+
+    # 슬랙 이메일과 가입 이메일이 같으면 이어 준다. 지시 카드의 담당자가 여기서 정해진다.
+    def test_links_identity_to_user_by_email(self):
+        member = User.objects.create_user(
+            email='kim@example.com', password='pw', display_name='김대표'
+        )
+        Membership.objects.create(
+            user=member, company=self.company, role=Membership.Role.MEMBER
+        )
+
+        self.ingest(users=[{**USERS[0], 'profile': {**USERS[0]['profile'], 'email': 'kim@example.com'}}])
+
+        self.assertEqual(Identity.objects.get(external_user_id='U001').user, member)
+
+    # 슬랙 이메일 대소문자가 달라도 같은 사람이다.
+    def test_email_match_is_case_insensitive(self):
+        member = User.objects.create_user(
+            email='kim@example.com', password='pw', display_name='김대표'
+        )
+        Membership.objects.create(user=member, company=self.company, role=Membership.Role.MEMBER)
+
+        self.ingest(users=[{**USERS[0], 'profile': {'email': 'KIM@Example.COM', 'real_name': '김'}}])
+
+        self.assertEqual(Identity.objects.get(external_user_id='U001').user, member)
+
+    # 다른 회사 사용자와 이메일이 겹쳐도 연결하면 안 된다.
+    def test_does_not_link_user_from_another_company(self):
+        other = Company.objects.create(name='다른회사', code='TESTCODE9')
+        outsider = User.objects.create_user(
+            email='kim@example.com', password='pw', display_name='남의 회사 김씨'
+        )
+        Membership.objects.create(user=outsider, company=other, role=Membership.Role.MEMBER)
+
+        self.ingest(users=[{**USERS[0], 'profile': {'email': 'kim@example.com', 'real_name': '김'}}])
+
+        self.assertIsNone(Identity.objects.get(external_user_id='U001').user)
+
+    # 퇴사자에게 새 지시가 배정되면 안 된다.
+    def test_does_not_link_left_member(self):
+        gone = User.objects.create_user(email='gone@example.com', password='pw', display_name='퇴사자')
+        Membership.objects.create(
+            user=gone, company=self.company, role=Membership.Role.MEMBER, left_at=timezone.now()
+        )
+
+        self.ingest(users=[{**USERS[0], 'profile': {'email': 'gone@example.com', 'real_name': 'G'}}])
+
+        self.assertIsNone(Identity.objects.get(external_user_id='U001').user)
+
+    def test_no_email_leaves_user_null(self):
+        self.ingest()
+
+        self.assertIsNone(Identity.objects.get(external_user_id='U001').user)
+
+    # 매칭 실패가 기존 연결을 끊으면 안 된다. 손으로 이어 둔 것을 지울 수 있다.
+    def test_existing_link_survives_when_email_missing(self):
+        member = User.objects.create_user(email='kim@example.com', password='pw', display_name='김')
+        Membership.objects.create(user=member, company=self.company, role=Membership.Role.MEMBER)
+        Identity.objects.create(
+            company=self.company, connection=self.connection,
+            external_user_id='U001', user=member,
+        )
+
+        self.ingest()
+
+        self.assertEqual(Identity.objects.get(external_user_id='U001').user, member)
 
     # --- 작업 상태 ---
 
