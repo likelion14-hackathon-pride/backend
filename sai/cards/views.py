@@ -2,13 +2,13 @@ from django.shortcuts import get_object_or_404
 from drf_yasg import openapi
 from drf_yasg.utils import swagger_auto_schema
 from rest_framework import status
-from rest_framework.exceptions import ValidationError
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from companies.access import get_member_company
-from config.pagination import CURSOR_PARAMETER, LIMIT_PARAMETER, paginate
+from config.filters import enum_parameter, filter_enum, filter_int, flag
+from config.pagination import CURSOR_PARAMETER, LIMIT_PARAMETER, paged_response
 from qna.answering import find_risk_warnings
 from qna.serializers import AskResultSerializer
 from qna.services import ask, open_thread
@@ -18,16 +18,15 @@ from .queries import cards_for
 from .serializers import (
     CardAskSerializer,
     CardDetailSerializer,
-    CardListItemSerializer,
     CardListSerializer,
+    CardSerializer,
     CardUpdateSerializer,
 )
 from .services import card_context, mark_read, original_text, related_rules
 
-COLUMN_PARAMETER = openapi.Parameter(
-    'column', openapi.IN_QUERY, type=openapi.TYPE_STRING,
-    enum=InstructionCard.Column.values,
-    description='보드 열. WAITING / ANSWERED 는 질문 상태에서 나오므로 status 와 다릅니다.',
+COLUMN_PARAMETER = enum_parameter(
+    'column', InstructionCard.Column,
+    'WAITING / ANSWERED 는 질문 상태에서 나오므로 status 와 다릅니다.',
 )
 SCOPE_PARAMETER = openapi.Parameter(
     'scopeId', openapi.IN_QUERY, type=openapi.TYPE_INTEGER,
@@ -80,29 +79,12 @@ class CardListView(APIView):
         company = get_member_company(request.user, company_id)
         # 같은 요청을 반복해 올린 것은 목록에 한 번만 보인다. 나머지는 원본에 묶여 있다.
         cards = cards_for(company).filter(duplicate_of__isnull=True).prefetch_related('blanks')
-
-        column = request.query_params.get('column')
-        if column:
-            if column not in InstructionCard.Column.values:
-                raise ValidationError({'column': ['invalid column']})
-            cards = cards.filter(column=column)
-
-        scope_id = request.query_params.get('scopeId')
-        if scope_id:
-            try:
-                cards = cards.filter(scope_id=int(scope_id))
-            except ValueError:
-                raise ValidationError({'scopeId': ['invalid scopeId']})
-
-        if request.query_params.get('mine', '').lower() in ('1', 'true'):
+        cards = filter_enum(cards, request, 'column', InstructionCard.Column)
+        cards = filter_int(cards, request, 'scopeId', 'scope_id')
+        if flag(request, 'mine'):
             cards = cards.filter(assignee=request.user)
 
-        items, next_cursor = paginate(cards, request)
-
-        return Response(
-            {'items': CardListItemSerializer(items, many=True).data, 'nextCursor': next_cursor},
-            status=status.HTTP_200_OK,
-        )
+        return paged_response(CardSerializer, cards, request)
 
 
 class CardDetailView(APIView):

@@ -154,8 +154,8 @@ class BlankEscalationTests(TestCase):
             answer_ko='운영 환경 로그를 보시면 됩니다.' if is_answer else '',
             answer_en='Check the production logs.' if is_answer else '',
         )
-        with patch('qna.views.fetch_reply', return_value=(object(), '운영이요')), \
-             patch('qna.views.judge_reply', return_value=judgement):
+        with patch('qna.services.fetch_reply', return_value=(object(), '운영이요')), \
+             patch('qna.services.judge_reply', return_value=judgement):
             self.client.post(f'{self.url}/{escalation.id}/check-answer', format='json')
 
         return escalation

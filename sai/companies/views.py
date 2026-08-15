@@ -6,13 +6,12 @@ from rest_framework.views import APIView
 
 from accounts.models import Membership
 from accounts.serializers import CompanySerializer, MembershipListSerializer, MembershipSerializer
-from config.pagination import CURSOR_PARAMETER, LIMIT_PARAMETER, paginate
+from config.pagination import CURSOR_PARAMETER, LIMIT_PARAMETER, paged_response
 
 from .access import get_member_company, get_owner_company
 from .serializers import CompanySettingsSerializer
 
 
-# 회사 정보 조회 view
 class CompanyDetailView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -32,7 +31,6 @@ class CompanyDetailView(APIView):
         return Response(CompanySerializer(company).data, status=status.HTTP_200_OK)
 
 
-# 회사 구성원 목록 조회 view
 class CompanyMemberListView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -56,15 +54,9 @@ class CompanyMemberListView(APIView):
             .prefetch_related('user__source_identities')
             .filter(company=company, left_at__isnull=True)
         )
-        items, next_cursor = paginate(members, request)
-
-        return Response(
-            {'items': MembershipSerializer(items, many=True).data, 'nextCursor': next_cursor},
-            status=status.HTTP_200_OK,
-        )
+        return paged_response(MembershipSerializer, members, request)
 
 
-# 회사 근무시간 설정 조회 view
 class CompanySettingsView(APIView):
     permission_classes = [IsAuthenticated]
 

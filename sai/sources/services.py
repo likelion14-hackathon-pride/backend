@@ -1,4 +1,5 @@
 from django.utils import timezone
+from rest_framework.exceptions import ValidationError
 
 from .models import Connection, Item
 from .slack import SlackClient, SlackError
@@ -111,3 +112,55 @@ def remove_channel(item):
     item.save(update_fields=['removed_at'])
 
     return item
+
+
+# 슬랙 워크스페이스를 연결한다. (연결, 새로 만들었는지) 반환.
+# 이미 연결된 회사가 다시 호출하면 자격증명을 교체한다.
+def connect_slack(company, bot_token, signing_secret):
+    # 저장 전에 슬랙에 직접 물어본다. 잘못된 키를 DB에 남기지 않기 위함.
+    try:
+        auth = SlackClient(bot_token).auth_test()
+    except SlackError as exc:
+        raise ValidationError({'botToken': [exc.code]})
+
+    workspace_id = auth.get('team_id')
+    # 한 워크스페이스가 두 회사에 붙으면 웹훅의 team_id로 회사를 특정할 수 없다.
+    taken = (
+        Connection.objects.filter(
+            external_workspace_id=workspace_id, disconnected_at__isnull=True
+        )
+        .exclude(company=company)
+        .exists()
+    )
+    if taken:
+        raise ValidationError({'botToken': ['workspace already connected to another company']})
+
+    connection = Connection.objects.filter(
+        company=company, kind=Connection.Kind.SLACK, disconnected_at__isnull=True
+    ).first()
+    is_created = connection is None
+    if is_created:
+        connection = Connection(company=company, kind=Connection.Kind.SLACK)
+
+    connection.status = Connection.Status.CONNECTED
+    connection.external_workspace_id = workspace_id
+    connection.display_name = auth.get('team')
+    # 웹훅에서 permalink를 조립할 때 쓴다. 여기서 받아 두면 나중에 부를 일이 없다.
+    connection.workspace_url = auth.get('url')
+    connection.bot_token = bot_token
+    connection.signing_secret = signing_secret
+    connection.error_message = None
+    connection.save()
+
+    if is_created:
+        register_channels_recording_error(connection)
+
+    return connection, is_created
+
+
+def disconnect(connection):
+    connection.disconnected_at = timezone.now()
+    connection.status = Connection.Status.ERROR
+    connection.save(update_fields=['disconnected_at', 'status'])
+
+    return connection

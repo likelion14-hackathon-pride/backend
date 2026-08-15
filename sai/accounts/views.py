@@ -157,7 +157,6 @@ class MemberSignupView(APIView):
             status=status.HTTP_201_CREATED,
         )
 
-# 로그인 담당 view
 class AuthView(APIView):
     permission_classes = [AllowAny]
     throttle_scope = 'login'
@@ -215,7 +214,6 @@ class LogoutView(APIView):
         return Response({"message": "logout success!"}, status=status.HTTP_200_OK)
 
 
-# 로그인한 사용자 정보 조회 view
 class MeView(APIView):
     permission_classes = [IsAuthenticated]
 

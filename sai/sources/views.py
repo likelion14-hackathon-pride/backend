@@ -3,7 +3,6 @@ import logging
 
 from django.conf import settings
 from django.shortcuts import get_object_or_404
-from django.utils import timezone
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_POST
 from django.http import JsonResponse, HttpResponseForbidden
@@ -16,7 +15,13 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from companies.access import get_owner_company
-from config.pagination import CURSOR_PARAMETER, LIMIT_PARAMETER, paginate
+from config.filters import enum_parameter, filter_enum
+from config.pagination import (
+    CURSOR_PARAMETER,
+    LIMIT_PARAMETER,
+    page_response,
+    paged_response,
+)
 
 from .models import Connection, IngestionJob, Item
 from .serializers import (
@@ -36,11 +41,12 @@ from .serializers import (
 from .services import (
     add_channel,
     clear_connection_error,
+    connect_slack,
+    disconnect,
     list_available_channels,
-    register_channels_recording_error,
     remove_channel,
 )
-from .slack import SlackClient, SlackError
+from .slack import SlackError
 from .worker import drain
 from .webhook import (
     find_connection,
@@ -89,7 +95,6 @@ def slack_events(request):
     return JsonResponse({'ok': True})
 
 
-# 소스 연결 목록 조회 및 슬랙 연동 view
 class SourceConnectionListCreateView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -110,9 +115,7 @@ class SourceConnectionListCreateView(APIView):
             .prefetch_related('items')
             .order_by('kind')
         )
-        serializer = ConnectionSerializer(connections, many=True)
-
-        return Response({'items': serializer.data}, status=status.HTTP_200_OK)
+        return page_response(ConnectionSerializer, connections)
 
     @swagger_auto_schema(
         operation_summary='슬랙 연동',
@@ -137,55 +140,17 @@ class SourceConnectionListCreateView(APIView):
         company = get_owner_company(request.user, company_id)
         serializer = SlackConnectionCreateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        bot_token = serializer.validated_data['botToken']
-        signing_secret = serializer.validated_data['signingSecret']
 
-        # 저장 전에 슬랙에 직접 물어본다. 잘못된 키를 DB에 남기지 않기 위함.
-        try:
-            auth = SlackClient(bot_token).auth_test()
-        except SlackError as exc:
-            # 시리얼라이저 검증 오류와 같은 {"field": ["code"]} 형태로 맞춘다.
-            raise ValidationError({'botToken': [exc.code]})
-
-        workspace_id = auth.get('team_id')
-
-        # 한 워크스페이스가 두 회사에 붙으면 웹훅의 team_id로 회사를 특정할 수 없다.
-        is_taken = (
-            Connection.objects.filter(
-                external_workspace_id=workspace_id, disconnected_at__isnull=True
-            )
-            .exclude(company=company)
-            .exists()
+        connection, is_created = connect_slack(
+            company,
+            serializer.validated_data['botToken'],
+            serializer.validated_data['signingSecret'],
         )
-        if is_taken:
-            raise ValidationError({'botToken': ['workspace already connected to another company']})
 
-        connection = Connection.objects.filter(
-            company=company, kind=Connection.Kind.SLACK, disconnected_at__isnull=True
-        ).first()
-        is_created = connection is None
-
-        if is_created:
-            connection = Connection(company=company, kind=Connection.Kind.SLACK)
-
-        connection.status = Connection.Status.CONNECTED
-        connection.external_workspace_id = workspace_id
-        connection.display_name = auth.get('team')
-        # 웹훅에서 permalink를 조립할 때 쓴다. 여기서 받아 두면 나중에 부를 일이 없다.
-        connection.workspace_url = auth.get('url')
-        connection.bot_token = bot_token
-        connection.signing_secret = signing_secret
-        connection.error_message = None
-        connection.save()
-
-        # 봇이 이미 들어가 있는 채널을 바로 등록한다. 실패해도 연결은 유지하고 status에 남긴다.
-        if is_created:
-            register_channels_recording_error(connection)
-
-        response_serializer = ConnectionSerializer(connection)
-        response_status = status.HTTP_201_CREATED if is_created else status.HTTP_200_OK
-
-        return Response(response_serializer.data, status=response_status)
+        return Response(
+            ConnectionSerializer(connection).data,
+            status=status.HTTP_201_CREATED if is_created else status.HTTP_200_OK,
+        )
 
 
 def get_connection(company, connection_id):
@@ -214,16 +179,11 @@ class SourceConnectionDetailView(APIView):
     )
     def delete(self, request, company_id, connection_id):
         company = get_owner_company(request.user, company_id)
-        connection = get_connection(company, connection_id)
-
-        connection.disconnected_at = timezone.now()
-        connection.status = Connection.Status.ERROR
-        connection.save(update_fields=['disconnected_at', 'status'])
+        disconnect(get_connection(company, connection_id))
 
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 
-# 수집 대상 채널 목록 조회 view
 class SourceChannelListView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -241,9 +201,7 @@ class SourceChannelListView(APIView):
     def get(self, request, company_id, connection_id):
         company = get_owner_company(request.user, company_id)
         connection = get_connection(company, connection_id)
-        serializer = ChannelSerializer(_registered_channels(connection), many=True)
-
-        return Response({'items': serializer.data}, status=status.HTTP_200_OK)
+        return page_response(ChannelSerializer, _registered_channels(connection))
 
     @swagger_auto_schema(
         operation_summary='채널 추가',
@@ -279,7 +237,6 @@ class SourceChannelListView(APIView):
         return Response(response_serializer.data, status=status.HTTP_201_CREATED)
 
 
-# 추가 가능한 채널 목록 view
 class SourceAvailableChannelListView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -308,12 +265,9 @@ class SourceAvailableChannelListView(APIView):
         except SlackError as exc:
             raise ValidationError({'slack': [exc.code]})
 
-        serializer = AvailableChannelSerializer(channels, many=True)
-
-        return Response({'items': serializer.data}, status=status.HTTP_200_OK)
+        return page_response(AvailableChannelSerializer, channels)
 
 
-# 수집 대상 채널 지식공간 연결 / 제외 view
 class SourceChannelDetailView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -382,10 +336,7 @@ def _registered_channels(connection):
     )
 
 
-JOB_STATUS_PARAMETER = openapi.Parameter(
-    'status', openapi.IN_QUERY, type=openapi.TYPE_STRING,
-    enum=['QUEUED', 'RUNNING', 'SUCCEEDED', 'PARTIAL', 'FAILED'],
-)
+JOB_STATUS_PARAMETER = enum_parameter('status', IngestionJob.Status)
 
 # Swagger는 정수 배열 필드에 [0] 을 예시로 채워 넣는다.
 # 그대로 보내면 없는 채널이라 400이 나므로, 기본 예시를 빈 객체로 지정한다.
@@ -405,7 +356,6 @@ INGESTION_JOB_REQUEST_BODY = openapi.Schema(
 )
 
 
-# 슬랙 메시지 수집 작업 view
 class IngestionJobListCreateView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -429,19 +379,9 @@ class IngestionJobListCreateView(APIView):
     def get(self, request, company_id):
         company = get_owner_company(request.user, company_id)
         jobs = IngestionJob.objects.filter(company=company)
+        jobs = filter_enum(jobs, request, 'status', IngestionJob.Status)
 
-        job_status = request.query_params.get('status')
-        if job_status:
-            if job_status not in IngestionJob.Status.values:
-                raise ValidationError({'status': ['invalid status']})
-            jobs = jobs.filter(status=job_status)
-
-        items, next_cursor = paginate(jobs, request)
-
-        return Response(
-            {'items': IngestionJobSerializer(items, many=True).data, 'nextCursor': next_cursor},
-            status=status.HTTP_200_OK,
-        )
+        return paged_response(IngestionJobSerializer, jobs, request)
 
     @swagger_auto_schema(
         operation_summary='슬랙 메시지 수집 시작',
@@ -499,7 +439,6 @@ class IngestionJobListCreateView(APIView):
         return Response(response_serializer.data, status=status.HTTP_202_ACCEPTED)
 
 
-# 수집 작업 상태 조회 view
 class IngestionJobDetailView(APIView):
     permission_classes = [IsAuthenticated]
 

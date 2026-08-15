@@ -106,6 +106,7 @@ class MessageSerializer(serializers.ModelSerializer):
 
 class MessageListSerializer(serializers.Serializer):
     items = MessageSerializer(many=True)
+    nextCursor = serializers.CharField(allow_null=True)
 
 
 # --- 에스컬레이션 (대표 확인 질문) ---
@@ -157,6 +158,7 @@ class EscalationSerializer(serializers.ModelSerializer):
 
 class EscalationListSerializer(serializers.Serializer):
     items = EscalationSerializer(many=True)
+    nextCursor = serializers.CharField(allow_null=True)
 
 
 # 출처는 세 가지다. Ask SAI 답변(messageId), 지시 카드의 미정 항목(blankId), 직접 입력.

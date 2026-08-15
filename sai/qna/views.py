@@ -1,10 +1,7 @@
 from django.core.exceptions import ImproperlyConfigured
-from django.db import transaction
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
-from drf_yasg import openapi
 from drf_yasg.utils import no_body, swagger_auto_schema
-from openai import OpenAIError
 from rest_framework import status
 from rest_framework.exceptions import ValidationError
 from rest_framework.permissions import IsAuthenticated
@@ -14,12 +11,19 @@ from rest_framework.views import APIView
 from accounts.models import Membership
 from cards.models import Blank
 from companies.access import get_member_company, get_owner_company
-from handbook.models import CompanyScope, HandbookEntry, HandbookEvidence
+from config.filters import enum_parameter, filter_enum
+from config.pagination import (
+    CURSOR_PARAMETER,
+    LIMIT_PARAMETER,
+    page_response,
+    paged_response,
+)
 from sources.models import Item
 from sources.slack import SlackError
 
-from .escalation import draft_from_blank, fetch_reply, judge_reply, send_to_slack
+from .escalation import judge_reply, send_to_slack
 from .models import Escalation, Message, Thread
+from .queries import escalations_for, messages_in
 from .serializers import (
     AskInputSerializer,
     AskResultSerializer,
@@ -31,14 +35,17 @@ from .serializers import (
     MessageListSerializer,
     MessageSerializer,
 )
-from .services import NEEDS_OWNER, AnswerUnavailable, ask, open_thread
-
-STATUS_PARAMETER = openapi.Parameter(
-    'status',
-    openapi.IN_QUERY,
-    type=openapi.TYPE_STRING,
-    enum=['DRAFT', 'SENT', 'ANSWERED', 'APPROVED', 'DISMISSED'],
+from .services import (
+    ask,
+    collect_answer,
+    create_escalation,
+    draft_for_blank,
+    draft_from_message,
+    open_thread,
+    promote_to_entry,
 )
+
+STATUS_PARAMETER = enum_parameter('status', Escalation.Status)
 
 
 class AskView(APIView):
@@ -88,36 +95,22 @@ class AskView(APIView):
         return Response(AskResultSerializer(payload).data, status=status.HTTP_200_OK)
 
 
-def _visible_escalations(company, user):
-    queryset = Escalation.objects.filter(company=company).select_related('asked_by')
-    is_owner = Membership.objects.filter(
-        user=user, company=company, role=Membership.Role.OWNER, left_at__isnull=True
-    ).exists()
-    # 대표는 전부 보고, 팀원은 자기가 올린 것만 본다.
-    return queryset if is_owner else queryset.filter(asked_by=user)
-
-
 class EscalationListCreateView(APIView):
     permission_classes = [IsAuthenticated]
 
     @swagger_auto_schema(
         operation_summary='대표 확인 질문 목록',
         operation_description='대표는 회사 전체를, 팀원은 본인이 올린 것만 봅니다.',
-        manual_parameters=[STATUS_PARAMETER],
+        manual_parameters=[STATUS_PARAMETER, CURSOR_PARAMETER, LIMIT_PARAMETER],
         responses={200: EscalationListSerializer(), 401: '인증되지 않음', 403: '회사 접근 권한 없음'},
         tags=['Question'],
     )
     def get(self, request, company_id):
         company = get_member_company(request.user, company_id)
-        escalations = _visible_escalations(company, request.user)
+        escalations = escalations_for(company, request.user)
+        escalations = filter_enum(escalations, request, 'status', Escalation.Status)
 
-        escalation_status = request.query_params.get('status')
-        if escalation_status:
-            escalations = escalations.filter(status=escalation_status)
-
-        serializer = EscalationSerializer(escalations.order_by('-created_at'), many=True)
-
-        return Response({'items': serializer.data}, status=status.HTTP_200_OK)
+        return paged_response(EscalationSerializer, escalations, request)
 
     @swagger_auto_schema(
         operation_summary='대표 확인 질문 초안 생성',
@@ -143,9 +136,7 @@ class EscalationListCreateView(APIView):
         serializer.is_valid(raise_exception=True)
         data = serializer.validated_data
 
-        origin = None
-        blank = None
-        scope = None
+        origin = blank = scope = None
         question_en = data.get('questionEn')
         draft_ko = data.get('draftKo')
 
@@ -159,13 +150,7 @@ class EscalationListCreateView(APIView):
 
             scope = blank.card.scope
             question_en = question_en or blank.question_en
-            if not draft_ko:
-                try:
-                    draft_ko = draft_from_blank(blank)
-                except ImproperlyConfigured as exc:
-                    raise AnswerUnavailable(str(exc))
-                except (OpenAIError, ValueError) as exc:
-                    raise AnswerUnavailable(f'draft_failed: {type(exc).__name__}')
+            draft_ko = draft_ko or draft_for_blank(blank)
 
         if data.get('messageId'):
             origin = get_object_or_404(
@@ -178,36 +163,13 @@ class EscalationListCreateView(APIView):
                 thread=origin.thread, role=Message.Role.USER, id__lt=origin.id
             ).order_by('-id').first()
             question_en = question_en or (question.body_en or question.body_ko if question else None)
-            draft_ko = draft_ko or _draft_from_message(origin)
+            draft_ko = draft_ko or draft_from_message(origin)
 
-        if not question_en:
-            raise ValidationError({'questionEn': ['question text not found']})
-        # 초안이 없으면 영어 원문이 그대로 대표에게 나간다. 그럴 바엔 막고 받는다.
-        if not draft_ko:
-            raise ValidationError({'draftKo': ['korean draft required']})
-
-        with transaction.atomic():
-            escalation = Escalation.objects.create(
-                company=company,
-                asked_by=request.user,
-                scope=origin.thread.scope if origin else scope,
-                origin_message=origin,
-                question_en=question_en,
-                draft_ko=draft_ko,
-            )
-            if blank is not None:
-                blank.escalation = escalation
-                blank.save(update_fields=['escalation'])
+        escalation = create_escalation(
+            company, request.user, question_en, draft_ko, scope, origin, blank
+        )
 
         return Response(EscalationSerializer(escalation).data, status=status.HTTP_201_CREATED)
-
-
-# AI 답변 메시지에 저장해 둔 한국어 초안. NEEDS_OWNER 판정일 때만 채워져 있다.
-def _draft_from_message(message):
-    if message.verdict not in NEEDS_OWNER:
-        return None
-
-    return (message.body_ko or '').strip() or None
 
 
 class EscalationDetailView(APIView):
@@ -220,7 +182,7 @@ class EscalationDetailView(APIView):
     )
     def get(self, request, company_id, escalation_id):
         company = get_member_company(request.user, company_id)
-        escalation = get_object_or_404(_visible_escalations(company, request.user), id=escalation_id)
+        escalation = get_object_or_404(escalations_for(company, request.user), id=escalation_id)
 
         return Response(EscalationSerializer(escalation).data, status=status.HTTP_200_OK)
 
@@ -233,7 +195,7 @@ class EscalationDetailView(APIView):
     )
     def patch(self, request, company_id, escalation_id):
         company = get_member_company(request.user, company_id)
-        escalation = get_object_or_404(_visible_escalations(company, request.user), id=escalation_id)
+        escalation = get_object_or_404(escalations_for(company, request.user), id=escalation_id)
 
         if escalation.status != Escalation.Status.DRAFT:
             raise ValidationError({'draftKo': ['already sent']})
@@ -295,7 +257,7 @@ class EscalationAcknowledgeView(APIView):
     def post(self, request, company_id, escalation_id):
         company = get_member_company(request.user, company_id)
         escalation = get_object_or_404(
-            _visible_escalations(company, request.user), id=escalation_id
+            escalations_for(company, request.user), id=escalation_id
         )
 
         if escalation.answered_at is None:
@@ -326,7 +288,7 @@ class EscalationSendView(APIView):
     )
     def post(self, request, company_id, escalation_id):
         company = get_member_company(request.user, company_id)
-        escalation = get_object_or_404(_visible_escalations(company, request.user), id=escalation_id)
+        escalation = get_object_or_404(escalations_for(company, request.user), id=escalation_id)
         serializer = EscalationSendSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
@@ -363,18 +325,14 @@ class EscalationCheckAnswerView(APIView):
     )
     def post(self, request, company_id, escalation_id):
         company = get_member_company(request.user, company_id)
-        escalation = get_object_or_404(_visible_escalations(company, request.user), id=escalation_id)
+        escalation = get_object_or_404(escalations_for(company, request.user), id=escalation_id)
 
         if escalation.status == Escalation.Status.DRAFT:
             raise ValidationError({'status': ['not sent yet']})
 
-        try:
-            reply, text = fetch_reply(escalation)
-        except SlackError as exc:
-            raise ValidationError({'slack': [exc.code]})
+        escalation = collect_answer(escalation)
 
-        if reply is None:
-            return Response(EscalationSerializer(escalation).data, status=status.HTTP_200_OK)
+        return Response(EscalationSerializer(escalation).data, status=status.HTTP_200_OK)
 
         try:
             judgement = judge_reply(escalation.question_en, escalation.draft_ko, text)
@@ -401,7 +359,6 @@ class EscalationCheckAnswerView(APIView):
         return Response(EscalationSerializer(escalation).data, status=status.HTTP_200_OK)
 
 
-# 답변을 핸드북 규칙으로 승격하는 view
 class EscalationApproveView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -420,42 +377,9 @@ class EscalationApproveView(APIView):
     )
     def post(self, request, company_id, escalation_id):
         company = get_owner_company(request.user, company_id)
-        escalation = get_object_or_404(Escalation, id=escalation_id, company=company)
-
-        if escalation.status != Escalation.Status.ANSWERED or not escalation.answer_ko:
-            raise ValidationError({'status': ['no answer to promote']})
-
-        scope = escalation.scope or CompanyScope.objects.filter(
-            company=company, kind=CompanyScope.Kind.COMPANY,
-            area_key=CompanyScope.AreaKey.COMPANY,
-        ).first()
-        if scope is None:
-            raise ValidationError({'scope': ['no scope available']})
-
-        with transaction.atomic():
-            entry = HandbookEntry.objects.create(
-                company=company,
-                scope=scope,
-                title=escalation.question_en[:200],
-                body_ko=escalation.answer_ko,
-                body_en=escalation.answer_en or None,
-                original_lang='ko',
-                status=HandbookEntry.Status.DRAFT,
-                origin=HandbookEntry.Origin.ESCALATION,
-                confidence=HandbookEntry.Confidence.MEDIUM,
-            )
-            HandbookEvidence.objects.create(
-                company=company,
-                entry=entry,
-                quote=escalation.answer_ko,
-                tag=HandbookEvidence.Tag.OWNER,
-                source_label='대표 확인 답변',
-                speaker_name=None,
-                occurred_at=escalation.answered_at,
-            )
-            escalation.proposed_entry = entry
-            escalation.status = Escalation.Status.APPROVED
-            escalation.save(update_fields=['proposed_entry', 'status'])
+        escalation = promote_to_entry(
+            get_object_or_404(Escalation, id=escalation_id, company=company)
+        )
 
         return Response(EscalationSerializer(escalation).data, status=status.HTTP_201_CREATED)
 
@@ -477,11 +401,4 @@ class ThreadMessageListView(APIView):
     def get(self, request, company_id, thread_id):
         company = get_member_company(request.user, company_id)
         thread = get_object_or_404(Thread, id=thread_id, company=company, user=request.user)
-        messages = (
-            Message.objects.filter(thread=thread)
-            .prefetch_related('citations__entry__scope')
-            .order_by('id')
-        )
-        serializer = MessageSerializer(messages, many=True)
-
-        return Response({'items': serializer.data}, status=status.HTTP_200_OK)
+        return page_response(MessageSerializer, messages_in(thread))

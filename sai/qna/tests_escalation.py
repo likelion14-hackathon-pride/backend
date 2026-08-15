@@ -1,7 +1,6 @@
-from types import SimpleNamespace
 from unittest.mock import patch
 
-from django.test import TestCase, override_settings
+from django.test import TestCase
 from django.utils import timezone
 from rest_framework.test import APIClient
 
@@ -89,7 +88,7 @@ class EscalationTests(TestCase):
         with patch('qna.escalation.SlackClient.thread_replies',
                    return_value=default_replies if replies is None else replies), \
              patch('qna.escalation.SlackClient.channel_history', return_value=history or []), \
-             patch('qna.views.judge_reply', return_value=verdict or judgement()) as judge:
+             patch('qna.services.judge_reply', return_value=verdict or judgement()) as judge:
             self.judge_mock = judge
             return self.client.post(f'{self.base}/{escalation_id}/check-answer')
 

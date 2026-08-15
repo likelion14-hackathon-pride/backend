@@ -10,7 +10,6 @@ from .models import RiskKeyword
 from .serializers import RiskKeywordSerializer
 
 
-# 위험 작업 키워드 조회 및 등록 담당 view
 class RiskKeywordListCreateView(APIView):
     @swagger_auto_schema(
         operation_summary='위험 키워드 목록 조회',
@@ -55,7 +54,6 @@ class RiskKeywordListCreateView(APIView):
         return Response(serializer.data, status=status.HTTP_201_CREATED)
 
 
-# 위험 작업 키워드 삭제 담당 view
 class RiskKeywordDeleteView(APIView):
     @swagger_auto_schema(
         operation_summary='위험 키워드 삭제',

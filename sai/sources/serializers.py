@@ -5,7 +5,6 @@ from handbook.models import CompanyScope
 from .models import Connection, IngestionJob, Item
 
 
-# 수집 대상 채널 응답용 시리얼라이저
 class ChannelSerializer(serializers.ModelSerializer):
     externalId = serializers.CharField(source='external_id', read_only=True)
     scopeId = serializers.IntegerField(source='scope_id', read_only=True)
@@ -32,6 +31,7 @@ class ChannelSerializer(serializers.ModelSerializer):
 
 class ChannelListSerializer(serializers.Serializer):
     items = ChannelSerializer(many=True)
+    nextCursor = serializers.CharField(allow_null=True)
 
 
 # 아직 등록되지 않은 워크스페이스 채널
@@ -44,6 +44,7 @@ class AvailableChannelSerializer(serializers.Serializer):
 
 class AvailableChannelListSerializer(serializers.Serializer):
     items = AvailableChannelSerializer(many=True)
+    nextCursor = serializers.CharField(allow_null=True)
 
 
 class ChannelAddSerializer(serializers.Serializer):
@@ -74,7 +75,6 @@ class ChannelScopeUpdateSerializer(serializers.Serializer):
         return instance
 
 
-# 수집 작업 응답용 시리얼라이저
 class IngestionJobSerializer(serializers.ModelSerializer):
     itemIds = serializers.JSONField(source='item_ids', read_only=True)
     documentCount = serializers.SerializerMethodField()
@@ -125,7 +125,6 @@ class IngestionJobCreateSerializer(serializers.Serializer):
     )
 
 
-# 소스 연결 응답용 시리얼라이저.
 # 토큰과 시그닝 시크릿은 어떤 경우에도 응답에 넣지 않는다.
 class ConnectionSerializer(serializers.ModelSerializer):
     provider = serializers.CharField(source='kind', read_only=True)
@@ -161,9 +160,9 @@ class ConnectionSerializer(serializers.ModelSerializer):
 
 class ConnectionListSerializer(serializers.Serializer):
     items = ConnectionSerializer(many=True)
+    nextCursor = serializers.CharField(allow_null=True)
 
 
-# 슬랙 키 입력용 시리얼라이저.
 # 토큰 유효성은 슬랙 auth.test로 확인해야 하므로 뷰에서 검증한다.
 class SlackConnectionCreateSerializer(serializers.Serializer):
     provider = serializers.ChoiceField(choices=[Connection.Kind.SLACK])
