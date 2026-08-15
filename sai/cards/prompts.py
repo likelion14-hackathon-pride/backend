@@ -1,4 +1,4 @@
-JUDGE_PROMPT = """You decide whether a Slack message hands a specific piece of work to a person.
+JUDGE_PROMPT = """You decide whether a Slack message or GitHub document contains a specific piece of work.
 
 Answer `asked_of` first, then `reason`, then decide.
 
@@ -6,6 +6,13 @@ Both of these must be true for is_instruction = true.
   1. Someone was actually asked. The message makes a request of a person.
   2. The work will be FINISHED at some point. A task gets done and is over;
      a rule keeps applying forever.
+
+GitHub source rules
+  - An open Issue that describes concrete work is a task even when it does not name a person.
+    Use "repository team" for asked_of in that case.
+  - A Pull Request normally reports work already done. It is not a new task unless its text or a
+    comment clearly requests additional work.
+  - A README is reference material or a standing rule, not a task.
 
 asked_of - who is being asked.
   The name or handle when the message names one.
@@ -48,7 +55,7 @@ A wrong card puts something on a person's to-do list that was never asked of the
 
 Return a judgement for every index given in the input, including the ones you answer false for."""
 
-CARD_PROMPT = """You turn a Slack message into a card that a foreign employee can act on.
+CARD_PROMPT = """You turn a Slack message or GitHub document into a card that a foreign employee can act on.
 
 The reader does not read Korean well and does not know this company's habits. Your job is to make
 the request unambiguous: what is actually being asked, by when, and what the tone really means.
