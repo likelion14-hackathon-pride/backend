@@ -239,4 +239,7 @@ SLACK_BOT_TOKEN = get_secret('SLACK_BOT_TOKEN')
 # 키가 없어도 서버는 뜬다. 분류를 실행하는 시점에만 필요하고,
 # 그때 ImproperlyConfigured로 실패하며 수집 결과는 그대로 남는다.
 OPENAI_API_KEY = get_secret('OPENAI_API_KEY', '')
+# 분류는 라벨 하나만 고르면 되므로 저가 모델로 충분하다.
 OPENAI_CLASSIFIER_MODEL = get_secret('OPENAI_CLASSIFIER_MODEL', 'gpt-4o-mini')
+# 초안 작성은 여러 발언을 묶어 규칙 문장을 써야 해서 상위 모델을 쓴다.
+OPENAI_DRAFTER_MODEL = get_secret('OPENAI_DRAFTER_MODEL', 'gpt-4o')

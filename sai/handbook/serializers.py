@@ -1,7 +1,7 @@
 from django.utils import timezone
 from rest_framework import serializers
 
-from .models import CompanyScope, HandbookEntry, HandbookRevision
+from .models import CompanyScope, HandbookEntry, HandbookEvidence, HandbookRevision
 
 
 # 핸드북 범위 응답용 시리얼라이저
@@ -143,3 +143,45 @@ class HandbookEntryUpdateSerializer(serializers.ModelSerializer):
         )
 
         return super().update(instance, validated_data)
+
+
+# 핸드북 항목 근거 응답용 시리얼라이저
+class HandbookEvidenceSerializer(serializers.ModelSerializer):
+    documentId = serializers.IntegerField(source='document_id', read_only=True)
+    chunkId = serializers.IntegerField(source='chunk_id', read_only=True)
+    sourceLabel = serializers.CharField(source='source_label', read_only=True)
+    speakerName = serializers.CharField(source='speaker_name', read_only=True)
+    occurredAt = serializers.DateTimeField(source='occurred_at', read_only=True)
+
+    class Meta:
+        model = HandbookEvidence
+        fields = [
+            'id',
+            'tag',
+            'quote',
+            'locator',
+            'sourceLabel',
+            'speakerName',
+            'permalink',
+            'occurredAt',
+            'documentId',
+            'chunkId',
+        ]
+
+
+class HandbookEvidenceListSerializer(serializers.Serializer):
+    items = HandbookEvidenceSerializer(many=True)
+
+
+# 대표의 초안 검토. APPROVE=확정, REJECT=보관, HOLD=초안 유지.
+class HandbookReviewSerializer(serializers.Serializer):
+    decision = serializers.ChoiceField(choices=['APPROVE', 'REJECT', 'HOLD'])
+
+
+class HandbookBulkReviewSerializer(serializers.Serializer):
+    entryIds = serializers.ListField(child=serializers.IntegerField(), allow_empty=False)
+
+
+class HandbookBulkReviewResultSerializer(serializers.Serializer):
+    approvedCount = serializers.IntegerField()
+    skipped = serializers.ListField(child=serializers.DictField())
