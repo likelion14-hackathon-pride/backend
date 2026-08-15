@@ -20,9 +20,7 @@ from .serializers import (
     CardDetailSerializer,
     CardListItemSerializer,
     CardListSerializer,
-    CardQuestionSerializer,
     CardUpdateSerializer,
-    RelatedRuleSerializer,
 )
 from .services import card_context, mark_read, original_text, related_rules
 
@@ -41,21 +39,18 @@ MINE_PARAMETER = openapi.Parameter(
 )
 
 
-def _detailed(company):
-    return cards_for(company).prefetch_related(
-        'steps__entry', 'blanks__escalation', 'tone_evidences'
+def _detailed(company, card_id):
+    card = get_object_or_404(
+        cards_for(company).prefetch_related(
+            'steps__entry', 'blanks__escalation', 'tone_evidences'
+        ),
+        id=card_id,
     )
+    card.relatedRules = related_rules(card)
+    card.riskWarnings = find_risk_warnings(company, original_text(card))
+    card.questions = [blank for blank in card.blanks.all() if blank.escalation_id]
 
-
-def _detail_payload(card, company):
-    data = CardDetailSerializer(card).data
-    data['relatedRules'] = RelatedRuleSerializer(related_rules(card), many=True).data
-    data['riskWarnings'] = find_risk_warnings(company, original_text(card))
-    data['questions'] = CardQuestionSerializer(
-        [blank for blank in card.blanks.all() if blank.escalation_id], many=True
-    ).data
-
-    return data
+    return card
 
 
 class CardListView(APIView):
@@ -131,10 +126,10 @@ class CardDetailView(APIView):
     )
     def get(self, request, company_id, card_id):
         company = get_member_company(request.user, company_id)
-        card = get_object_or_404(_detailed(company), id=card_id)
+        card = _detailed(company, card_id)
         mark_read(card)
 
-        return Response(_detail_payload(card, company), status=status.HTTP_200_OK)
+        return Response(CardDetailSerializer(card).data, status=status.HTTP_200_OK)
 
     @swagger_auto_schema(
         operation_summary='지시 카드 상태 · 담당자 변경',
@@ -155,15 +150,16 @@ class CardDetailView(APIView):
     )
     def patch(self, request, company_id, card_id):
         company = get_member_company(request.user, company_id)
-        card = get_object_or_404(_detailed(company), id=card_id)
+        card = get_object_or_404(InstructionCard, id=card_id, company=company)
         serializer = CardUpdateSerializer(
             card, data=request.data, context={'company': company}
         )
         serializer.is_valid(raise_exception=True)
         serializer.save()
 
+        # 상태가 바뀌면 열도 바뀐다. 계산된 값을 다시 받으려면 새로 읽어야 한다.
         return Response(
-            _detail_payload(get_object_or_404(_detailed(company), id=card_id), company),
+            CardDetailSerializer(_detailed(company, card_id)).data,
             status=status.HTTP_200_OK,
         )
 
