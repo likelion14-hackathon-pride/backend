@@ -163,7 +163,14 @@ class IngestionJob(models.Model):
         PARTIAL = 'PARTIAL'
         FAILED = 'FAILED'
 
+    # 웹훅으로 이미 받아 둔 원문은 슬랙에서 다시 가져올 필요가 없다.
+    # 주기 실행이 매번 채널 전체를 다시 읽지 않도록 두 가지를 구분한다.
+    class Kind(models.TextChoices):
+        COLLECT = 'COLLECT'  # 슬랙에서 가져오고 처리한다
+        PROCESS = 'PROCESS'  # 이미 있는 원문만 처리한다
+
     company = models.ForeignKey('companies.Company', on_delete=models.CASCADE, related_name='ingestion_jobs')
+    kind = models.CharField(max_length=7, choices=Kind.choices, default=Kind.COLLECT)
     status = models.CharField(max_length=10, choices=Status.choices, default=Status.QUEUED)
     progress = models.SmallIntegerField(default=0)
     item_ids = models.JSONField(null=True, blank=True)

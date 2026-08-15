@@ -5,13 +5,32 @@ from django.contrib.auth import get_user_model
 from django.core.exceptions import ImproperlyConfigured
 from django.utils import timezone
 
-from cards.generation import generate_cards
+from cards.generation import GENERATOR_VERSION, generate_cards
 from handbook.drafting import draft_entries
 
 from .chunking import sync_chunks
-from .classifier import classify_documents
+from .classifier import CLASSIFIER_VERSION, classify_documents
 from .models import Identity, IngestionJob, Item, RawDocument
 from .slack import SlackClient, SlackError
+
+
+# AI가 아직 손대지 않은 원문이 있는가.
+# 파이프라인 각 단계가 후보를 고르는 조건과 같아야 한다.
+# 다르면 할 일이 없는데 작업을 돌리거나, 남았는데 건너뛴다.
+def has_pending_work(company):
+    documents = RawDocument.objects.filter(
+        company=company, sync_state=RawDocument.SyncState.CURRENT
+    )
+
+    if documents.exclude(classifier_version=CLASSIFIER_VERSION).exists():
+        return True
+
+    return (
+        documents.filter(instruction_cards__isnull=True)
+        .exclude(classified_as=RawDocument.ClassifiedAs.INSTRUCTION)
+        .exclude(card_version=GENERATOR_VERSION)
+        .exists()
+    )
 
 
 # 실수로 거대한 워크스페이스를 붙였을 때 요청이 무한정 길어지지 않게 하는 상한.
@@ -184,6 +203,22 @@ def _set_progress(job, value):
     job.save(update_fields=['progress'])
 
 
+def _finish(job, errors, collection_failed=False):
+    if collection_failed:
+        job.status = IngestionJob.Status.FAILED
+    elif errors:
+        job.status = IngestionJob.Status.PARTIAL
+    else:
+        job.status = IngestionJob.Status.SUCCEEDED
+
+    job.progress = 100
+    job.errors = errors or None
+    job.completed_at = timezone.now()
+    job.save(update_fields=['status', 'progress', 'errors', 'completed_at', 'entry_count'])
+
+    return job
+
+
 # 수집 작업 실행. 워커가 큐에서 꺼내 호출한다.
 def run_ingestion(job, connection):
     job.status = IngestionJob.Status.RUNNING
@@ -191,36 +226,45 @@ def run_ingestion(job, connection):
     job.started_at = job.started_at or timezone.now()
     job.save(update_fields=['status', 'started_at'])
 
-    items = list(
-        Item.objects.filter(
-            connection=connection, removed_at__isnull=True, id__in=job.item_ids
-        ).order_by('id')
-    )
-
-    client = SlackClient(connection.bot_token)
     errors = []
-    created_total = 0
+    collection_failed = False
 
-    try:
-        workspace_url = client.auth_test().get('url')
-        identity_map = build_identity_map(connection)
-    except SlackError as exc:
-        job.status = IngestionJob.Status.FAILED
-        job.errors = [{'scope': 'workspace', 'code': exc.code}]
-        job.completed_at = timezone.now()
-        job.save(update_fields=['status', 'errors', 'completed_at'])
-        return job
+    # PROCESS 작업은 웹훅이 이미 받아 둔 원문만 처리한다. 슬랙을 다시 읽지 않는다.
+    if job.kind == IngestionJob.Kind.COLLECT:
+        items = list(
+            Item.objects.filter(
+                connection=connection, removed_at__isnull=True, id__in=job.item_ids
+            ).order_by('id')
+        )
 
-    for index, item in enumerate(items, start=1):
+        client = SlackClient(connection.bot_token)
+
         try:
-            created, _ = ingest_channel(item, identity_map, workspace_url, client)
-            created_total += created
+            workspace_url = client.auth_test().get('url')
+            identity_map = build_identity_map(connection)
         except SlackError as exc:
-            errors.append({'itemId': item.id, 'label': item.label, 'code': exc.code})
+            job.status = IngestionJob.Status.FAILED
+            job.errors = [{'scope': 'workspace', 'code': exc.code}]
+            job.completed_at = timezone.now()
+            job.save(update_fields=['status', 'errors', 'completed_at'])
+            return job
 
-        _set_progress(job, int(PROGRESS_COLLECTED * index / len(items)))
+        for index, item in enumerate(items, start=1):
+            try:
+                ingest_channel(item, identity_map, workspace_url, client)
+            except SlackError as exc:
+                errors.append({'itemId': item.id, 'label': item.label, 'code': exc.code})
 
-    collection_failed = bool(errors) and len(errors) == len(items)
+            _set_progress(job, int(PROGRESS_COLLECTED * index / len(items)))
+
+        collection_failed = bool(errors) and len(errors) == len(items)
+
+    # 처리할 것이 없으면 AI 단계를 건너뛴다.
+    # 초안 생성은 매번 규칙 문서 전체를 다시 부르므로, 주기 실행에서 그냥 두면 비용이 계속 나간다.
+    if not collection_failed and not has_pending_work(job.company):
+        _finish(job, errors)
+
+        return job
 
     # 수집한 원문을 분류하고 규칙 초안까지 만든다.
     # 뒷단계가 실패해도 앞단계 결과는 남긴다.
@@ -247,16 +291,6 @@ def run_ingestion(job, connection):
             except ImproperlyConfigured:
                 errors.append({'scope': 'draft', 'code': 'openai_not_configured'})
 
-    if collection_failed:
-        job.status = IngestionJob.Status.FAILED
-    elif errors:
-        job.status = IngestionJob.Status.PARTIAL
-    else:
-        job.status = IngestionJob.Status.SUCCEEDED
-
-    job.progress = 100
-    job.errors = errors or None
-    job.completed_at = timezone.now()
-    job.save(update_fields=['status', 'progress', 'errors', 'completed_at', 'entry_count'])
+    _finish(job, errors, collection_failed)
 
     return job

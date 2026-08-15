@@ -87,6 +87,7 @@ class IngestionJobSerializer(serializers.ModelSerializer):
         model = IngestionJob
         fields = [
             'id',
+            'kind',
             'status',
             'progress',
             'itemIds',
