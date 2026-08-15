@@ -16,7 +16,7 @@ from .classifier import (
     MessageLabel,
     classify_documents,
 )
-from .models import Connection, Identity, Item, RawDocument
+from .models import Connection, Identity, IngestionJob, Item, RawDocument
 from .services import register_joined_channels
 from .slack import SlackError
 from .text import normalize_slack_text
@@ -534,6 +534,28 @@ class IngestionTests(TestCase):
 
         self.assertEqual(response.status_code, 202)
         self.assertEqual(response.data['status'], 'SUCCEEDED')
+        self.assertEqual(response.data['progress'], 100)
+
+    # 수집이 끝났다고 100이 되면 화면에서 멈춘 것처럼 보인다. 뒤에 AI 단계가 남아 있다.
+    def test_progress_reflects_whole_pipeline(self):
+        seen = []
+
+        def record_progress(company_id):
+            seen.append(IngestionJob.objects.get(company_id=company_id).progress)
+            return 0, []
+
+        with patch('sources.ingestion.SlackClient.auth_test', return_value=AUTH_WITH_URL), \
+             patch('sources.ingestion.SlackClient.users_list', return_value=USERS), \
+             patch('sources.ingestion.SlackClient.channel_history', return_value=HISTORY), \
+             patch('sources.ingestion.SlackClient.thread_replies', return_value=REPLIES), \
+             patch('sources.ingestion.classify_documents', side_effect=record_progress), \
+             patch('sources.ingestion.sync_chunks', return_value=(0, [])), \
+             patch('sources.ingestion.draft_entries', return_value=([], [])), \
+             patch('sources.ingestion.generate_cards', return_value=([], [])):
+            response = self.client.post(self.url, {}, format='json')
+
+        # 분류가 시작될 시점에는 아직 100이 아니어야 한다.
+        self.assertEqual(seen, [30])
         self.assertEqual(response.data['progress'], 100)
         # 최상위 2건 + 스레드 답글 2건. 부모 중복과 빈 메시지는 제외.
         self.assertEqual(RawDocument.objects.count(), 4)
