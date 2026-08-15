@@ -54,7 +54,6 @@ class AnswerUnavailable(APIException):
     default_detail = '답변 생성을 사용할 수 없습니다.'
 
 
-# 요청한 사용자가 해당 회사의 구성원인지 확인
 def get_member_company(user, company_id):
     company = get_object_or_404(Company, id=company_id)
     is_member = Membership.objects.filter(user=user, company=company, left_at__isnull=True).exists()
@@ -69,7 +68,6 @@ def _citation_payload(source):
     return source.payload()
 
 
-# SAI에게 묻기 view
 class AskView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -191,7 +189,6 @@ def _visible_escalations(company, user):
     return queryset if is_owner else queryset.filter(asked_by=user)
 
 
-# 대표 확인 질문 목록 / 생성 view
 class EscalationListCreateView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -340,7 +337,6 @@ class EscalationDetailView(APIView):
         return Response(EscalationSerializer(escalation).data, status=status.HTTP_200_OK)
 
 
-# 슬랙으로 질문 발송 view
 class EscalationSendView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -377,7 +373,6 @@ class EscalationSendView(APIView):
         return Response(EscalationSerializer(escalation).data, status=status.HTTP_200_OK)
 
 
-# 대표 답장 회수 view
 class EscalationCheckAnswerView(APIView):
     permission_classes = [IsAuthenticated]
 
@@ -494,7 +489,6 @@ class EscalationApproveView(APIView):
         return Response(EscalationSerializer(escalation).data, status=status.HTTP_201_CREATED)
 
 
-# 질문 스레드 대화 이력 view
 class ThreadMessageListView(APIView):
     permission_classes = [IsAuthenticated]
 

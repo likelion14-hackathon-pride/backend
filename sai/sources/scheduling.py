@@ -7,14 +7,12 @@ from companies.models import Company
 from .ingestion import has_pending_work
 from .models import Connection, IngestionJob, Item
 
-# 웹훅으로 들어온 메시지를 처리하기까지 기다리는 시간.
 # 아침에 받은 지시가 점심때 카드로 뜨면 늦다. 처리할 것이 있을 때만 돈다.
 PROCESS_EVERY = timedelta(minutes=10)
 
-# 슬랙에서 다시 읽어 오는 주기. 웹훅이 멈춰 있던 동안의 메시지를 메운다.
+# 웹훅이 멈춰 있던 동안의 메시지를 메우려고 슬랙을 다시 읽는다.
 COLLECT_EVERY = timedelta(hours=12)
 
-# 직전 처리가 실패했으면 이만큼 쉬었다 다시 한다.
 # OpenAI 한도에 걸린 상태에서 10분마다 재시도하면 한도만 계속 태운다.
 RETRY_AFTER = timedelta(hours=1)
 
@@ -27,7 +25,6 @@ def _last_job(company, kind):
     )
 
 
-# 직전 작업이 실패했으면 더 오래 쉰다.
 def _is_due(last, every, now):
     if last is None:
         return True
@@ -41,7 +38,6 @@ def _enqueue(company, kind, item_ids):
     return IngestionJob.objects.create(company=company, kind=kind, item_ids=item_ids)
 
 
-# 회사 하나에 대해 지금 만들어야 할 작업이 있으면 만든다. 없으면 None.
 def _due_job(company, now):
     # 이미 대기 중이거나 도는 작업이 있으면 쌓지 않는다.
     if IngestionJob.objects.filter(
@@ -77,7 +73,6 @@ def _due_job(company, now):
     return _enqueue(company, IngestionJob.Kind.PROCESS, item_ids)
 
 
-# 슬랙이 연결된 회사마다 밀린 작업을 큐에 넣는다. 만든 작업 목록을 돌려준다.
 # 웹훅은 원문만 저장한다. 아무도 수집 버튼을 누르지 않으면 카드도 규칙도 생기지 않는다.
 def enqueue_due_jobs(now=None):
     now = now or timezone.now()

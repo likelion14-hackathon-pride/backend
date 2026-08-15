@@ -263,7 +263,6 @@ def _parse_deadline(value, company):
     return parsed
 
 
-# 배치 하나를 판정해 {인덱스: 지시 여부}를 돌려준다.
 def _judge_batch(client, batch, channels, users):
     prompt = '\n'.join(
         f'[{index}] {normalize_slack_text(document.raw_text, channels, users)[:300]}'
@@ -288,7 +287,6 @@ def _judge_batch(client, batch, channels, users):
     }
 
 
-# 판정 단계. 지시인 문서만 골라 낸다.
 # 지시가 아닌 것에는 판정 버전을 남긴다. 남기지 않으면 다음 실행에서 같은 문서를 또 판정한다.
 # 지시인 것에는 남기지 않는다. 카드 생성이 실패하면 다음 실행에서 다시 시도해야 한다.
 def _judge(client, documents, channels, users):
@@ -553,7 +551,6 @@ def _build_card(client, company, document, channels, users):
     return _save_card(company, document, draft, rules, cases, assignee, vector)
 
 
-# 아직 카드가 없는 원문에서 지시를 찾아 카드를 만든다.
 def generate_cards(company, documents=None):
     if documents is None:
         documents = RawDocument.objects.filter(

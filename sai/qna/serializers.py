@@ -49,7 +49,6 @@ class AskResultSerializer(serializers.Serializer):
     latencyMs = serializers.IntegerField()
 
 
-# 저장해 둔 근거를 화면용으로 편다.
 # 규칙이든 사례든 같은 모양으로 나가야 화면이 한 가지만 그리면 된다.
 def _stored_citation(citation):
     if citation.entry:
@@ -79,7 +78,6 @@ def _stored_citation(citation):
     }
 
 
-# 대화 이력 응답용
 class MessageSerializer(serializers.ModelSerializer):
     threadId = serializers.IntegerField(source='thread_id', read_only=True)
     bodyKo = serializers.CharField(source='body_ko', read_only=True)
@@ -161,7 +159,6 @@ class EscalationListSerializer(serializers.Serializer):
     items = EscalationSerializer(many=True)
 
 
-# 답변받지 못한 질문을 대표 확인 대기로 올린다.
 # 출처는 세 가지다. Ask SAI 답변(messageId), 지시 카드의 미정 항목(blankId), 직접 입력.
 class EscalationCreateSerializer(serializers.Serializer):
     messageId = serializers.IntegerField(required=False)

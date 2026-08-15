@@ -14,7 +14,6 @@ from .models import Identity, IngestionJob, Item, RawDocument
 from .slack import SlackClient, SlackError
 
 
-# AI가 아직 손대지 않은 원문이 있는가.
 # 파이프라인 각 단계가 후보를 고르는 조건과 같아야 한다.
 # 다르면 할 일이 없는데 작업을 돌리거나, 남았는데 건너뛴다.
 def has_pending_work(company):
@@ -80,7 +79,6 @@ def is_collectable(message):
 _is_collectable = is_collectable
 
 
-# 이 회사에 소속된 사용자만 {이메일: User} 로 모은다.
 # 다른 회사 사용자와 이메일이 겹치면 남의 슬랙 계정에 연결될 수 있으므로 소속으로 먼저 거른다.
 def _company_users_by_email(company_id):
     users = get_user_model().objects.filter(
@@ -91,7 +89,6 @@ def _company_users_by_email(company_id):
     return {user.email.lower(): user for user in users if user.email}
 
 
-# 슬랙 사용자를 Identity로 등록하고 {slack_user_id: Identity} 맵을 돌려준다.
 # 메시지마다 조회하지 않도록 수집 시작 시 한 번만 만든다.
 # 이메일이 같은 SAI 계정이 있으면 함께 연결한다. 지시 카드의 담당자가 여기서 정해진다.
 def build_identity_map(connection):
@@ -128,7 +125,6 @@ def build_identity_map(connection):
     return identities
 
 
-# 메시지 한 건을 RawDocument로 저장한다.
 # (item, external_ref) 유니크 제약 덕분에 같은 메시지를 다시 받아도 행이 늘지 않는다.
 # 웹훅 재시도와 재수집 양쪽에서 이 성질에 기대고 있다.
 def save_document(item, message, author_identity, workspace_url, thread_ref=None):
@@ -158,7 +154,6 @@ def _save_message(item, message, identity_map, workspace_url, thread_ref=None):
     )
 
 
-# 채널 하나를 수집한다. (신규, 갱신) 반환.
 def ingest_channel(item, identity_map, workspace_url, client):
     messages = client.channel_history(item.external_id, max_messages=MAX_MESSAGES_PER_CHANNEL)
 
@@ -266,7 +261,6 @@ def run_ingestion(job, connection):
 
         return job
 
-    # 수집한 원문을 분류하고 규칙 초안까지 만든다.
     # 뒷단계가 실패해도 앞단계 결과는 남긴다.
     if not collection_failed:
         try:

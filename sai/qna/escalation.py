@@ -149,7 +149,6 @@ def _human_text(message):
     return (message.get('text') or '').strip() or None
 
 
-# 질문 뒤에 채널에 올라온 사람 메시지들.
 # 슬랙에서 스레드 답장은 한 번 더 눌러야 해서 대부분 그냥 채널에 답한다.
 # 다음 봇 메시지(= 다른 질문)가 나오면 거기서 끊는다.
 def _channel_follow_ups(client, channel_id, ts):
@@ -170,7 +169,6 @@ def _channel_follow_ups(client, channel_id, ts):
     return collected
 
 
-# 보낸 질문에 대한 대표 답장을 가져온다.
 # 스레드 답글을 먼저 보고, 없으면 채널에 이어 붙은 메시지를 본다.
 # 여러 건이면 합쳐서 넘긴다. 슬랙에서는 한 답을 여러 줄로 나눠 쓰는 일이 흔하다.
 # 엉뚱한 메시지가 섞여도 답변 판정 단계에서 걸러진다.

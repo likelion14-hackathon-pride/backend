@@ -24,7 +24,6 @@ class BlankSerializer(serializers.ModelSerializer):
         fields = ['id', 'questionEn', 'saiAnswerEn', 'saiAnswerKo', 'escalationId']
 
 
-# 말투 해석의 근거가 된 과거 대화
 class ToneEvidenceSerializer(serializers.ModelSerializer):
     sourceLabel = serializers.CharField(source='source_label', read_only=True)
     outcomeNote = serializers.CharField(source='outcome_note', read_only=True)
