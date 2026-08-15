@@ -1,7 +1,9 @@
+from django.conf import settings
 from django.utils import timezone
 from rest_framework.exceptions import ValidationError
 
 from .models import Connection, Item
+from .github import GitHubClient, GitHubError
 from .slack import SlackClient, SlackError
 
 
@@ -112,6 +114,54 @@ def remove_channel(item):
     item.save(update_fields=['removed_at'])
 
     return item
+
+
+def _github_client():
+    return GitHubClient(
+        settings.GITHUB_APP_ID,
+        settings.GITHUB_PRIVATE_KEY,
+        settings.GITHUB_INSTALLATION_ID,
+    )
+
+
+# 미리 설치한 GitHub App을 회사 소스로 연결한다.
+def connect_github(company):
+    try:
+        installation = _github_client().installation()
+    except GitHubError as exc:
+        raise ValidationError({'github': [exc.code]})
+
+    installation_id = str(installation['id'])
+    account = installation.get('account') or {}
+    display_name = account.get('login') or account.get('name') or 'GitHub'
+
+    # 한 App 설치가 두 회사에 붙으면 웹훅 수신 회사를 특정할 수 없다.
+    taken = (
+        Connection.objects.filter(
+            external_workspace_id=installation_id, disconnected_at__isnull=True
+        )
+        .exclude(company=company)
+        .exists()
+    )
+    if taken:
+        raise ValidationError({'github': ['installation already connected to another company']})
+
+    connection = Connection.objects.filter(
+        company=company, kind=Connection.Kind.GITHUB, disconnected_at__isnull=True
+    ).first()
+    is_created = connection is None
+    if is_created:
+        connection = Connection(company=company, kind=Connection.Kind.GITHUB)
+
+    connection.status = Connection.Status.CONNECTED
+    connection.external_workspace_id = installation_id
+    connection.display_name = display_name
+    connection.workspace_url = account.get('html_url')
+    connection.credential_ref = f'github-app-installation:{installation_id}'
+    connection.error_message = None
+    connection.save()
+
+    return connection, is_created
 
 
 # 슬랙 워크스페이스를 연결한다. (연결, 새로 만들었는지) 반환.

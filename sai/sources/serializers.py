@@ -51,8 +51,8 @@ class ChannelAddSerializer(serializers.Serializer):
     externalId = serializers.CharField(trim_whitespace=True)
 
 
-# 채널을 지식공간에 연결한다.
-# 여기서 정한 범위가 나중에 이 채널에서 뽑은 규칙 초안의 기본 범위가 된다.
+# 채널을 지식공간에 연결
+# 여기서 정한 범위가 나중에 이 채널에서 뽑은 규칙 초안의 기본 범위가 됨
 class ChannelScopeUpdateSerializer(serializers.Serializer):
     scopeId = serializers.PrimaryKeyRelatedField(
         source='scope',
@@ -99,7 +99,7 @@ class IngestionJobSerializer(serializers.ModelSerializer):
             'completedAt',
         ]
 
-    # 이 작업이 대상으로 삼은 채널들이 지금까지 모아 둔 원문 수.
+    # 이 작업이 대상으로 삼은 채널들이 지금까지 모아 둔 원문 수
     def get_documentCount(self, obj):
         return sum(
             Item.objects.filter(id__in=obj.item_ids or []).values_list('item_count', flat=True)
@@ -175,3 +175,8 @@ class SlackConnectionCreateSerializer(serializers.Serializer):
             raise serializers.ValidationError('bot token must start with xoxb-')
 
         return value
+
+
+# GitHub App 자격증명은 서버 설정에 있으므로, 연결 요청에는 provider만 받는다.
+class GitHubConnectionCreateSerializer(serializers.Serializer):
+    provider = serializers.ChoiceField(choices=[Connection.Kind.GITHUB])
