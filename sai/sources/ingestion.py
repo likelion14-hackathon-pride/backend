@@ -5,6 +5,7 @@ from django.contrib.auth import get_user_model
 from django.core.exceptions import ImproperlyConfigured
 from django.utils import timezone
 
+from cards.generation import generate_cards
 from handbook.drafting import draft_entries
 
 from .chunking import sync_chunks
@@ -224,6 +225,9 @@ def run_ingestion(job, connection):
                 entries, draft_errors = draft_entries(job.company)
                 errors += draft_errors
                 job.entry_count = len(entries)
+                # 규칙과 별개로, 사람에게 내려온 지시는 카드로 만든다.
+                _, card_errors = generate_cards(job.company)
+                errors += card_errors
             except ImproperlyConfigured:
                 errors.append({'scope': 'draft', 'code': 'openai_not_configured'})
 

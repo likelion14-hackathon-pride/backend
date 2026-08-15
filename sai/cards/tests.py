@@ -1,3 +1,392 @@
-from django.test import TestCase
+from datetime import timedelta
+from types import SimpleNamespace
+from unittest.mock import patch
 
-# Create your tests here.
+from django.test import TestCase, override_settings
+from django.utils import timezone
+from rest_framework.test import APIClient
+
+from accounts.models import Membership, User
+from companies.models import Company
+from handbook.models import CompanyScope, HandbookEntry
+from sources.models import Chunk, Connection, Identity, Item, RawDocument
+
+from .generation import (
+    CardBlank,
+    CardDraft,
+    CardStep,
+    Judgement,
+    JudgementResult,
+    ToneCase,
+    generate_cards,
+    resolve_assignee,
+)
+from .models import Blank, InstructionCard, Step, ToneEvidence
+
+VECTOR = [0.1] * 1536
+PAST_CASE = '급한 건 아닌데 시간 되실 때 배포 스크립트 한번 봐주세요'
+
+
+def draft(**overrides):
+    base = {
+        'purpose': '결제 실패 로그의 원인을 파악한다',
+        'deliverable': '원인 정리 문서',
+        'deadline_text': '내일 오전까지',
+        'deadline_at': '2026-08-16T12:00:00',
+        'is_deadline_inferred': False,
+        'tone_note': '완곡하게 말했지만 내일 오전이 실제 기한입니다.',
+        'steps': [CardStep(text='Sentry에서 결제 실패 로그 확인', rule_index=0)],
+        'blanks': [CardBlank(question_en='Which environment should I check?')],
+        'tone_cases': [ToneCase(case_index=0, quote='시간 되실 때')],
+    }
+    base.update(overrides)
+    return CardDraft(**base)
+
+
+class CardGenerationTests(TestCase):
+    def setUp(self):
+        self.company = Company.objects.create(name='에코랩', code='TESTCODE1')
+        self.scope = CompanyScope.objects.create(
+            company=self.company, kind=CompanyScope.Kind.PROJECT, name='결제 시스템'
+        )
+        self.connection = Connection.objects.create(
+            company=self.company, kind=Connection.Kind.SLACK, bot_token='xoxb-test'
+        )
+        self.item = Item.objects.create(
+            company=self.company, connection=self.connection,
+            external_id='C001', label='#dev', scope=self.scope,
+        )
+        self.assignee = User.objects.create_user(
+            email='sang@example.com', password='pw', display_name='조상원'
+        )
+        Membership.objects.create(
+            user=self.assignee, company=self.company, role=Membership.Role.MEMBER
+        )
+        self.identity = Identity.objects.create(
+            company=self.company, connection=self.connection,
+            external_user_id='U001', external_handle='조상원', user=self.assignee,
+        )
+        self.requester = Identity.objects.create(
+            company=self.company, connection=self.connection,
+            external_user_id='U002', external_handle='홍길동',
+        )
+        self.rule = HandbookEntry.objects.create(
+            company=self.company, scope=self.scope, title='로그는 Sentry에서 확인',
+            body_ko='에러 로그는 Sentry에 모입니다.', status=HandbookEntry.Status.CONFIRMED,
+            origin=HandbookEntry.Origin.SLACK, embedding_ko=VECTOR,
+        )
+        # 판정 배치는 occurred_at 순으로 들어간다. 과거 사례가 먼저(index 0), 지시가 나중(index 1).
+        self.past = self._document(
+            '0.9', PAST_CASE, occurred_at=timezone.now() - timedelta(days=7)
+        )
+        self.document = self._document(
+            '1.1', '<@U001> 결제 실패 로그 좀 봐주실 수 있을까요? 내일 오전까지면 좋겠어요'
+        )
+        Chunk.objects.create(
+            company=self.company, document=self.past, ord=0,
+            text=PAST_CASE, embedding=VECTOR,
+        )
+
+    def _document(self, ref, text, occurred_at=None):
+        return RawDocument.objects.create(
+            company=self.company, item=self.item, external_ref=ref,
+            author_identity=self.requester, raw_text=text,
+            content_hash=ref.ljust(64, '0'), occurred_at=occurred_at or timezone.now(),
+            permalink=f'https://slack/{ref}',
+        )
+
+    def generate(self, judgements=None, card=None):
+        judged = judgements if judgements is not None else [
+            Judgement(index=0, reason='상시 규칙입니다', is_instruction=False),
+            Judgement(index=1, reason='끝나는 일입니다', is_instruction=True),
+        ]
+        chat_results = [
+            SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(
+                parsed=JudgementResult(judgements=judged)))]),
+            SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(
+                parsed=card if card is not None else draft()))]),
+        ]
+        with patch('cards.generation.OpenAI') as client:
+            client.return_value.chat.completions.parse.side_effect = chat_results
+            client.return_value.embeddings.create.return_value = SimpleNamespace(
+                data=[SimpleNamespace(embedding=VECTOR)]
+            )
+            return generate_cards(self.company)
+
+    # --- 판정 ---
+
+    @override_settings(OPENAI_API_KEY='test-key')
+    def test_creates_card_for_instruction_only(self):
+        cards, errors = self.generate()
+
+        self.assertEqual((len(cards), errors), (1, []))
+        self.assertEqual(InstructionCard.objects.get().document, self.document)
+
+    @override_settings(OPENAI_API_KEY='test-key')
+    def test_no_card_when_nothing_is_an_instruction(self):
+        cards, _ = self.generate(judgements=[
+            Judgement(index=0, reason='잡담입니다', is_instruction=False),
+            Judgement(index=1, reason='상태 공유입니다', is_instruction=False),
+        ])
+
+        self.assertEqual(cards, [])
+        self.assertFalse(InstructionCard.objects.exists())
+
+    # 상시 규칙은 핸드북이 맡는다. 카드로 만들면 할 일 목록이 규칙으로 채워진다.
+    @override_settings(OPENAI_API_KEY='test-key')
+    def test_rule_documents_are_not_candidates(self):
+        RawDocument.objects.filter(id=self.document.id).update(
+            classified_as=RawDocument.ClassifiedAs.INSTRUCTION
+        )
+
+        cards, _ = self.generate(judgements=[
+            Judgement(index=0, reason='끝나는 일입니다', is_instruction=True),
+        ])
+
+        self.assertFalse(InstructionCard.objects.filter(document=self.document).exists())
+
+    # --- 카드 내용 ---
+
+    @override_settings(OPENAI_API_KEY='test-key')
+    def test_card_fields(self):
+        self.generate()
+        card = InstructionCard.objects.get()
+
+        self.assertEqual(card.purpose, '결제 실패 로그의 원인을 파악한다')
+        self.assertEqual(card.deliverable, '원인 정리 문서')
+        self.assertEqual(card.deadline_text, '내일 오전까지')
+        self.assertIsNotNone(card.deadline_at)
+        self.assertFalse(card.is_deadline_inferred)
+        self.assertEqual(card.status, InstructionCard.Status.NEW)
+        self.assertEqual(card.scope, self.scope)
+
+    # 멘션된 사람 중 SAI 계정이 이어진 사람이 담당자다.
+    @override_settings(OPENAI_API_KEY='test-key')
+    def test_assignee_from_mention(self):
+        self.generate()
+
+        self.assertEqual(InstructionCard.objects.get().assignee, self.assignee)
+
+    # 슬랙에는 있지만 SAI에 가입하지 않은 사람이면 담당자를 비워 둔다.
+    @override_settings(OPENAI_API_KEY='test-key')
+    def test_no_assignee_when_user_not_linked(self):
+        self.identity.user = None
+        self.identity.save()
+
+        self.generate()
+
+        self.assertIsNone(InstructionCard.objects.get().assignee)
+
+    def test_resolve_assignee_without_mention(self):
+        self.assertIsNone(resolve_assignee(self.company, '회의록 정리해주세요'))
+
+    # 기한이 없으면 추정 표시도 서지 않아야 한다.
+    @override_settings(OPENAI_API_KEY='test-key')
+    def test_no_deadline(self):
+        self.generate(card=draft(deadline_text='', deadline_at='', is_deadline_inferred=True))
+        card = InstructionCard.objects.get()
+
+        self.assertIsNone(card.deadline_at)
+        self.assertIsNone(card.deadline_text)
+        self.assertFalse(card.is_deadline_inferred)
+
+    @override_settings(OPENAI_API_KEY='test-key')
+    def test_inferred_deadline_is_marked(self):
+        self.generate(card=draft(
+            deadline_text='이번 주 안에', deadline_at='2026-08-21T18:00:00',
+            is_deadline_inferred=True,
+        ))
+
+        self.assertTrue(InstructionCard.objects.get().is_deadline_inferred)
+
+    # 모델이 이상한 날짜를 주면 저장하지 않는다.
+    @override_settings(OPENAI_API_KEY='test-key')
+    def test_unparseable_deadline_is_dropped(self):
+        self.generate(card=draft(deadline_at='내일쯤'))
+
+        self.assertIsNone(InstructionCard.objects.get().deadline_at)
+
+    # --- 스텝 / 미정 항목 ---
+
+    @override_settings(OPENAI_API_KEY='test-key')
+    def test_step_links_to_handbook_rule(self):
+        self.generate()
+        step = Step.objects.get()
+
+        self.assertEqual(step.text, 'Sentry에서 결제 실패 로그 확인')
+        self.assertEqual(step.entry, self.rule)
+
+    @override_settings(OPENAI_API_KEY='test-key')
+    def test_step_without_rule(self):
+        self.generate(card=draft(steps=[CardStep(text='로그 확인', rule_index=-1)]))
+
+        self.assertIsNone(Step.objects.get().entry)
+
+    # 없는 번호를 가리키면 규칙을 붙이지 않는다.
+    @override_settings(OPENAI_API_KEY='test-key')
+    def test_out_of_range_rule_index_is_dropped(self):
+        self.generate(card=draft(steps=[CardStep(text='로그 확인', rule_index=99)]))
+
+        self.assertIsNone(Step.objects.get().entry)
+
+    @override_settings(OPENAI_API_KEY='test-key')
+    def test_blanks_saved(self):
+        self.generate()
+
+        self.assertEqual(Blank.objects.get().question_en, 'Which environment should I check?')
+
+    # --- 말투 근거 ---
+
+    @override_settings(OPENAI_API_KEY='test-key')
+    def test_tone_evidence_from_past_case(self):
+        self.generate()
+        evidence = ToneEvidence.objects.get()
+
+        self.assertEqual(evidence.quote, '시간 되실 때')
+        self.assertEqual(evidence.document, self.past)
+        self.assertEqual(evidence.source_label, '#dev')
+
+    # 모델이 지어낸 인용은 버린다. 근거 없는 말투 해석을 남기지 않는다.
+    @override_settings(OPENAI_API_KEY='test-key')
+    def test_fabricated_tone_quote_is_dropped(self):
+        self.generate(card=draft(tone_cases=[ToneCase(case_index=0, quote='원문에 없는 말')]))
+
+        self.assertFalse(ToneEvidence.objects.exists())
+
+    @override_settings(OPENAI_API_KEY='test-key')
+    def test_out_of_range_tone_case_is_dropped(self):
+        self.generate(card=draft(tone_cases=[ToneCase(case_index=99, quote='시간 되실 때')]))
+
+        self.assertFalse(ToneEvidence.objects.exists())
+
+    # --- 재실행 ---
+
+    # 이미 카드가 있는 원문은 다시 판정하지 않는다.
+    @override_settings(OPENAI_API_KEY='test-key')
+    def test_documents_with_cards_are_skipped(self):
+        self.generate()
+
+        cards, _ = self.generate(
+            judgements=[Judgement(index=0, reason='이미 처리됨', is_instruction=False)]
+        )
+
+        self.assertEqual(cards, [])
+        self.assertEqual(InstructionCard.objects.count(), 1)
+
+
+class CardApiTests(TestCase):
+    def setUp(self):
+        self.company = Company.objects.create(name='에코랩', code='TESTCODE1')
+        self.scope = CompanyScope.objects.create(
+            company=self.company, kind=CompanyScope.Kind.PROJECT, name='결제 시스템'
+        )
+        connection = Connection.objects.create(
+            company=self.company, kind=Connection.Kind.SLACK, bot_token='xoxb-test'
+        )
+        self.item = Item.objects.create(
+            company=self.company, connection=connection, external_id='C001', label='#dev'
+        )
+        self.member = User.objects.create_user(
+            email='m@example.com', password='pw', display_name='Alex'
+        )
+        Membership.objects.create(
+            user=self.member, company=self.company, role=Membership.Role.MEMBER
+        )
+        self.other = User.objects.create_user(
+            email='o@example.com', password='pw', display_name='Other'
+        )
+        Membership.objects.create(
+            user=self.other, company=self.company, role=Membership.Role.MEMBER
+        )
+        self.document = RawDocument.objects.create(
+            company=self.company, item=self.item, external_ref='1.1',
+            raw_text='결제 로그 봐주세요', content_hash='a' * 64, occurred_at=timezone.now(),
+        )
+        self.card = InstructionCard.objects.create(
+            company=self.company, scope=self.scope, document=self.document,
+            assignee=self.member, purpose='결제 실패 로그 원인 파악',
+            tone_note='내일 오전이 실제 기한입니다.',
+        )
+        Step.objects.create(company=self.company, card=self.card, ord=0, text='Sentry 확인')
+        Blank.objects.create(
+            company=self.company, card=self.card, question_en='Which environment?'
+        )
+        ToneEvidence.objects.create(
+            company=self.company, card=self.card, document=self.document,
+            quote='시간 되실 때', source_label='#dev',
+        )
+        self.client = APIClient()
+        self.client.force_authenticate(user=self.member)
+        self.base = f'/api/companies/{self.company.id}/cards'
+
+    def test_list(self):
+        response = self.client.get(self.base)
+
+        self.assertEqual(response.status_code, 200)
+        item = response.data['items'][0]
+        self.assertEqual(item['purpose'], '결제 실패 로그 원인 파악')
+        self.assertEqual(item['assigneeName'], 'Alex')
+        self.assertEqual(item['sourceLabel'], '#dev')
+        self.assertEqual(item['blankCount'], 1)
+
+    def test_mine_filter(self):
+        other_card = InstructionCard.objects.create(
+            company=self.company, document=RawDocument.objects.create(
+                company=self.company, item=self.item, external_ref='1.2',
+                raw_text='다른 지시', content_hash='b' * 64, occurred_at=timezone.now(),
+            ),
+            assignee=self.other, purpose='남의 일',
+        )
+
+        response = self.client.get(f'{self.base}?mine=true')
+
+        ids = [c['id'] for c in response.data['items']]
+        self.assertIn(self.card.id, ids)
+        self.assertNotIn(other_card.id, ids)
+
+    def test_status_filter(self):
+        response = self.client.get(f'{self.base}?status=DONE')
+
+        self.assertEqual(response.data['items'], [])
+
+    def test_invalid_status(self):
+        self.assertEqual(self.client.get(f'{self.base}?status=NOPE').status_code, 400)
+
+    def test_detail_includes_steps_blanks_and_tone(self):
+        response = self.client.get(f'{self.base}/{self.card.id}')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data['steps'][0]['text'], 'Sentry 확인')
+        self.assertEqual(response.data['blanks'][0]['questionEn'], 'Which environment?')
+        self.assertEqual(response.data['toneEvidences'][0]['quote'], '시간 되실 때')
+        self.assertEqual(response.data['toneNote'], '내일 오전이 실제 기한입니다.')
+        self.assertEqual(response.data['originalText'], '결제 로그 봐주세요')
+
+    def test_status_update(self):
+        response = self.client.patch(
+            f'{self.base}/{self.card.id}', {'status': 'DONE'}, format='json'
+        )
+
+        self.assertEqual(response.data['status'], 'DONE')
+
+    def test_outsider_cannot_read(self):
+        outsider = User.objects.create_user(email='x@example.com', password='pw', display_name='X')
+        self.client.force_authenticate(user=outsider)
+
+        self.assertEqual(self.client.get(self.base).status_code, 403)
+
+    def test_other_company_card_is_404(self):
+        other_company = Company.objects.create(name='다른회사', code='TESTCODE2')
+        other_owner = User.objects.create_user(
+            email='oo@example.com', password='pw', display_name='OO'
+        )
+        Membership.objects.create(
+            user=other_owner, company=other_company, role=Membership.Role.OWNER
+        )
+
+        self.client.force_authenticate(user=other_owner)
+        response = self.client.get(
+            f'/api/companies/{other_company.id}/cards/{self.card.id}'
+        )
+
+        self.assertEqual(response.status_code, 404)
