@@ -1,5 +1,7 @@
 from rest_framework import serializers
 
+from accounts.models import Membership
+
 from .models import Blank, InstructionCard, Step, ToneEvidence
 
 
@@ -130,11 +132,39 @@ class CardListSerializer(serializers.Serializer):
     nextCursor = serializers.CharField(allow_null=True)
 
 
-class CardStatusUpdateSerializer(serializers.Serializer):
-    status = serializers.ChoiceField(choices=InstructionCard.Status.choices)
+# 담당자는 슬랙 멘션으로 자동 지정된다. 멘션이 없으면 비어 있고, 잘못 잡히기도 한다.
+# 사람이 고칠 수 없으면 그 카드는 아무의 일도 아닌 채로 남는다.
+class CardUpdateSerializer(serializers.Serializer):
+    status = serializers.ChoiceField(choices=InstructionCard.Status.choices, required=False)
+    assigneeId = serializers.IntegerField(required=False, allow_null=True)
+
+    def validate(self, attrs):
+        if not attrs:
+            raise serializers.ValidationError('status or assigneeId is required')
+
+        return attrs
+
+    def validate_assigneeId(self, value):
+        if value is None:
+            return None
+
+        membership = Membership.objects.filter(
+            user_id=value, company=self.context['company'], left_at__isnull=True
+        ).select_related('user').first()
+        if membership is None:
+            raise serializers.ValidationError('not a member of this company')
+
+        return membership.user
 
     def update(self, instance, validated_data):
-        instance.status = validated_data['status']
-        instance.save(update_fields=['status'])
+        fields = []
+        if 'status' in validated_data:
+            instance.status = validated_data['status']
+            fields.append('status')
+        if 'assigneeId' in validated_data:
+            instance.assignee = validated_data['assigneeId']
+            fields.append('assignee')
+
+        instance.save(update_fields=fields)
 
         return instance

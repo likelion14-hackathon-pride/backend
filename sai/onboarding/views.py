@@ -3,20 +3,18 @@ from django.shortcuts import get_object_or_404
 from drf_yasg import openapi
 from drf_yasg.utils import swagger_auto_schema
 from rest_framework import status
-from rest_framework.exceptions import PermissionDenied, ValidationError
+from rest_framework.exceptions import ValidationError
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from accounts.models import Membership
-from companies.models import Company
+from companies.access import get_owner_company
 from handbook.finalizing import finalize_entries
 from handbook.models import CompanyScope, HandbookEntry
 from policy.models import RiskKeyword
 from sources.models import Connection
 
 from . import questions, services
-from .models import Question
 from .serializers import (
     OnboardingCompleteSerializer,
     OnboardingQuestionSerializer,
@@ -31,16 +29,6 @@ SCOPE_PARAMETER = openapi.Parameter(
     description='프로젝트 지식공간 id. 주면 그 프로젝트 질문 8개를, 생략하면 회사 질문 19개를 돌려줍니다.',
     type=openapi.TYPE_INTEGER,
 )
-
-
-def get_owner_company(user, company_id):
-    company = get_object_or_404(Company, id=company_id)
-    is_owner = Membership.objects.filter(user=user, company=company, role=Membership.Role.OWNER, left_at__isnull=True).exists()
-
-    if not is_owner:
-        raise PermissionDenied('owner permission required')
-
-    return company
 
 
 # 프로젝트 질문일 때만 쓰는 지식공간. 회사 질문에 보내면 거절한다.

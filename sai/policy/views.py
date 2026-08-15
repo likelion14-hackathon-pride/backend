@@ -1,31 +1,13 @@
 from django.shortcuts import get_object_or_404
 from drf_yasg.utils import swagger_auto_schema
 from rest_framework import status
-from rest_framework.exceptions import PermissionDenied
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from accounts.models import Membership
-from companies.models import Company
+from companies.access import get_owner_company
 
 from .models import RiskKeyword
 from .serializers import RiskKeywordSerializer
-
-
-# 요청한 사용자가 해당 회사의 대표인지 확인
-def get_owner_company(user, company_id):
-    company = get_object_or_404(Company, id=company_id)
-    is_owner = Membership.objects.filter(
-        user=user,
-        company=company,
-        role=Membership.Role.OWNER,
-        left_at__isnull=True,
-    ).exists()
-
-    if not is_owner:
-        raise PermissionDenied('owner permission required')
-
-    return company
 
 
 # 위험 작업 키워드 조회 및 등록 담당 view

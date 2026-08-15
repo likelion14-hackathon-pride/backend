@@ -611,6 +611,49 @@ class CardApiTests(TestCase):
 
         self.assertEqual(response.data['status'], 'DONE')
 
+    # 담당자는 슬랙 멘션으로 잡힌다. 멘션이 없거나 잘못 잡히면 사람이 고쳐야 한다.
+    def test_assignee_update(self):
+        response = self.client.patch(
+            f'{self.base}/{self.card.id}', {'assigneeId': self.other.id}, format='json'
+        )
+
+        self.assertEqual(response.data['assigneeId'], self.other.id)
+        self.assertEqual(response.data['status'], 'NEW')
+
+    def test_assignee_can_be_cleared(self):
+        response = self.client.patch(
+            f'{self.base}/{self.card.id}', {'assigneeId': None}, format='json'
+        )
+
+        self.assertIsNone(response.data['assigneeId'])
+
+    def test_status_and_assignee_together(self):
+        response = self.client.patch(
+            f'{self.base}/{self.card.id}',
+            {'status': 'OPEN', 'assigneeId': self.other.id}, format='json',
+        )
+
+        self.assertEqual(response.data['status'], 'OPEN')
+        self.assertEqual(response.data['assigneeId'], self.other.id)
+
+    # 남의 회사 사람에게 일을 넘길 수는 없다.
+    def test_outsider_cannot_be_assigned(self):
+        outsider = User.objects.create_user(
+            email='nope@example.com', password='pw', display_name='남'
+        )
+
+        response = self.client.patch(
+            f'{self.base}/{self.card.id}', {'assigneeId': outsider.id}, format='json'
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.data['error']['field'], 'assigneeId')
+
+    def test_empty_patch_is_rejected(self):
+        response = self.client.patch(f'{self.base}/{self.card.id}', {}, format='json')
+
+        self.assertEqual(response.status_code, 400)
+
     def test_outsider_cannot_read(self):
         outsider = User.objects.create_user(email='x@example.com', password='pw', display_name='X')
         self.client.force_authenticate(user=outsider)

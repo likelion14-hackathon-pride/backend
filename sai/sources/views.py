@@ -3,19 +3,20 @@ import logging
 
 from django.conf import settings
 from django.shortcuts import get_object_or_404
+from django.utils import timezone
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_POST
 from django.http import JsonResponse, HttpResponseForbidden
 from drf_yasg import openapi
-from drf_yasg.utils import no_body, swagger_auto_schema
+from drf_yasg.utils import swagger_auto_schema
 from rest_framework import status
-from rest_framework.exceptions import PermissionDenied, ValidationError
+from rest_framework.exceptions import ValidationError
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from accounts.models import Membership
-from companies.models import Company
+from companies.access import get_owner_company
+from config.pagination import CURSOR_PARAMETER, LIMIT_PARAMETER, paginate
 
 from .models import Connection, IngestionJob, Item
 from .serializers import (
@@ -28,6 +29,7 @@ from .serializers import (
     ConnectionListSerializer,
     ConnectionSerializer,
     IngestionJobCreateSerializer,
+    IngestionJobListSerializer,
     IngestionJobSerializer,
     SlackConnectionCreateSerializer,
 )
@@ -85,17 +87,6 @@ def slack_events(request):
         logger.exception('슬랙 이벤트 처리 실패 team=%s', data.get('team_id'))
 
     return JsonResponse({'ok': True})
-
-
-# 요청한 사용자가 해당 회사의 대표인지 확인
-def get_owner_company(user, company_id):
-    company = get_object_or_404(Company, id=company_id)
-    is_owner = Membership.objects.filter(user=user, company=company, role=Membership.Role.OWNER, left_at__isnull=True).exists()
-
-    if not is_owner:
-        raise PermissionDenied('owner permission required')
-
-    return company
 
 
 # 소스 연결 목록 조회 및 슬랙 연동 view
@@ -201,6 +192,35 @@ def get_connection(company, connection_id):
     return get_object_or_404(
         Connection, id=connection_id, company=company, disconnected_at__isnull=True
     )
+
+
+class SourceConnectionDetailView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    @swagger_auto_schema(
+        operation_summary='소스 연결 해제',
+        operation_description=(
+            '연결을 끊습니다. 모아 둔 원문과 규칙, 카드는 그대로 남고 새 수집만 멈춥니다. '
+            '웹훅으로 들어오는 메시지도 더 이상 저장하지 않습니다. '
+            '토큰을 바꾸려면 해제하지 말고 슬랙 연동을 다시 호출하세요.'
+        ),
+        responses={
+            204: '해제됨',
+            401: '인증되지 않음',
+            403: 'Owner 권한 없음',
+            404: '회사 또는 연결을 찾을 수 없음',
+        },
+        tags=['Source'],
+    )
+    def delete(self, request, company_id, connection_id):
+        company = get_owner_company(request.user, company_id)
+        connection = get_connection(company, connection_id)
+
+        connection.disconnected_at = timezone.now()
+        connection.status = Connection.Status.ERROR
+        connection.save(update_fields=['disconnected_at', 'status'])
+
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 # 수집 대상 채널 목록 조회 view
@@ -362,6 +382,11 @@ def _registered_channels(connection):
     )
 
 
+JOB_STATUS_PARAMETER = openapi.Parameter(
+    'status', openapi.IN_QUERY, type=openapi.TYPE_STRING,
+    enum=['QUEUED', 'RUNNING', 'SUCCEEDED', 'PARTIAL', 'FAILED'],
+)
+
 # Swagger는 정수 배열 필드에 [0] 을 예시로 채워 넣는다.
 # 그대로 보내면 없는 채널이라 400이 나므로, 기본 예시를 빈 객체로 지정한다.
 INGESTION_JOB_REQUEST_BODY = openapi.Schema(
@@ -383,6 +408,40 @@ INGESTION_JOB_REQUEST_BODY = openapi.Schema(
 # 슬랙 메시지 수집 작업 view
 class IngestionJobListCreateView(APIView):
     permission_classes = [IsAuthenticated]
+
+    @swagger_auto_schema(
+        operation_summary='수집 작업 목록',
+        operation_description=(
+            '최근 작업부터 돌려줍니다. 사람이 시작한 것과 워커가 주기적으로 만든 것이 함께 나오며, '
+            'kind 로 구분합니다. COLLECT 는 슬랙에서 새로 가져온 작업, '
+            'PROCESS 는 이미 받아 둔 원문만 처리한 작업입니다.'
+        ),
+        manual_parameters=[JOB_STATUS_PARAMETER, CURSOR_PARAMETER, LIMIT_PARAMETER],
+        responses={
+            200: IngestionJobListSerializer(),
+            400: '잘못된 요청',
+            401: '인증되지 않음',
+            403: 'Owner 권한 없음',
+            404: '회사를 찾을 수 없음',
+        },
+        tags=['Source'],
+    )
+    def get(self, request, company_id):
+        company = get_owner_company(request.user, company_id)
+        jobs = IngestionJob.objects.filter(company=company)
+
+        job_status = request.query_params.get('status')
+        if job_status:
+            if job_status not in IngestionJob.Status.values:
+                raise ValidationError({'status': ['invalid status']})
+            jobs = jobs.filter(status=job_status)
+
+        items, next_cursor = paginate(jobs, request)
+
+        return Response(
+            {'items': IngestionJobSerializer(items, many=True).data, 'nextCursor': next_cursor},
+            status=status.HTTP_200_OK,
+        )
 
     @swagger_auto_schema(
         operation_summary='슬랙 메시지 수집 시작',
