@@ -99,7 +99,13 @@ class AskView(APIView):
 
         thread_id = serializer.validated_data.get('threadId')
         if thread_id:
-            thread = get_object_or_404(Thread, id=thread_id, company=company, user=request.user)
+            thread = get_object_or_404(
+                Thread.objects.select_related('scope'),
+                id=thread_id, company=company, user=request.user,
+            )
+            # 후속 질문에 scopeId 를 다시 안 보내면 화면에는 프로젝트가 선택돼 있는데
+            # 검색만 회사 전반으로 풀린다. 스레드에 저장해 둔 것을 기본값으로 쓴다.
+            scope = scope or thread.scope
         else:
             thread = Thread.objects.create(company=company, user=request.user, scope=scope)
 

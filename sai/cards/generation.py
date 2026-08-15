@@ -11,6 +11,7 @@ from pgvector.django import CosineDistance
 from pydantic import BaseModel, Field
 
 from handbook.models import HandbookEntry
+from handbook.services import scopes_in_view
 from sources.classifier import build_lookup
 from sources.models import Chunk, Identity, RawDocument
 from sources.text import normalize_slack_text
@@ -324,16 +325,19 @@ def _judge(client, documents, channels, users):
 
 
 # 이 지시와 관련된 확정 규칙. Step 이 근거로 삼는다.
+# 프로젝트 채널의 지시에도 회사 규칙이 적용된다. 프로젝트만 뒤지면 '배포 전 공지' 같은
+# 회사 규칙을 단계에 달지 못한다.
 def _find_rules(client, company, text, scope):
     vector = client.embeddings.create(
         model=settings.OPENAI_EMBEDDING_MODEL, input=[text]
     ).data[0].embedding
 
     entries = HandbookEntry.objects.filter(
-        company=company, status=HandbookEntry.Status.CONFIRMED, embedding_ko__isnull=False
+        company=company,
+        status=HandbookEntry.Status.CONFIRMED,
+        embedding_ko__isnull=False,
+        scope_id__in=scopes_in_view(company, scope),
     )
-    if scope is not None:
-        entries = entries.filter(scope=scope)
 
     return list(
         entries.annotate(distance=CosineDistance('embedding_ko', vector))
