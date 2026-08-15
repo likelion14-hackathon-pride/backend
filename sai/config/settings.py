@@ -244,5 +244,7 @@ OPENAI_CLASSIFIER_MODEL = get_secret('OPENAI_CLASSIFIER_MODEL', 'gpt-4o-mini')
 # 초안 작성은 여러 발언을 묶어 규칙 문장을 써야 해서 상위 모델을 쓴다.
 OPENAI_DRAFTER_MODEL = get_secret('OPENAI_DRAFTER_MODEL', 'gpt-4o')
 OPENAI_TRANSLATOR_MODEL = get_secret('OPENAI_TRANSLATOR_MODEL', 'gpt-4o-mini')
+# 답변은 근거 안에서만 말하도록 절제해야 해서 상위 모델을 쓴다.
+OPENAI_ANSWER_MODEL = get_secret('OPENAI_ANSWER_MODEL', 'gpt-4o')
 # 1536차원. handbook_entry.embedding_ko/en 과 sources_chunk.embedding 이 이 크기다.
 OPENAI_EMBEDDING_MODEL = get_secret('OPENAI_EMBEDDING_MODEL', 'text-embedding-3-small')

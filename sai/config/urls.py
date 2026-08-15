@@ -44,6 +44,7 @@ urlpatterns = [
     path('api/companies/', include('policy.urls')),
     path('api/companies/', include('handbook.urls')),
     path('api/companies/', include('sources.urls')),
+    path('api/companies/', include('qna.urls')),
     path('swagger/', schema_view.with_ui('swagger', cache_timeout=0), name='schema-swagger-ui'),
     path("api/slack/events/", slack_events),
 ]
