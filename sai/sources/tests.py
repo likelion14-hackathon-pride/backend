@@ -16,7 +16,8 @@ from .classifier import (
     MessageLabel,
     classify_documents,
 )
-from .models import Connection, Identity, Item, RawDocument
+from .ingestion import PROGRESS_COLLECTED
+from .models import Connection, Identity, IngestionJob, Item, RawDocument
 from .services import register_joined_channels
 from .slack import SlackError
 from .text import normalize_slack_text
@@ -507,7 +508,8 @@ class IngestionTests(TestCase):
         self.client.force_authenticate(user=self.owner)
         self.url = f'/api/companies/{self.company.id}/ingestion-jobs'
 
-    def ingest(self, history=None, replies=None, history_error=None, payload=None, users=None):
+    def ingest(self, history=None, replies=None, history_error=None, payload=None, users=None,
+               on_classify=None):
         # 분류는 여기서 검증 대상이 아니다. 막지 않으면 실제 OpenAI를 호출한다.
         with patch('sources.ingestion.SlackClient.auth_test', return_value=AUTH_WITH_URL), \
              patch('sources.ingestion.SlackClient.users_list',
@@ -517,7 +519,8 @@ class IngestionTests(TestCase):
                    side_effect=history_error), \
              patch('sources.ingestion.SlackClient.thread_replies',
                    return_value=replies if replies is not None else REPLIES), \
-             patch('sources.ingestion.classify_documents', return_value=(0, [])) as classify, \
+             patch('sources.ingestion.classify_documents',
+                   return_value=(0, []), side_effect=on_classify) as classify, \
              patch('sources.ingestion.sync_chunks', return_value=(0, [])) as chunks, \
              patch('sources.ingestion.draft_entries', return_value=([], [])) as draft, \
              patch('sources.ingestion.generate_cards', return_value=([], [])) as cards:
@@ -685,6 +688,20 @@ class IngestionTests(TestCase):
         self.assertEqual(response.data['status'], 'SUCCEEDED')
         self.assertEqual(response.data['documentCount'], 4)
         self.assertIsNotNone(response.data['completedAt'])
+
+    # 수집만 끝나도 100이 되면 화면의 진행바가 멈춘 것처럼 보인다.
+    # 분류가 시작되는 시점의 진행률이 100보다 작아야 한다.
+    def test_progress_reflects_whole_pipeline(self):
+        seen = []
+
+        def record(company_id):
+            seen.append(IngestionJob.objects.get(company_id=company_id).progress)
+            return 0, []
+
+        response = self.ingest(on_classify=record)
+
+        self.assertEqual(seen, [PROGRESS_COLLECTED])
+        self.assertEqual(response.data['progress'], 100)
 
     def test_channel_failure_is_recorded(self):
         response = self.ingest(history_error=SlackError('not_in_channel'))
