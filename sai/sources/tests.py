@@ -515,9 +515,13 @@ class IngestionTests(TestCase):
              patch('sources.ingestion.SlackClient.thread_replies',
                    return_value=replies if replies is not None else REPLIES), \
              patch('sources.ingestion.classify_documents', return_value=(0, [])) as classify, \
-             patch('sources.ingestion.draft_entries', return_value=([], [])) as draft:
+             patch('sources.ingestion.sync_chunks', return_value=(0, [])) as chunks, \
+             patch('sources.ingestion.draft_entries', return_value=([], [])) as draft, \
+             patch('sources.ingestion.generate_cards', return_value=([], [])) as cards:
             self.classify_mock = classify
+            self.chunk_mock = chunks
             self.draft_mock = draft
+            self.card_mock = cards
             return self.client.post(self.url, payload or {}, format='json')
 
     # --- 수집 ---
@@ -702,7 +706,10 @@ class IngestionTests(TestCase):
              patch('sources.ingestion.SlackClient.users_list', return_value=USERS), \
              patch('sources.ingestion.SlackClient.channel_history', side_effect=history), \
              patch('sources.ingestion.SlackClient.thread_replies', return_value=REPLIES), \
-             patch('sources.ingestion.classify_documents', return_value=(0, [])):
+             patch('sources.ingestion.classify_documents', return_value=(0, [])), \
+             patch('sources.ingestion.sync_chunks', return_value=(0, [])), \
+             patch('sources.ingestion.draft_entries', return_value=([], [])), \
+             patch('sources.ingestion.generate_cards', return_value=([], [])):
             response = self.client.post(self.url, {}, format='json')
 
         self.assertEqual(response.data['status'], 'PARTIAL')
@@ -775,6 +782,8 @@ class IngestionTests(TestCase):
              patch('sources.ingestion.SlackClient.channel_history', return_value=HISTORY), \
              patch('sources.ingestion.SlackClient.thread_replies', return_value=REPLIES), \
              patch('sources.ingestion.classify_documents', return_value=(0, [])), \
+             patch('sources.ingestion.sync_chunks', return_value=(0, [])), \
+             patch('sources.ingestion.generate_cards', return_value=([], [])), \
              patch('sources.ingestion.draft_entries', return_value=([1, 2, 3], [])):
             response = self.client.post(self.url, {}, format='json')
 
@@ -788,10 +797,14 @@ class IngestionTests(TestCase):
              patch('sources.ingestion.SlackClient.thread_replies', return_value=REPLIES), \
              patch('sources.ingestion.classify_documents',
                    side_effect=ImproperlyConfigured('no key')), \
+             patch('sources.ingestion.sync_chunks') as chunks, \
+             patch('sources.ingestion.generate_cards') as cards, \
              patch('sources.ingestion.draft_entries') as draft:
             self.client.post(self.url, {}, format='json')
 
         draft.assert_not_called()
+        chunks.assert_not_called()
+        cards.assert_not_called()
 
     # 분류가 실패해도 수집한 원문은 남고 작업만 PARTIAL이 된다.
     def test_classification_failure_is_partial(self):
