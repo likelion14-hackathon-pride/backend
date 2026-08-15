@@ -122,6 +122,22 @@ class AskTests(TestCase):
 
         self.assertEqual(response.data['resultType'], 'NEEDS_OWNER')
 
+    # 한국어 초안을 응답으로만 주고 버리면 나중에 에스컬레이션에서 되찾을 수 없다.
+    def test_owner_draft_is_persisted(self):
+        response = self.ask(
+            verdict='NO_SOURCE', answer='', cited=(), draft_ko='대표님, 연차 며칠인가요?'
+        )
+        message = Message.objects.get(id=response.data['messageId'])
+
+        self.assertEqual(message.body_ko, '대표님, 연차 며칠인가요?')
+
+    # 답변이 있는 경우의 body_ko 는 초안이 아니다.
+    def test_grounded_message_has_no_draft(self):
+        response = self.ask()
+        message = Message.objects.get(id=response.data['messageId'])
+
+        self.assertIsNone(message.body_ko)
+
     def test_out_of_scope(self):
         response = self.ask(verdict='OUT_OF_SCOPE', answer='', cited=())
 
