@@ -10,7 +10,7 @@ from openai import OpenAI, OpenAIError
 from pgvector.django import CosineDistance
 from pydantic import BaseModel, Field
 
-from handbook.models import HandbookEntry
+from handbook.retrieval import search_rules
 from handbook.services import scopes_in_view
 from sources.classifier import build_lookup
 from sources.models import Chunk, Identity, RawDocument
@@ -27,6 +27,7 @@ JUDGE_BATCH_SIZE = 25
 # 카드 하나에 붙일 후보 수.
 MAX_RULES = 4
 MAX_TONE_CASES = 5
+RULE_MAX_DISTANCE = 0.8
 
 # 같은 요청으로 볼 코사인 거리. 실측에서 같은 요청은 0.09, 다른 요청은 0.31 이상이었다.
 DUPLICATE_DISTANCE = 0.15
@@ -324,26 +325,17 @@ def _judge(client, documents, channels, users):
     return instructions
 
 
-# 이 지시와 관련된 확정 규칙. Step 이 근거로 삼는다.
 # 프로젝트 채널의 지시에도 회사 규칙이 적용된다. 프로젝트만 뒤지면 '배포 전 공지' 같은
 # 회사 규칙을 단계에 달지 못한다.
 def _find_rules(client, company, text, scope):
     vector = client.embeddings.create(
         model=settings.OPENAI_EMBEDDING_MODEL, input=[text]
     ).data[0].embedding
-
-    entries = HandbookEntry.objects.filter(
-        company=company,
-        status=HandbookEntry.Status.CONFIRMED,
-        embedding_ko__isnull=False,
-        scope_id__in=scopes_in_view(company, scope),
+    rules = search_rules(
+        vector, company, scopes_in_view(company, scope), MAX_RULES, RULE_MAX_DISTANCE
     )
 
-    return list(
-        entries.annotate(distance=CosineDistance('embedding_ko', vector))
-        .filter(distance__lte=0.8)
-        .order_by('distance')[:MAX_RULES]
-    ), vector
+    return rules, vector
 
 
 # 말투 해석의 근거가 될 과거 대화. 같은 문서는 제외한다.

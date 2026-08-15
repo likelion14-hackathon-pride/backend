@@ -76,5 +76,8 @@ def api_exception_handler(exc, context):
     response.data = {
         'error': {'code': CODE_ALIASES.get(code, code), 'field': field, 'message': message}
     }
+    retry_after = getattr(exc, 'retry_after', None)
+    if retry_after is not None:
+        response['Retry-After'] = str(retry_after)
 
     return response

@@ -10,8 +10,6 @@ from companies.models import Company
 from .pagination import paginate
 
 
-# 에러 응답은 종류를 가리지 않고 한 가지 모양으로 나가야 한다.
-# 인증만 {"error": {...}} 이고 나머지는 DRF 기본 형태였다.
 class ErrorEnvelopeTests(TestCase):
     def setUp(self):
         self.company = Company.objects.create(name='에코랩', code='TESTCODE1')
@@ -61,11 +59,11 @@ class ErrorEnvelopeTests(TestCase):
     def test_field_validation(self):
         self.client.force_authenticate(user=self.owner)
 
-        response = self.client.get(f'/api/companies/{self.company.id}/cards?status=NOPE')
+        response = self.client.get(f'/api/companies/{self.company.id}/cards?column=NOPE')
 
         self.assertEqual(response.status_code, 400)
-        self.assertEnvelope(response, field='status')
-        self.assertEqual(response.data['error']['message'], 'invalid status')
+        self.assertEnvelope(response, field='column')
+        self.assertEqual(response.data['error']['message'], 'invalid column')
 
     # 업무 코드는 붙을 칸이 정해져 있다.
     def test_business_code_carries_its_field(self):

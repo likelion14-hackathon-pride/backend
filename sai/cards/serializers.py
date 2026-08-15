@@ -1,6 +1,7 @@
 from rest_framework import serializers
 
 from accounts.models import Membership
+from qna.serializers import RiskWarningSerializer
 
 from .models import Blank, InstructionCard, Step, ToneEvidence
 
@@ -40,6 +41,8 @@ class ToneEvidenceSerializer(serializers.ModelSerializer):
 
 
 class CardListItemSerializer(serializers.ModelSerializer):
+    # 보드 열. cards_for() 가 계산해 붙인다.
+    column = serializers.CharField(read_only=True)
     assigneeId = serializers.IntegerField(source='assignee_id', read_only=True)
     assigneeName = serializers.CharField(source='assignee.display_name', read_only=True, default=None)
     scopeId = serializers.IntegerField(source='scope_id', read_only=True)
@@ -55,16 +58,23 @@ class CardListItemSerializer(serializers.ModelSerializer):
     duplicateOfId = serializers.IntegerField(source='duplicate_of_id', read_only=True)
     duplicateCount = serializers.SerializerMethodField()
     sourceLabel = serializers.CharField(source='document.item.label', read_only=True, default=None)
+    permalink = serializers.CharField(source='document.permalink', read_only=True, default=None)
     requestedBy = serializers.CharField(
         source='document.author_identity.external_handle', read_only=True, default=None
     )
     blankCount = serializers.SerializerMethodField()
+    openQuestionCount = serializers.IntegerField(source='open_question_count', read_only=True)
+    answeredQuestionCount = serializers.IntegerField(
+        source='answered_question_count', read_only=True
+    )
+    isRead = serializers.SerializerMethodField()
     createdAt = serializers.DateTimeField(source='created_at', read_only=True)
 
     class Meta:
         model = InstructionCard
         fields = [
             'id',
+            'column',
             'status',
             'purpose',
             'purposeEn',
@@ -84,13 +94,20 @@ class CardListItemSerializer(serializers.ModelSerializer):
             'scopeId',
             'scopeName',
             'sourceLabel',
+            'permalink',
             'requestedBy',
             'blankCount',
+            'openQuestionCount',
+            'answeredQuestionCount',
+            'isRead',
             'createdAt',
         ]
 
     def get_blankCount(self, obj):
         return obj.blanks.count()
+
+    def get_isRead(self, obj):
+        return obj.read_at is not None
 
     # 같은 요청이 슬랙에 올라온 횟수. 1이면 한 번만 올라온 것이다.
     # 목록에서는 view 가 미리 세어 둔다. 없으면 직접 세되 그만큼 쿼리가 늘어난다.
@@ -100,19 +117,44 @@ class CardListItemSerializer(serializers.ModelSerializer):
         return (obj.duplicates.count() if counted is None else counted) + 1
 
 
+class RelatedRuleSerializer(serializers.Serializer):
+    entryId = serializers.IntegerField(source='id')
+    title = serializers.CharField()
+    bodyKo = serializers.CharField(source='body_ko', allow_null=True)
+    bodyEn = serializers.CharField(source='body_en', allow_null=True)
+    scopeName = serializers.CharField(source='scope.name')
+
+
+class CardQuestionSerializer(serializers.Serializer):
+    escalationId = serializers.IntegerField(source='escalation.id')
+    questionEn = serializers.CharField(source='escalation.question_en', allow_null=True)
+    draftKo = serializers.CharField(source='escalation.draft_ko', allow_null=True)
+    status = serializers.CharField(source='escalation.status')
+    answerEn = serializers.CharField(source='escalation.answer_en', allow_null=True)
+    answerKo = serializers.CharField(source='escalation.answer_ko', allow_null=True)
+    sentAt = serializers.DateTimeField(source='escalation.sent_at', allow_null=True)
+    answeredAt = serializers.DateTimeField(source='escalation.answered_at', allow_null=True)
+    acknowledgedAt = serializers.DateTimeField(
+        source='escalation.acknowledged_at', allow_null=True
+    )
+    blankId = serializers.IntegerField(source='id')
+
+
 class CardDetailSerializer(CardListItemSerializer):
     documentId = serializers.IntegerField(source='document_id', read_only=True)
-    permalink = serializers.CharField(source='document.permalink', read_only=True, default=None)
     originalText = serializers.CharField(source='document.raw_text', read_only=True, default=None)
     steps = StepSerializer(many=True, read_only=True)
     blanks = BlankSerializer(many=True, read_only=True)
     toneEvidences = ToneEvidenceSerializer(source='tone_evidences', many=True, read_only=True)
     duplicateSources = serializers.SerializerMethodField()
+    relatedRules = RelatedRuleSerializer(many=True, read_only=True)
+    riskWarnings = RiskWarningSerializer(many=True, read_only=True)
+    questions = CardQuestionSerializer(many=True, read_only=True)
 
     class Meta(CardListItemSerializer.Meta):
         fields = CardListItemSerializer.Meta.fields + [
-            'documentId', 'permalink', 'originalText', 'steps', 'blanks', 'toneEvidences',
-            'duplicateSources',
+            'documentId', 'originalText', 'steps', 'blanks', 'toneEvidences',
+            'duplicateSources', 'relatedRules', 'riskWarnings', 'questions',
         ]
 
     # 같은 요청이 다시 올라온 슬랙 원문들. 언제 또 재촉했는지 볼 수 있어야 한다.
@@ -130,6 +172,10 @@ class CardDetailSerializer(CardListItemSerializer):
 class CardListSerializer(serializers.Serializer):
     items = CardListItemSerializer(many=True)
     nextCursor = serializers.CharField(allow_null=True)
+
+
+class CardAskSerializer(serializers.Serializer):
+    question = serializers.CharField(max_length=2000, trim_whitespace=True)
 
 
 # 담당자는 슬랙 멘션으로 자동 지정된다. 멘션이 없으면 비어 있고, 잘못 잡히기도 한다.
