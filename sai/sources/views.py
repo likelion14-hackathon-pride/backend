@@ -532,7 +532,7 @@ class SourceRepositoryDetailView(APIView):
 JOB_STATUS_PARAMETER = enum_parameter('status', IngestionJob.Status)
 
 # Swagger는 정수 배열 필드에 [0] 을 예시로 채워 넣는다.
-# 그대로 보내면 없는 채널이라 400이 나므로, 기본 예시를 빈 객체로 지정한다.
+# 그대로 보내면 없는 Item이라 400이 나므로, 기본 예시를 빈 객체로 지정한다.
 INGESTION_JOB_REQUEST_BODY = openapi.Schema(
     type=openapi.TYPE_OBJECT,
     properties={
@@ -561,7 +561,7 @@ class IngestionJobListCreateView(APIView):
         operation_summary='수집 작업 목록',
         operation_description=(
             '최근 작업부터 돌려줍니다. 사람이 시작한 것과 워커가 주기적으로 만든 것이 함께 나오며, '
-            'kind 로 구분합니다. COLLECT 는 슬랙에서 새로 가져온 작업, '
+            'kind 로 구분합니다. COLLECT 는 외부 소스에서 새로 가져온 작업, '
             'PROCESS 는 이미 받아 둔 원문만 처리한 작업입니다.'
         ),
         manual_parameters=[JOB_STATUS_PARAMETER, CURSOR_PARAMETER, LIMIT_PARAMETER],
@@ -582,19 +582,20 @@ class IngestionJobListCreateView(APIView):
         return paged_response(IngestionJobSerializer, jobs, request)
 
     @swagger_auto_schema(
-        operation_summary='슬랙 메시지 수집 시작',
+        operation_summary='외부 소스 원문 수집 시작',
         operation_description=(
-            '수집 대상 채널의 메시지를 원문으로 가져옵니다. 스레드 답글도 함께 수집합니다. '
-            'itemIds를 생략하면 등록된 채널 전체가 대상입니다. '
-            '이미 가져온 메시지는 다시 저장하지 않습니다(내용이 바뀌면 갱신). '
+            'provider가 SLACK이면 채널 메시지와 스레드 답글을 가져옵니다. '
+            'GITHUB이면 레포의 README, Issue, PR 및 댓글을 가져옵니다. '
+            'provider를 생략하면 SLACK이며, itemIds를 생략하면 해당 소스의 전체 Item이 대상입니다. '
+            '이미 가져온 원문은 중복 저장하지 않고 변경·삭제 상태를 반영합니다. '
             '작업은 큐에 쌓이고 워커가 처리하므로 즉시 202로 응답합니다. '
-            'GET /ingestion-jobs/{jobId} 로 progress 와 status 를 폴링하세요. '
-            '채널당 최대 1000건까지 가져옵니다.'
+            'GET /ingestion-jobs/{jobId} 로 progress 와 status 를 확인할 수 있습니다. '
+            '이번 GitHub 작업은 원문 저장까지만 처리하며 AI 처리는 별도 작업에서 연결합니다.'
         ),
         request_body=INGESTION_JOB_REQUEST_BODY,
         responses={
             202: IngestionJobSerializer(),
-            400: '잘못된 요청 (수집 대상 채널 없음)',
+            400: '잘못된 요청 (수집 대상 Item 없음)',
             401: '인증되지 않음',
             403: 'Owner 권한 없음',
             404: '회사 또는 연결을 찾을 수 없음',
