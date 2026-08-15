@@ -10,7 +10,7 @@ from pydantic import BaseModel
 
 from sources.classifier import build_lookup
 from sources.models import RawDocument
-from sources.text import normalize_slack_text
+from sources.text import normalize_document_text
 
 from .models import CompanyScope, HandbookEntry, HandbookEvidence
 
@@ -20,7 +20,7 @@ DRAFTER_VERSION = 'draft-v1'
 # 한 번에 모델에 넣는 원문 수. 한 범위 안의 규칙끼리 묶으려면 함께 봐야 한다.
 BATCH_SIZE = 40
 
-SYSTEM_PROMPT = """You turn Slack messages into company handbook rules.
+SYSTEM_PROMPT = """You turn Slack messages and GitHub repository documents into company handbook rules.
 
 The messages given to you were already classified as containing rules. The readers are foreign
 employees who need to know how this company works.
@@ -83,19 +83,38 @@ def _resolve_scope(document, fallback):
 
 
 def _render(document, index, channels, users):
-    text = normalize_slack_text(document.raw_text, channels, users)
+    text = normalize_document_text(document, channels, users)
     author = document.author_identity.external_handle if document.author_identity else '?'
+    occurred_at = document.occurred_at.strftime('%Y-%m-%d') if document.occurred_at else '?'
+    source = document.item.connection.kind
 
-    return f'[{index}] author={author} at={document.occurred_at:%Y-%m-%d}\n    text: {text}'
+    return (
+        f'[{index}] source={source} location={document.item.label} '
+        f'author={author} at={occurred_at}\n    text: {text}'
+    )
 
 
 # 모델이 인용을 지어내지 않았는지 원문과 대조한다.
 # 정규화한 본문 기준으로 확인한다. 모델이 본 것이 그 텍스트이기 때문.
 def _verify_quote(quote, document, channels, users):
-    source = normalize_slack_text(document.raw_text, channels, users)
+    source = normalize_document_text(document, channels, users)
     cleaned = quote.strip().strip('"“”\'')
 
     return cleaned if cleaned and cleaned in source else None
+
+
+def _entry_origin(document):
+    if document.item.connection.kind == 'GITHUB':
+        return HandbookEntry.Origin.GITHUB
+
+    return HandbookEntry.Origin.SLACK
+
+
+def _evidence_tag(document):
+    if document.item.connection.kind == 'GITHUB':
+        return HandbookEvidence.Tag.GITHUB
+
+    return HandbookEvidence.Tag.SLACK
 
 
 def _build_entry(company, scope, rule, documents, channels, users):
@@ -128,7 +147,7 @@ def _build_entry(company, scope, rule, documents, channels, users):
     entry.original_lang = 'ko'
     entry.status = HandbookEntry.Status.DRAFT
     entry.confidence = rule.confidence
-    entry.origin = HandbookEntry.Origin.SLACK
+    entry.origin = _entry_origin(verified[0][0])
     entry.save()
 
     # 근거는 매번 새로 쓴다. 초안을 다시 만들면 인용도 바뀌기 때문.
@@ -139,7 +158,7 @@ def _build_entry(company, scope, rule, documents, channels, users):
             entry=entry,
             document=document,
             quote=quote,
-            tag=HandbookEvidence.Tag.SLACK,
+            tag=_evidence_tag(document),
             source_label=document.item.label,
             speaker_name=(
                 document.author_identity.external_handle if document.author_identity else None
@@ -186,7 +205,7 @@ def draft_entries(company):
             classified_as=RawDocument.ClassifiedAs.INSTRUCTION,
             sync_state=RawDocument.SyncState.CURRENT,
         )
-        .select_related('item', 'item__scope', 'author_identity')
+        .select_related('item__connection', 'item__scope', 'author_identity')
         # 초안이 인덱스로 원문을 가리킨다. 동시각 문서가 있으면 근거가 어긋난다.
         .order_by('occurred_at', 'id')
     )
@@ -238,7 +257,7 @@ def _prune_stale_drafts(company, entries):
     HandbookEntry.objects.filter(
         company=company,
         status=HandbookEntry.Status.DRAFT,
-        origin=HandbookEntry.Origin.SLACK,
+        origin__in=[HandbookEntry.Origin.SLACK, HandbookEntry.Origin.GITHUB],
         # 보류는 대표가 의도적으로 남겨 둔 것이라 지우면 안 된다.
         reviewed_at__isnull=True,
     ).exclude(id__in=[entry.id for entry in entries]).delete()

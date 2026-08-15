@@ -7,7 +7,7 @@ from openai import OpenAI, OpenAIError
 
 from .classifier import build_lookup
 from .models import Chunk, RawDocument
-from .text import normalize_slack_text, redact_secrets
+from .text import normalize_document_text, redact_secrets
 
 # 임베딩 한 요청에 넣는 텍스트 수.
 BATCH_SIZE = 100
@@ -26,13 +26,13 @@ def _language(text):
     return 'ko' if HANGUL.search(text) else 'en'
 
 
-# 슬랙 메시지는 이미 짧아서 나눌 필요가 없다. 문서 하나가 청크 하나다.
-# 나중에 파일 업로드처럼 긴 원문이 들어오면 여기서 쪼개면 된다.
+# 현재는 원문 하나를 청크 하나로 저장한다.
+# 나중에 긴 파일을 지원하면 여기서 쪼개면 된다.
 def build_chunks(company):
     documents = list(
         RawDocument.objects.filter(
             company=company, sync_state=RawDocument.SyncState.CURRENT
-        ).select_related('item', 'item__scope')
+        ).select_related('item__connection', 'item__scope')
     )
     if not documents:
         return []
@@ -46,7 +46,7 @@ def build_chunks(company):
     touched = []
     for document in documents:
         text, was_redacted = redact_secrets(
-            normalize_slack_text(document.raw_text, channels, users)
+            normalize_document_text(document, channels, users)
         )
         if not text:
             continue
