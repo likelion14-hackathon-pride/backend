@@ -582,15 +582,17 @@ class IngestionJobListCreateView(APIView):
         return paged_response(IngestionJobSerializer, jobs, request)
 
     @swagger_auto_schema(
-        operation_summary='외부 소스 원문 수집 시작',
+        operation_summary='외부 소스 수집 및 AI 처리 시작',
         operation_description=(
             'provider가 SLACK이면 채널 메시지와 스레드 답글을 가져옵니다. '
             'GITHUB이면 레포의 README, Issue, PR 및 댓글을 가져옵니다. '
             'provider를 생략하면 SLACK이며, itemIds를 생략하면 해당 소스의 전체 Item이 대상입니다. '
             '이미 가져온 원문은 중복 저장하지 않고 변경·삭제 상태를 반영합니다. '
+            '수집한 내용은 AI가 규칙·작업·일반 맥락으로 분류하고, '
+            '핸드북 초안·검색용 임베딩·지시 카드를 생성합니다. '
+            'GitHub 레포에 연결된 프로젝트 범위가 있으면 핸드북 초안과 카드에 같이 반영됩니다. '
             '작업은 큐에 쌓이고 워커가 처리하므로 즉시 202로 응답합니다. '
-            'GET /ingestion-jobs/{jobId} 로 progress 와 status 를 확인할 수 있습니다. '
-            '이번 GitHub 작업은 원문 저장까지만 처리하며 AI 처리는 별도 작업에서 연결합니다.'
+            'GET /ingestion-jobs/{jobId} 로 progress 와 status 를 확인할 수 있습니다.'
         ),
         request_body=INGESTION_JOB_REQUEST_BODY,
         responses={
