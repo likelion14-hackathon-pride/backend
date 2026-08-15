@@ -47,6 +47,41 @@ class WorkerTests(TestCase):
 
         self.assertIsNotNone(claim_job().started_at)
 
+    # --- 작업 종류 ---
+
+    # PROCESS 는 웹훅이 이미 받아 둔 원문만 처리한다. 슬랙을 다시 읽으면 낭비다.
+    @override_settings(OPENAI_API_KEY='test-key')
+    def test_process_job_does_not_call_slack(self):
+        job = self.job(kind=IngestionJob.Kind.PROCESS)
+
+        with patch('sources.ingestion.SlackClient') as slack, \
+             patch('sources.ingestion.has_pending_work', return_value=True), \
+             patch('sources.ingestion.classify_documents', return_value=(0, [])), \
+             patch('sources.ingestion.sync_chunks', return_value=(0, [])), \
+             patch('sources.ingestion.draft_entries', return_value=([], [])), \
+             patch('sources.ingestion.generate_cards', return_value=([], [])):
+            run_job(job)
+
+        self.assertFalse(slack.called)
+        job.refresh_from_db()
+        self.assertEqual(job.status, IngestionJob.Status.SUCCEEDED)
+
+    # 초안 생성은 매번 규칙 문서 전체를 다시 부른다. 바뀐 게 없으면 부르면 안 된다.
+    @override_settings(OPENAI_API_KEY='test-key')
+    def test_nothing_pending_skips_the_ai_stages(self):
+        job = self.job(kind=IngestionJob.Kind.PROCESS)
+
+        with patch('sources.ingestion.has_pending_work', return_value=False), \
+             patch('sources.ingestion.classify_documents') as classify, \
+             patch('sources.ingestion.draft_entries') as draft:
+            run_job(job)
+
+        self.assertFalse(classify.called)
+        self.assertFalse(draft.called)
+        job.refresh_from_db()
+        self.assertEqual(job.status, IngestionJob.Status.SUCCEEDED)
+        self.assertEqual(job.progress, 100)
+
     # --- 죽은 워커가 남긴 작업 ---
 
     # 워커가 중간에 내려가면 RUNNING 인 채로 남아 화면에서 영원히 진행 중으로 보인다.

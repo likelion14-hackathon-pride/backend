@@ -7,11 +7,16 @@ from django.utils import timezone
 
 from .ingestion import run_ingestion
 from .models import Connection, IngestionJob
+from .scheduling import enqueue_due_jobs
 
 logger = logging.getLogger(__name__)
 
 # 큐가 비었을 때 다시 확인하기까지 기다리는 시간.
 IDLE_SECONDS = 3
+
+# 밀린 작업을 큐에 넣고 멈춘 작업을 정리하는 주기.
+# 큐 확인만큼 자주 할 일이 아니다.
+SCHEDULE_EVERY = timedelta(seconds=60)
 
 # 이보다 오래 RUNNING 인 작업은 워커가 죽은 것으로 본다.
 # 채널이 많으면 수집만 몇 분 걸리므로 넉넉히 잡는다.
@@ -99,13 +104,21 @@ def drain(limit=None):
 # 워커 프로세스 본체.
 def work_forever(idle_seconds=IDLE_SECONDS, stop_after_idle=None):
     idle_rounds = 0
+    next_schedule = timezone.now()
     while True:
         if drain():
             idle_rounds = 0
             continue
 
-        # 큐가 빈 김에 정리한다. 바쁠 때 끼어들지 않는다.
-        reap_stale_jobs()
+        # 큐가 빈 김에 처리한다. 바쁠 때 끼어들지 않는다.
+        now = timezone.now()
+        if now >= next_schedule:
+            reap_stale_jobs(now)
+            for job in enqueue_due_jobs(now):
+                logger.info('주기 작업을 큐에 넣었습니다 job=%s kind=%s', job.id, job.kind)
+            next_schedule = now + SCHEDULE_EVERY
+            # 방금 넣은 작업을 다음 바퀴에서 바로 집는다.
+            continue
 
         idle_rounds += 1
         if stop_after_idle is not None and idle_rounds >= stop_after_idle:
