@@ -171,8 +171,20 @@ def ingest_channel(item, identity_map, workspace_url, client):
     return created, total
 
 
-# 수집 작업 실행. 지금은 요청 안에서 동기로 돌지만,
-# job만 넘기면 되도록 만들어 두어 나중에 워커로 그대로 옮길 수 있다.
+# 단계별 진행률. 수집이 끝났다고 100이 되면 화면의 진행바가 멈춘 것처럼 보인다.
+# 실제로는 수집 뒤에 분류·임베딩·초안·카드가 남아 있고 그쪽이 더 오래 걸린다.
+PROGRESS_COLLECTED = 30
+PROGRESS_CLASSIFIED = 50
+PROGRESS_EMBEDDED = 60
+PROGRESS_DRAFTED = 80
+
+
+def _set_progress(job, value):
+    job.progress = value
+    job.save(update_fields=['progress'])
+
+
+# 수집 작업 실행. 워커가 큐에서 꺼내 호출한다.
 def run_ingestion(job, connection):
     job.status = IngestionJob.Status.RUNNING
     job.save(update_fields=['status'])
@@ -204,8 +216,7 @@ def run_ingestion(job, connection):
         except SlackError as exc:
             errors.append({'itemId': item.id, 'label': item.label, 'code': exc.code})
 
-        job.progress = int(index / len(items) * 100)
-        job.save(update_fields=['progress'])
+        _set_progress(job, int(PROGRESS_COLLECTED * index / len(items)))
 
     collection_failed = bool(errors) and len(errors) == len(items)
 
@@ -215,9 +226,11 @@ def run_ingestion(job, connection):
         try:
             _, classify_errors = classify_documents(job.company_id)
             errors += classify_errors
+            _set_progress(job, PROGRESS_CLASSIFIED)
             # 과거 사례 검색용 벡터. 말투 해석과 사례 기반 답변이 여기에 기댄다.
             _, chunk_errors = sync_chunks(job.company)
             errors += chunk_errors
+            _set_progress(job, PROGRESS_EMBEDDED)
         except ImproperlyConfigured:
             errors.append({'scope': 'classify', 'code': 'openai_not_configured'})
         else:
@@ -225,6 +238,7 @@ def run_ingestion(job, connection):
                 entries, draft_errors = draft_entries(job.company)
                 errors += draft_errors
                 job.entry_count = len(entries)
+                _set_progress(job, PROGRESS_DRAFTED)
                 # 규칙과 별개로, 사람에게 내려온 지시는 카드로 만든다.
                 _, card_errors = generate_cards(job.company)
                 errors += card_errors
