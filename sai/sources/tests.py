@@ -488,6 +488,9 @@ REPLIES = [
 AUTH_WITH_URL = {**AUTH_TEST_OK, 'url': 'https://sai-project.slack.com/'}
 
 
+# 실제 서비스에서는 워커가 큐에서 꺼내 처리한다.
+# 이 클래스는 수집 결과를 검증하므로 요청 안에서 바로 돌린다.
+@override_settings(INGESTION_RUN_INLINE=True)
 class IngestionTests(TestCase):
     def setUp(self):
         self.company = Company.objects.create(name='에코랩', code='TESTCODE1')
@@ -529,7 +532,7 @@ class IngestionTests(TestCase):
     def test_collects_messages_and_thread_replies(self):
         response = self.ingest()
 
-        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.status_code, 202)
         self.assertEqual(response.data['status'], 'SUCCEEDED')
         self.assertEqual(response.data['progress'], 100)
         # 최상위 2건 + 스레드 답글 2건. 부모 중복과 빈 메시지는 제외.
@@ -756,7 +759,7 @@ class IngestionTests(TestCase):
 
         response = self.ingest(payload={})
 
-        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.status_code, 202)
         self.assertEqual(set(response.data['itemIds']), {self.item.id, other.id})
 
     def test_member_cannot_ingest(self):
