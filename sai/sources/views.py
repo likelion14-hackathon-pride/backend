@@ -1,7 +1,6 @@
 import json
 import logging
 
-from django.conf import settings
 from django.shortcuts import get_object_or_404
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_POST
@@ -36,11 +35,13 @@ from .serializers import (
     IngestionJobCreateSerializer,
     IngestionJobListSerializer,
     IngestionJobSerializer,
+    GitHubConnectionCreateSerializer,
     SlackConnectionCreateSerializer,
 )
 from .services import (
     add_channel,
     clear_connection_error,
+    connect_github,
     connect_slack,
     disconnect,
     list_available_channels,
@@ -118,18 +119,36 @@ class SourceConnectionListCreateView(APIView):
         return page_response(ConnectionSerializer, connections)
 
     @swagger_auto_schema(
-        operation_summary='슬랙 연동',
+        operation_summary='소스 연결',
         operation_description=(
-            '봇 토큰과 시그닝 시크릿을 받아 슬랙 워크스페이스를 연결합니다. '
-            '저장 전에 슬랙 auth.test로 토큰을 검증하며, 실패하면 아무것도 저장하지 않습니다. '
-            '이미 연결된 회사가 다시 호출하면 자격증명을 교체하고 200을 반환합니다. '
-            '자격증명은 암호화해 저장하며 응답에 포함하지 않습니다.'
+            'provider가 SLACK이면 봇 토큰과 시그닝 시크릿으로 워크스페이스를 연결합니다. '
+            'provider가 GITHUB이면 서버에 설정된 GitHub App 설치 정보를 검증해 연결합니다. '
+            'GitHub App 개인키는 요청으로 받거나 응답에 포함하지 않습니다.'
         ),
-        request_body=SlackConnectionCreateSerializer,
+        request_body=openapi.Schema(
+            type=openapi.TYPE_OBJECT,
+            required=['provider'],
+            properties={
+                'provider': openapi.Schema(
+                    type=openapi.TYPE_STRING,
+                    enum=[Connection.Kind.SLACK, Connection.Kind.GITHUB],
+                    description='연동할 소스 종류',
+                ),
+                'botToken': openapi.Schema(
+                    type=openapi.TYPE_STRING,
+                    description='SLACK 연결일 때 사용하는 Bot User OAuth Token',
+                ),
+                'signingSecret': openapi.Schema(
+                    type=openapi.TYPE_STRING,
+                    description='SLACK 연결일 때 사용하는 Signing Secret',
+                ),
+            },
+            example={'provider': 'GITHUB'},
+        ),
         responses={
             200: ConnectionSerializer(),
             201: ConnectionSerializer(),
-            400: '잘못된 요청 (토큰 형식 오류 / 슬랙 인증 실패 / 이미 다른 회사에 연결된 워크스페이스)',
+            400: '잘못된 요청 (소스 인증 실패 / 이미 다른 회사에 연결된 소스)',
             401: '인증되지 않음',
             403: 'Owner 권한 없음',
             404: '회사를 찾을 수 없음',
@@ -138,6 +157,18 @@ class SourceConnectionListCreateView(APIView):
     )
     def post(self, request, company_id):
         company = get_owner_company(request.user, company_id)
+        provider = request.data.get('provider')
+
+        if provider == Connection.Kind.GITHUB:
+            serializer = GitHubConnectionCreateSerializer(data=request.data)
+            serializer.is_valid(raise_exception=True)
+            connection, is_created = connect_github(company)
+
+            return Response(
+                ConnectionSerializer(connection).data,
+                status=status.HTTP_201_CREATED if is_created else status.HTTP_200_OK,
+            )
+
         serializer = SlackConnectionCreateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
@@ -152,11 +183,16 @@ class SourceConnectionListCreateView(APIView):
             status=status.HTTP_201_CREATED if is_created else status.HTTP_200_OK,
         )
 
+def get_connection(company, connection_id, kind=None):
+    filters = {
+        'id': connection_id,
+        'company': company,
+        'disconnected_at__isnull': True,
+    }
+    if kind:
+        filters['kind'] = kind
 
-def get_connection(company, connection_id):
-    return get_object_or_404(
-        Connection, id=connection_id, company=company, disconnected_at__isnull=True
-    )
+    return get_object_or_404(Connection, **filters)
 
 
 class SourceConnectionDetailView(APIView):
