@@ -122,6 +122,15 @@ class HandbookEntry(models.Model):
                 opclasses=['vector_cosine_ops'],
             ),
         ]
+        constraints = [
+            # 같은 규칙인지 가리는 열쇠다. 두 줄이 되면 초안 재생성과 Day 0 답변이
+            # 어느 쪽을 고칠지 알 수 없어진다.
+            models.UniqueConstraint(
+                fields=['company', 'dedupe_key'],
+                condition=models.Q(dedupe_key__isnull=False),
+                name='uniq_entry_dedupe_key',
+            ),
+        ]
 
 # 핸드북 항목 수정 이력 -> 수정 전 내용 기록 (버전관리?)
 class HandbookRevision(models.Model):
