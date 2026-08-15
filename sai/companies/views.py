@@ -85,7 +85,12 @@ class CompanyMemberListView(APIView):
         if limit < 1 or limit > 100:
             raise ValidationError({'limit': 'limit must be between 1 and 100'})
 
-        members = Membership.objects.select_related('user').filter(company=company, left_at__isnull=True)
+        # slackHandle 을 채우느라 구성원마다 조회하지 않도록 미리 가져온다.
+        members = (
+            Membership.objects.select_related('user')
+            .prefetch_related('user__source_identities')
+            .filter(company=company, left_at__isnull=True)
+        )
         if cursor:
             try:
                 members = members.filter(id__lt=int(cursor))

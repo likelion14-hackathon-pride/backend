@@ -146,15 +146,26 @@ class MembershipSerializer(serializers.ModelSerializer):
     companyId = serializers.IntegerField(source='company_id', read_only=True)
     status = serializers.SerializerMethodField()
     user = UserSerializer(read_only=True)
+    slackHandle = serializers.SerializerMethodField()
 
     class Meta:
         model = Membership
-        fields = ['id', 'userId', 'companyId', 'role', 'status', 'user']
+        fields = ['id', 'userId', 'companyId', 'role', 'status', 'user', 'slackHandle']
 
     def get_status(self, obj):
         if obj.left_at:
             return 'LEFT'
         return 'ACTIVE'
+
+    # 연결된 슬랙 계정 표시명. null이면 아직 매칭되지 않은 것이다.
+    # 슬랙 이메일과 가입 이메일이 같아야 수집 작업이 이어 준다.
+    def get_slackHandle(self, obj):
+        identity = next(
+            (i for i in obj.user.source_identities.all() if i.company_id == obj.company_id),
+            None,
+        )
+
+        return identity.external_handle if identity else None
 
 
 class MeSerializer(serializers.Serializer):
