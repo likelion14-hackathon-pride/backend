@@ -30,12 +30,20 @@ PAST_CASE = '급한 건 아닌데 시간 되실 때 배포 스크립트 한번 �
 def draft(**overrides):
     base = {
         'purpose': '결제 실패 로그의 원인을 파악한다',
+        'purpose_en': 'Find out why the payment failures are happening',
         'deliverable': '원인 정리 문서',
+        'deliverable_en': 'A short write-up of the cause',
         'deadline_text': '내일 오전까지',
+        'deadline_text_en': 'by tomorrow morning',
         'deadline_at': '2026-08-16T12:00:00',
         'is_deadline_inferred': False,
         'tone_note': '완곡하게 말했지만 내일 오전이 실제 기한입니다.',
-        'steps': [CardStep(text='Sentry에서 결제 실패 로그 확인', rule_index=0)],
+        'tone_note_en': 'Phrased softly, but tomorrow morning is a real deadline.',
+        'steps': [CardStep(
+            text='Sentry에서 결제 실패 로그 확인',
+            text_en='Check the payment failure logs in Sentry',
+            rule_index=0,
+        )],
         'blanks': [CardBlank(question_en='Which environment should I check?')],
         'tone_cases': [ToneCase(case_index=0, quote='시간 되실 때')],
     }
@@ -160,6 +168,37 @@ class CardGenerationTests(TestCase):
         self.assertEqual(card.status, InstructionCard.Status.NEW)
         self.assertEqual(card.scope, self.scope)
 
+    # 카드를 읽는 사람은 외국인 직원이다. 한국어만 저장되면 읽을 수가 없다.
+    @override_settings(OPENAI_API_KEY='test-key')
+    def test_card_is_stored_in_english_too(self):
+        self.generate()
+        card = InstructionCard.objects.get()
+
+        self.assertEqual(card.purpose_en, 'Find out why the payment failures are happening')
+        self.assertEqual(card.deliverable_en, 'A short write-up of the cause')
+        self.assertEqual(card.deadline_text_en, 'by tomorrow morning')
+        self.assertEqual(
+            card.tone_note_en, 'Phrased softly, but tomorrow morning is a real deadline.'
+        )
+        self.assertEqual(
+            card.steps.get().text_en, 'Check the payment failure logs in Sentry'
+        )
+
+    # 영어가 비어 오면 한국어만 남긴다. 빈 문자열을 저장하면 화면이 빈 칸을 그린다.
+    @override_settings(OPENAI_API_KEY='test-key')
+    def test_missing_english_is_stored_as_null(self):
+        self.generate(card=draft(
+            purpose_en='', deliverable_en='', deadline_text_en='', tone_note_en='',
+            steps=[CardStep(text='로그 확인', text_en='', rule_index=-1)],
+        ))
+        card = InstructionCard.objects.get()
+
+        self.assertIsNone(card.purpose_en)
+        self.assertIsNone(card.deliverable_en)
+        self.assertIsNone(card.deadline_text_en)
+        self.assertIsNone(card.tone_note_en)
+        self.assertIsNone(card.steps.get().text_en)
+
     # 멘션된 사람 중 SAI 계정이 이어진 사람이 담당자다.
     @override_settings(OPENAI_API_KEY='test-key')
     def test_assignee_from_mention(self):
@@ -218,14 +257,14 @@ class CardGenerationTests(TestCase):
 
     @override_settings(OPENAI_API_KEY='test-key')
     def test_step_without_rule(self):
-        self.generate(card=draft(steps=[CardStep(text='로그 확인', rule_index=-1)]))
+        self.generate(card=draft(steps=[CardStep(text='로그 확인', text_en='Check the logs', rule_index=-1)]))
 
         self.assertIsNone(Step.objects.get().entry)
 
     # 없는 번호를 가리키면 규칙을 붙이지 않는다.
     @override_settings(OPENAI_API_KEY='test-key')
     def test_out_of_range_rule_index_is_dropped(self):
-        self.generate(card=draft(steps=[CardStep(text='로그 확인', rule_index=99)]))
+        self.generate(card=draft(steps=[CardStep(text='로그 확인', text_en='Check the logs', rule_index=99)]))
 
         self.assertIsNone(Step.objects.get().entry)
 
@@ -305,9 +344,14 @@ class CardApiTests(TestCase):
         self.card = InstructionCard.objects.create(
             company=self.company, scope=self.scope, document=self.document,
             assignee=self.member, purpose='결제 실패 로그 원인 파악',
+            purpose_en='Find the cause of the payment failures',
             tone_note='내일 오전이 실제 기한입니다.',
+            tone_note_en='Tomorrow morning is the real deadline.',
         )
-        Step.objects.create(company=self.company, card=self.card, ord=0, text='Sentry 확인')
+        Step.objects.create(
+            company=self.company, card=self.card, ord=0,
+            text='Sentry 확인', text_en='Check Sentry',
+        )
         Blank.objects.create(
             company=self.company, card=self.card, question_en='Which environment?'
         )
@@ -328,6 +372,18 @@ class CardApiTests(TestCase):
         self.assertEqual(item['assigneeName'], 'Alex')
         self.assertEqual(item['sourceLabel'], '#dev')
         self.assertEqual(item['blankCount'], 1)
+
+    # 화면이 영어를 보여주려면 목록과 상세 모두에 실려야 한다.
+    def test_english_is_served(self):
+        item = self.client.get(self.base).data['items'][0]
+
+        self.assertEqual(item['purposeEn'], 'Find the cause of the payment failures')
+        self.assertEqual(item['toneNoteEn'], 'Tomorrow morning is the real deadline.')
+
+        detail = self.client.get(f'{self.base}/{self.card.id}').data
+
+        self.assertEqual(detail['purposeEn'], 'Find the cause of the payment failures')
+        self.assertEqual(detail['steps'][0]['textEn'], 'Check Sentry')
 
     def test_mine_filter(self):
         other_card = InstructionCard.objects.create(

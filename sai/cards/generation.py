@@ -18,7 +18,7 @@ from sources.text import normalize_slack_text
 from .models import Blank, InstructionCard, Step, ToneEvidence
 
 # 프롬프트를 고치면 올린다.
-GENERATOR_VERSION = 'card-v1'
+GENERATOR_VERSION = 'card-v2'
 
 # 지시 판정은 한 번에 여러 건을 본다. 문서마다 부르면 비용이 몇십 배가 된다.
 JUDGE_BATCH_SIZE = 25
@@ -66,14 +66,24 @@ CARD_PROMPT = """You turn a Slack message into a card that a foreign employee ca
 The reader does not read Korean well and does not know this company's habits. Your job is to make
 the request unambiguous: what is actually being asked, by when, and what the tone really means.
 
+Every field comes in a Korean and an English version. The reader works from the English; the
+Korean is there so a Korean colleague can check the card. Write the Korean first, then the English
+right after it.
+
+The English is not a word-by-word translation. Write what a competent English-speaking manager
+would say to a new hire. Plain workplace English, no honorific padding. Keep channel names (#dev),
+tool and product names, file names, code, URLs, numbers and times exactly as they are.
+
 Fill the fields in the order given.
 
-purpose - what the requester actually wants achieved, in Korean. One sentence. Not a restatement
+purpose / purpose_en - what the requester actually wants achieved. One sentence. Not a restatement
   of the message.
 
-deliverable - the concrete thing to hand over. Empty string if the request does not name one.
+deliverable / deliverable_en - the concrete thing to hand over. Empty strings if the request does
+  not name one.
 
 deadline_text - the deadline exactly as written in the message ('내일 오전까지'). Empty if none.
+deadline_text_en - the same deadline in English ('by tomorrow morning'). Empty if none.
 
 deadline_at - that deadline as an ISO 8601 datetime in the company timezone given below, or empty
   if the message states no deadline. Use the current time given below to resolve relative words.
@@ -82,20 +92,23 @@ deadline_at - that deadline as an ISO 8601 datetime in the company timezone give
 is_deadline_inferred - true when you had to guess. '내일 오전까지' is explicit. '이번 주 안에' and
   '시간 되실 때' are inferred. If deadline_at is empty, false.
 
-tone_note - in Korean, what this phrasing actually means in practice at this company. Use the past
-  cases below as your basis. This is the most valuable field: Korean requests are softened, and a
-  foreign reader will misjudge urgency. Say plainly whether this is urgent, and what the softening
-  words really signal. If the past cases do not support a reading, say the tone is unclear rather
-  than guessing. Empty string when the message is already direct and needs no interpretation.
+tone_note / tone_note_en - what this phrasing actually means in practice at this company. Use the
+  past cases below as your basis. This is the most valuable field: Korean requests are softened,
+  and a foreign reader will misjudge urgency. Say plainly whether this is urgent, and what the
+  softening words really signal. In tone_note_en you may quote the Korean phrase and then explain
+  it - "'가능하시면' reads as optional but here it is not" - because the reader is looking at that
+  phrase in Slack. If the past cases do not support a reading, say the tone is unclear rather than
+  guessing. Empty strings when the message is already direct and needs no interpretation.
 
-steps - concrete actions in order, in Korean. Two to five. For each, rule_index points at a company
-  rule below that governs that step, or -1 when none applies. Do not invent rules.
+steps - concrete actions in order. Two to five. Each has text (Korean) and text_en (English).
+  rule_index points at a company rule below that governs that step, or -1 when none applies.
+  Do not invent rules.
 
 blanks - anything the assignee cannot proceed without knowing, written as short English questions.
   Empty list when the request is complete. Do not manufacture questions.
 
 tone_cases - which past cases you used for tone_note. case_index plus the quote copied EXACTLY
-  from that case. Empty list when tone_note is empty or unsupported.
+  from that case, in the original Korean. Empty list when tone_note is empty or unsupported.
 
 Never invent facts. Everything must come from the message, the rules, or the past cases."""
 
@@ -113,6 +126,7 @@ class JudgementResult(BaseModel):
 
 class CardStep(BaseModel):
     text: str
+    text_en: str
     rule_index: int = Field(description='근거가 되는 회사 규칙 번호. 없으면 -1')
 
 
@@ -127,11 +141,15 @@ class ToneCase(BaseModel):
 
 class CardDraft(BaseModel):
     purpose: str
+    purpose_en: str
     deliverable: str
+    deliverable_en: str
     deadline_text: str
+    deadline_text_en: str
     deadline_at: str
     is_deadline_inferred: bool
     tone_note: str
+    tone_note_en: str
     steps: list[CardStep]
     blanks: list[CardBlank]
     tone_cases: list[ToneCase]
@@ -282,11 +300,15 @@ def _save_card(company, document, draft, rules, cases, assignee):
             'scope': document.item.scope,
             'assignee': assignee,
             'purpose': draft.purpose,
+            'purpose_en': draft.purpose_en or None,
             'deliverable': draft.deliverable or None,
+            'deliverable_en': draft.deliverable_en or None,
             'deadline_text': (draft.deadline_text or None) and draft.deadline_text[:60],
+            'deadline_text_en': (draft.deadline_text_en or None) and draft.deadline_text_en[:60],
             'deadline_at': _parse_deadline(draft.deadline_at, company),
             'is_deadline_inferred': bool(draft.deadline_at) and draft.is_deadline_inferred,
             'tone_note': draft.tone_note or None,
+            'tone_note_en': draft.tone_note_en or None,
         },
     )
 
@@ -298,6 +320,7 @@ def _save_card(company, document, draft, rules, cases, assignee):
     Step.objects.bulk_create([
         Step(
             company=company, card=card, ord=index, text=step.text,
+            text_en=step.text_en or None,
             entry=rules[step.rule_index] if 0 <= step.rule_index < len(rules) else None,
         )
         for index, step in enumerate(draft.steps)
@@ -387,7 +410,8 @@ def generate_cards(company, documents=None):
         # 후보를 줄여 판정 비용도 함께 아낀다.
         .exclude(classified_as=RawDocument.ClassifiedAs.INSTRUCTION)
         .select_related('item', 'item__scope', 'author_identity')
-        .order_by('occurred_at')
+        # 판정 결과가 인덱스로 돌아온다. 동시각 문서가 있으면 순서를 id 로 고정해야 한다.
+        .order_by('occurred_at', 'id')
     )
     if not documents:
         return [], []

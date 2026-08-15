@@ -129,7 +129,9 @@ def classify_documents(company_id, documents=None):
     documents = list(
         documents.exclude(classifier_version=CLASSIFIER_VERSION)
         .select_related('item', 'author_identity')
-        .order_by('occurred_at')
+        # 라벨을 인덱스로 되받으므로 순서가 흔들리면 남의 라벨이 붙는다.
+        # occurred_at 이 같은 문서가 있어 id 로 한 번 더 묶는다.
+        .order_by('occurred_at', 'id')
     )
     if not documents:
         return 0, []

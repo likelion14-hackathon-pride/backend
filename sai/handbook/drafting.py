@@ -187,7 +187,8 @@ def draft_entries(company):
             sync_state=RawDocument.SyncState.CURRENT,
         )
         .select_related('item', 'item__scope', 'author_identity')
-        .order_by('occurred_at')
+        # 초안이 인덱스로 원문을 가리킨다. 동시각 문서가 있으면 근거가 어긋난다.
+        .order_by('occurred_at', 'id')
     )
     if not documents:
         return [], []

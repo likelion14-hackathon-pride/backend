@@ -4,12 +4,13 @@ from .models import Blank, InstructionCard, Step, ToneEvidence
 
 
 class StepSerializer(serializers.ModelSerializer):
+    textEn = serializers.CharField(source='text_en', read_only=True)
     entryId = serializers.IntegerField(source='entry_id', read_only=True)
     entryTitle = serializers.CharField(source='entry.title', read_only=True, default=None)
 
     class Meta:
         model = Step
-        fields = ['id', 'ord', 'text', 'entryId', 'entryTitle']
+        fields = ['id', 'ord', 'text', 'textEn', 'entryId', 'entryTitle']
 
 
 class BlankSerializer(serializers.ModelSerializer):
@@ -42,10 +43,14 @@ class CardListItemSerializer(serializers.ModelSerializer):
     assigneeName = serializers.CharField(source='assignee.display_name', read_only=True, default=None)
     scopeId = serializers.IntegerField(source='scope_id', read_only=True)
     scopeName = serializers.CharField(source='scope.name', read_only=True, default=None)
+    purposeEn = serializers.CharField(source='purpose_en', read_only=True)
+    deliverableEn = serializers.CharField(source='deliverable_en', read_only=True)
     deadlineText = serializers.CharField(source='deadline_text', read_only=True)
+    deadlineTextEn = serializers.CharField(source='deadline_text_en', read_only=True)
     deadlineAt = serializers.DateTimeField(source='deadline_at', read_only=True)
     isDeadlineInferred = serializers.BooleanField(source='is_deadline_inferred', read_only=True)
     toneNote = serializers.CharField(source='tone_note', read_only=True)
+    toneNoteEn = serializers.CharField(source='tone_note_en', read_only=True)
     sourceLabel = serializers.CharField(source='document.item.label', read_only=True, default=None)
     requestedBy = serializers.CharField(
         source='document.author_identity.external_handle', read_only=True, default=None
@@ -59,11 +64,15 @@ class CardListItemSerializer(serializers.ModelSerializer):
             'id',
             'status',
             'purpose',
+            'purposeEn',
             'deliverable',
+            'deliverableEn',
             'deadlineText',
+            'deadlineTextEn',
             'deadlineAt',
             'isDeadlineInferred',
             'toneNote',
+            'toneNoteEn',
             'assigneeId',
             'assigneeName',
             'scopeId',
