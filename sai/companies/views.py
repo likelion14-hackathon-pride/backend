@@ -80,10 +80,10 @@ class CompanyMemberListView(APIView):
         try:
             limit = int(request.query_params.get('limit', 20))
         except ValueError:
-            raise ValidationError({'limit': 'limit must be an integer'})
+            raise ValidationError({'limit': ['limit must be an integer']})
 
         if limit < 1 or limit > 100:
-            raise ValidationError({'limit': 'limit must be between 1 and 100'})
+            raise ValidationError({'limit': ['limit must be between 1 and 100']})
 
         # slackHandle 을 채우느라 구성원마다 조회하지 않도록 미리 가져온다.
         members = (
@@ -95,7 +95,7 @@ class CompanyMemberListView(APIView):
             try:
                 members = members.filter(id__lt=int(cursor))
             except ValueError:
-                raise ValidationError({'cursor': 'invalid cursor'})
+                raise ValidationError({'cursor': ['invalid cursor']})
 
         members = members.order_by('-id')[:limit + 1]
         has_next = len(members) > limit

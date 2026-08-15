@@ -147,7 +147,7 @@ class HandbookEntryListCreateView(APIView):
             try:
                 entries = entries.filter(scope_id=int(scope_id))
             except ValueError:
-                raise ValidationError({'scopeId': 'invalid scopeId'})
+                raise ValidationError({'scopeId': ['invalid scopeId']})
         if entry_status:
             entries = entries.filter(status=entry_status)
 
@@ -159,15 +159,15 @@ class HandbookEntryListCreateView(APIView):
             try:
                 entries = entries.filter(id__lt=int(cursor))
             except ValueError:
-                raise ValidationError({'cursor': 'invalid cursor'})
+                raise ValidationError({'cursor': ['invalid cursor']})
 
         try:
             limit = int(request.query_params.get('limit', 20))
         except ValueError:
-            raise ValidationError({'limit': 'limit must be an integer'})
+            raise ValidationError({'limit': ['limit must be an integer']})
 
         if limit < 1 or limit > 100:
-            raise ValidationError({'limit': 'limit must be between 1 and 100'})
+            raise ValidationError({'limit': ['limit must be between 1 and 100']})
 
         entries = entries.order_by('-id')[:limit + 1]
         has_next = len(entries) > limit
@@ -404,7 +404,7 @@ class CompanyScopeListView(APIView):
 
         if scope_kind:
             if scope_kind not in CompanyScope.Kind.values:
-                raise ValidationError({'kind': 'invalid kind'})
+                raise ValidationError({'kind': ['invalid kind']})
             scopes = scopes.filter(kind=scope_kind)
 
         scopes = scopes.order_by('kind', 'name')

@@ -40,7 +40,7 @@ def build_entry(company, spec, answer, scope):
 
     target = resolve_scope(company, spec, scope)
     if target is None:
-        raise ImproperlyConfigured(f'{spec.key} 의 지식공간을 찾을 수 없습니다')
+        raise ImproperlyConfigured(f'scope for {spec.key} not found')
 
     body_ko = choice.body_ko if choice else answer
     body_en = choice.body_en if choice else ''
