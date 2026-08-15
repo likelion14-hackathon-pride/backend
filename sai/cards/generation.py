@@ -18,7 +18,7 @@ from sources.text import normalize_slack_text
 from .models import Blank, InstructionCard, Step, ToneEvidence
 
 # 프롬프트를 고치면 올린다.
-GENERATOR_VERSION = 'card-v2'
+GENERATOR_VERSION = 'card-v3'
 
 # 지시 판정은 한 번에 여러 건을 본다. 문서마다 부르면 비용이 몇십 배가 된다.
 JUDGE_BATCH_SIZE = 25
@@ -37,17 +37,28 @@ MENTION = re.compile(r'<@([UWB][A-Z0-9]+)>')
 
 JUDGE_PROMPT = """You decide whether a Slack message hands a specific piece of work to a person.
 
-Write `reason` first, then decide.
+Answer `asked_of` first, then `reason`, then decide.
 
-The deciding test: will this piece of work be FINISHED at some point?
-  A task gets done and is over.        -> is_instruction = true
-  A rule keeps applying forever.       -> is_instruction = false
+Both of these must be true for is_instruction = true.
+  1. Someone was actually asked. The message makes a request of a person.
+  2. The work will be FINISHED at some point. A task gets done and is over;
+     a rule keeps applying forever.
+
+asked_of - who is being asked.
+  The name or handle when the message names one.
+  'the channel' when the message asks but names nobody. Korean request forms - '~해주세요',
+  '~부탁드려요', '~봐주실 수 있을까요', '~한번 봐주세요' - are requests even with no name on them.
+  Most requests here carry no mention at all. Do not require one.
+  Empty only when nobody is being asked at all: a fragment, a pasted command or log, a status
+  report, a note to self, shared reference material.
+  When asked_of is empty, is_instruction is false. Do not invent a target to fill it.
 
 is_instruction = true
-  "회의록 정리해서 노션에 올려주세요"                        (one document, then done)
-  "@조상원 결제 실패 로그 좀 봐주실 수 있을까요? 내일 오전까지"   (one investigation, then done)
-  "급한 건 아닌데 시간 되실 때 배포 스크립트 한번 봐주세요"      (one review, then done)
-  "Could you review this PR today?"
+  "회의록 정리해서 노션에 올려주세요"                        (asked_of: the channel)
+  "@조상원 결제 실패 로그 좀 봐주실 수 있을까요? 내일 오전까지"   (asked_of: 조상원)
+  "급한 건 아닌데 시간 되실 때 배포 스크립트 한번 봐주세요"      (asked_of: the channel)
+  "가능하시면 오늘 중으로 확인 부탁드려요"                     (asked_of: the channel)
+  "Could you review this PR today?"                        (asked_of: the channel)
 
 is_instruction = false
   "시크릿 키는 절대 커밋하지 마세요"           (a standing rule, never 'done')
@@ -55,16 +66,21 @@ is_instruction = false
   "staging 재기동은 앞으로 저한테 말씀해주세요"  (a standing procedure)
   "핫픽스는 #dev에 먼저 공지하고 올립니다"      (a standing procedure)
   "로컬 세팅 안 되시면 이거 실행하시면 됩니다"    (information, nobody was asked)
-  "PR 리뷰 기준도 정해야 할 것 같은데 어떻게 할까요?"  (a question to the group)
-  "배포 프로세스 좀 정리하고 싶은데요"           (an intention, nobody was asked)
+  "PR 리뷰 기준도 정해야 할 것 같은데 어떻게 할까요?"  (asked_of: empty - a question to the group)
+  "다들 시간 되실 때 배포 프로세스 좀 정리하고 싶은데요"  (asked_of: empty - the speaker's own intention)
   "staging 서버 방금 재기동했습니다"            (a status report)
   "넵 알겠습니다"                             (acknowledgement)
+  "로그 확인"                                 (asked_of: empty - a fragment)
+  "```docker compose up -d --build```"        (asked_of: empty - pasted commands)
+  "결제 실패 로그 3건 첨부합니다"                (asked_of: empty - sharing material)
 
 Words like '앞으로', '항상', '~하지 마세요', '~로 하겠습니다', '~하시면 됩니다' signal a rule.
+'~하고 싶은데요', '~해야 할 것 같은데요' state what the speaker themselves wants. That is not a
+request, even when '다들' or '시간 되실 때' is attached to it.
 Korean requests are softened - '~해주실 수 있을까요', '~부탁드려요', '시간 되실 때', '가능하시면'
 are still real requests. But softening alone does not make a rule into a task.
 
-When you cannot point to a specific piece of work that someone will finish, answer false.
+When you cannot point to a specific piece of work that someone was asked to finish, answer false.
 A wrong card puts something on a person's to-do list that was never asked of them.
 
 Return a judgement for every index given in the input, including the ones you answer false for."""
@@ -138,8 +154,11 @@ Never invent facts. Everything must come from the message, the rules, or the pas
 
 
 # 근거를 먼저 쓰게 두면 판정 품질이 올라간다. 생성 순서가 곧 사고 순서다.
+# asked_of 가 맨 앞인 이유: 대상을 먼저 찾게 하면 '로그 확인' 같은 조각에서 빈칸이 나오고,
+# 빈칸을 쓴 뒤에는 지시라고 답하기 어려워진다.
 class Judgement(BaseModel):
     index: int
+    asked_of: str = Field(description="요청 대상. 아무에게도 아니면 빈 문자열")
     reason: str = Field(description='끝나는 일인지 상시 규칙인지 한 문장으로')
     is_instruction: bool
 
@@ -236,8 +255,10 @@ def _judge_batch(client, batch, channels, users):
         temperature=0,
     )
 
+    # 대상이 비면 지시가 아니다. 프롬프트에도 적었지만 여기서 한 번 더 막는다.
+    # 조각글과 붙여넣은 명령어가 남의 할 일 목록에 올라가는 것을 프롬프트만으로 막지 못했다.
     return {
-        judgement.index: judgement.is_instruction
+        judgement.index: judgement.is_instruction and bool(judgement.asked_of.strip())
         for judgement in completion.choices[0].message.parsed.judgements
         if 0 <= judgement.index < len(batch)
     }

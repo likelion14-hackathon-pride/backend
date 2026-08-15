@@ -107,8 +107,8 @@ class CardGenerationTests(TestCase):
 
     def generate(self, judgements=None, card=None):
         judged = judgements if judgements is not None else [
-            Judgement(index=0, reason='상시 규칙입니다', is_instruction=False),
-            Judgement(index=1, reason='끝나는 일입니다', is_instruction=True),
+            Judgement(index=0, asked_of='', reason='상시 규칙입니다', is_instruction=False),
+            Judgement(index=1, asked_of='조상원', reason='끝나는 일입니다', is_instruction=True),
         ]
         chat_results = [
             SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(
@@ -135,8 +135,8 @@ class CardGenerationTests(TestCase):
     @override_settings(OPENAI_API_KEY='test-key')
     def test_no_card_when_nothing_is_an_instruction(self):
         cards, _ = self.generate(judgements=[
-            Judgement(index=0, reason='잡담입니다', is_instruction=False),
-            Judgement(index=1, reason='상태 공유입니다', is_instruction=False),
+            Judgement(index=0, asked_of='', reason='잡담입니다', is_instruction=False),
+            Judgement(index=1, asked_of='', reason='상태 공유입니다', is_instruction=False),
         ])
 
         self.assertEqual(cards, [])
@@ -150,7 +150,7 @@ class CardGenerationTests(TestCase):
         )
 
         cards, _ = self.generate(judgements=[
-            Judgement(index=0, reason='끝나는 일입니다', is_instruction=True),
+            Judgement(index=0, asked_of='조상원', reason='끝나는 일입니다', is_instruction=True),
         ])
 
         self.assertFalse(InstructionCard.objects.filter(document=self.document).exists())
@@ -207,16 +207,41 @@ class CardGenerationTests(TestCase):
 
         self.assertEqual(InstructionCard.objects.get().urgency, 'WHENEVER')
 
+    # '로그 확인' 같은 조각글과 붙여넣은 명령어가 카드가 되고 있었다.
+    # 대상이 비었는데 지시라고 답하면 코드에서 막는다.
+    @override_settings(OPENAI_API_KEY='test-key')
+    def test_instruction_without_a_target_is_rejected(self):
+        cards, _ = self.generate(judgements=[
+            Judgement(index=0, asked_of='', reason='상시 규칙입니다', is_instruction=False),
+            Judgement(index=1, asked_of='  ', reason='끝나는 일입니다', is_instruction=True),
+        ])
+
+        self.assertEqual(cards, [])
+        self.assertFalse(InstructionCard.objects.exists())
+        # 판정은 끝났으므로 다음 실행에서 다시 묻지 않는다.
+        self.document.refresh_from_db()
+        self.assertEqual(self.document.card_version, GENERATOR_VERSION)
+
+    # 멘션이 없어도 요청하는 말투면 채널 전체에 대한 요청으로 본다.
+    @override_settings(OPENAI_API_KEY='test-key')
+    def test_request_to_the_channel_still_makes_a_card(self):
+        cards, _ = self.generate(judgements=[
+            Judgement(index=0, asked_of='', reason='상시 규칙입니다', is_instruction=False),
+            Judgement(index=1, asked_of='the channel', reason='끝나는 일입니다', is_instruction=True),
+        ])
+
+        self.assertEqual(len(cards), 1)
+
     # 모델이 일부 인덱스를 통째로 빼고 답하는 일이 실제로 있었다.
     # 그대로 두면 진짜 지시가 카드가 되지 못한 채 조용히 사라진다.
     @override_settings(OPENAI_API_KEY='test-key')
     def test_missing_judgements_are_asked_again(self):
         first = JudgementResult(
-            judgements=[Judgement(index=0, reason='상시 규칙입니다', is_instruction=False)]
+            judgements=[Judgement(index=0, asked_of='', reason='상시 규칙입니다', is_instruction=False)]
         )
         # 재요청에는 빠졌던 것 하나만 넘어가므로 인덱스가 0으로 다시 매겨진다.
         retry = JudgementResult(
-            judgements=[Judgement(index=0, reason='끝나는 일입니다', is_instruction=True)]
+            judgements=[Judgement(index=0, asked_of='조상원', reason='끝나는 일입니다', is_instruction=True)]
         )
         results = [
             SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(parsed=first))]),
@@ -258,7 +283,7 @@ class CardGenerationTests(TestCase):
         with patch('cards.generation.OpenAI') as client:
             client.return_value.chat.completions.parse.return_value = SimpleNamespace(
                 choices=[SimpleNamespace(message=SimpleNamespace(parsed=JudgementResult(
-                    judgements=[Judgement(index=0, reason='상시 규칙입니다', is_instruction=False)]
+                    judgements=[Judgement(index=0, asked_of='', reason='상시 규칙입니다', is_instruction=False)]
                 )))]
             )
             generate_cards(self.company)
@@ -275,7 +300,7 @@ class CardGenerationTests(TestCase):
 
         again = self._document('2.1', '<@U001> 결제 실패 로그 원인 좀 봐주세요. 내일 오전까지 부탁드려요')
         # 앞선 실행에서 self.past 는 판정이 끝나 후보에서 빠진다. 남은 후보는 이것 하나다.
-        self.generate(judgements=[Judgement(index=0, reason='끝나는 일입니다', is_instruction=True)])
+        self.generate(judgements=[Judgement(index=0, asked_of='조상원', reason='끝나는 일입니다', is_instruction=True)])
 
         duplicate = InstructionCard.objects.get(document=again)
         self.assertEqual(duplicate.duplicate_of, original)
@@ -299,7 +324,7 @@ class CardGenerationTests(TestCase):
 
         again = self._document('2.1', '<@U003> 결제 실패 로그 좀 봐주실 수 있을까요?')
         # 앞선 실행에서 self.past 는 판정이 끝나 후보에서 빠진다. 남은 후보는 이것 하나다.
-        self.generate(judgements=[Judgement(index=0, reason='끝나는 일입니다', is_instruction=True)])
+        self.generate(judgements=[Judgement(index=0, asked_of='조상원', reason='끝나는 일입니다', is_instruction=True)])
 
         card = InstructionCard.objects.get(document=again)
         self.assertIsNone(card.duplicate_of)
@@ -313,7 +338,7 @@ class CardGenerationTests(TestCase):
 
         again = self._document('2.1', '<@U001> 결제 실패 로그 다시 좀 봐주세요')
         # 앞선 실행에서 self.past 는 판정이 끝나 후보에서 빠진다. 남은 후보는 이것 하나다.
-        self.generate(judgements=[Judgement(index=0, reason='끝나는 일입니다', is_instruction=True)])
+        self.generate(judgements=[Judgement(index=0, asked_of='조상원', reason='끝나는 일입니다', is_instruction=True)])
 
         self.assertIsNone(InstructionCard.objects.get(document=again).duplicate_of)
 
@@ -424,7 +449,7 @@ class CardGenerationTests(TestCase):
         self.generate()
 
         cards, _ = self.generate(
-            judgements=[Judgement(index=0, reason='이미 처리됨', is_instruction=False)]
+            judgements=[Judgement(index=0, asked_of='', reason='이미 처리됨', is_instruction=False)]
         )
 
         self.assertEqual(cards, [])
