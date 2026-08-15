@@ -5,8 +5,9 @@ from datetime import timedelta
 from django.db import transaction
 from django.utils import timezone
 
+from .github_ingestion import run_github_ingestion
 from .ingestion import run_ingestion
-from .models import Connection, IngestionJob
+from .models import Connection, IngestionJob, Item
 from .scheduling import enqueue_due_jobs
 
 logger = logging.getLogger(__name__)
@@ -68,16 +69,50 @@ def _fail(job, code):
 
 # 여기서 예외가 새어 나가면 워커 루프가 죽고 큐가 멈춘다. 전부 잡아서 작업만 실패시킨다.
 def run_job(job):
-    connection = Connection.objects.filter(
+    items = list(
+        Item.objects.filter(
+            company_id=job.company_id,
+            id__in=job.item_ids or [],
+            removed_at__isnull=True,
+        ).select_related('connection')
+    )
+    if not items:
+        # 기존 Slack 작업이 연결 삭제로 실패한 경우의 오류 코드는 유지한다.
+        connection_exists = Connection.objects.filter(
+            company_id=job.company_id,
+            kind=Connection.Kind.SLACK,
+            disconnected_at__isnull=True,
+        ).exists()
+        return _fail(job, 'source_item_not_found' if connection_exists else 'slack_not_connected')
+
+    connection_ids = {item.connection_id for item in items}
+    if len(connection_ids) != 1:
+        return _fail(job, 'mixed_source_connections')
+
+    connection = items[0].connection
+    if connection.disconnected_at is not None:
+        return _fail(job, 'source_not_connected')
+
+    if connection.kind == Connection.Kind.GITHUB and job.kind == IngestionJob.Kind.PROCESS:
+        return _fail(job, 'github_process_not_supported')
+
+    if connection.kind == Connection.Kind.GITHUB:
+        runner = run_github_ingestion
+    elif connection.kind == Connection.Kind.SLACK:
+        runner = run_ingestion
+    else:
+        return _fail(job, 'source_not_supported')
+
+    active_connection = Connection.objects.filter(
+        id=connection.id,
         company_id=job.company_id,
-        kind=Connection.Kind.SLACK,
         disconnected_at__isnull=True,
     ).first()
-    if connection is None:
-        return _fail(job, 'slack_not_connected')
+    if active_connection is None:
+        return _fail(job, 'source_not_connected')
 
     try:
-        return run_ingestion(job, connection)
+        return runner(job, active_connection)
     except Exception:
         logger.exception('수집 작업 실패 job=%s', job.id)
         return _fail(job, 'unexpected_error')
