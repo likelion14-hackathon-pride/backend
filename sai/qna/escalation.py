@@ -4,7 +4,7 @@ from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
 from django.utils import timezone
 from openai import OpenAI, OpenAIError
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from sources.models import Connection
 from sources.slack import SlackClient, SlackError
@@ -13,29 +13,35 @@ from sources.text import normalize_slack_text
 JUDGE_PROMPT = """A foreign employee asked a question that the company handbook could not answer.
 SAI relayed it to the company owner in Korean. Here is the owner's reply from Slack.
 
-Decide whether that reply actually answers the question.
+Fill the fields in the order they are given. Write `reason` FIRST, before you decide anything.
 
-is_answer = true only when the reply gives the employee something they can act on.
-is_answer = false for deflections and holding replies:
-  "확인해볼게요", "나중에 얘기해요", "음...", a question back, or an unrelated message.
+reason - always required, never empty. One short Korean sentence stating what the reply actually
+  said and why that does or does not settle the question. This is shown to a person, so it must
+  be specific. "답변으로 볼 수 없습니다" alone is not acceptable; say what was missing.
+  Good: "휴가 일수를 한 달 4일로 명확히 답했습니다."
+  Good: "확인해보겠다고만 하고 일수는 말하지 않았습니다."
 
-If is_answer is true:
-- answer_ko: the answer restated as a clear rule in Korean. Keep the owner's meaning exactly.
-  Do not add conditions the owner did not state.
-- answer_en: the same in plain workplace English, for the employee to read.
+is_answer - true only when the reply gives the employee something they can act on.
+  false for deflections and holding replies: "확인해볼게요", "나중에 얘기해요", "음...",
+  a question back, or an unrelated message.
 
-If is_answer is false, leave both empty.
+needs_review - true when the reply is ambiguous, only partly answers, or you had to guess.
 
-needs_review = true when the reply is ambiguous, partially answers, or you had to guess.
-reason: one short Korean sentence explaining your call."""
+answer_ko - when is_answer is true: the answer restated as a clear rule in Korean. Keep the
+  owner's meaning exactly. Copy numbers, dates and names as written. Never add a condition
+  the owner did not state. When is_answer is false: empty string.
+
+answer_en - the same in plain workplace English, for the employee to read.
+  When is_answer is false: empty string."""
 
 
+# 필드 순서가 곧 생성 순서다. 근거를 먼저 쓰게 두면 판정 품질도 같이 올라간다.
 class AnswerJudgement(BaseModel):
-    is_answer: bool
-    needs_review: bool
-    reason: str
-    answer_ko: str
-    answer_en: str
+    reason: str = Field(description='판정 근거 한 문장. 비워 두면 안 된다.')
+    is_answer: bool = Field(description='답변이 질문을 실제로 해결하는가')
+    needs_review: bool = Field(description='사람이 한 번 봐야 하는가')
+    answer_ko: str = Field(description='정리한 규칙(한국어). is_answer=false면 빈 문자열')
+    answer_en: str = Field(description='정리한 규칙(영어). is_answer=false면 빈 문자열')
 
 
 def _get_client():
