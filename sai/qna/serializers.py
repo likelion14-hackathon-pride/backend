@@ -19,11 +19,14 @@ class AskInputSerializer(serializers.Serializer):
         return value
 
 
+# 근거 한 건. entryId 가 있으면 확정 규칙, chunkId 가 있으면 과거 대화다.
 class CitationSerializer(serializers.Serializer):
     entryId = serializers.IntegerField(allow_null=True)
     title = serializers.CharField(allow_null=True)
     scopeName = serializers.CharField(allow_null=True)
     chunkId = serializers.IntegerField(allow_null=True)
+    # 과거 대화일 때 슬랙 원문으로 가는 링크.
+    permalink = serializers.CharField(allow_null=True)
 
 
 class RiskWarningSerializer(serializers.Serializer):
@@ -44,6 +47,36 @@ class AskResultSerializer(serializers.Serializer):
     citations = CitationSerializer(many=True)
     warnings = RiskWarningSerializer(many=True)
     latencyMs = serializers.IntegerField()
+
+
+# 저장해 둔 근거를 화면용으로 편다.
+# 규칙이든 사례든 같은 모양으로 나가야 화면이 한 가지만 그리면 된다.
+def _stored_citation(citation):
+    if citation.entry:
+        return {
+            'entryId': citation.entry_id,
+            'title': citation.entry.title,
+            'scopeName': citation.entry.scope.name,
+            'chunkId': None,
+            'permalink': None,
+        }
+
+    if citation.chunk is None:
+        return {
+            'entryId': None, 'title': None, 'scopeName': None,
+            'chunkId': None, 'permalink': None,
+        }
+
+    document = citation.chunk.document
+    when = f'{document.occurred_at:%Y-%m-%d}' if document.occurred_at else None
+
+    return {
+        'entryId': None,
+        'title': ' '.join(filter(None, [document.item.label, when])),
+        'scopeName': citation.chunk.scope.name if citation.chunk.scope else None,
+        'chunkId': citation.chunk_id,
+        'permalink': document.permalink,
+    }
 
 
 # 대화 이력 응답용
@@ -70,15 +103,7 @@ class MessageSerializer(serializers.ModelSerializer):
         ]
 
     def get_citations(self, obj):
-        return [
-            {
-                'entryId': citation.entry_id,
-                'title': citation.entry.title if citation.entry else None,
-                'scopeName': citation.entry.scope.name if citation.entry else None,
-                'chunkId': citation.chunk_id,
-            }
-            for citation in obj.citations.all()
-        ]
+        return [_stored_citation(citation) for citation in obj.citations.all()]
 
 
 class MessageListSerializer(serializers.Serializer):

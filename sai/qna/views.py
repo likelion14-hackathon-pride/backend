@@ -63,13 +63,8 @@ def get_member_company(user, company_id):
     return company
 
 
-def _citation_payload(entry):
-    return {
-        'entryId': entry.id,
-        'title': entry.title,
-        'scopeName': entry.scope.name,
-        'chunkId': None,
-    }
+def _citation_payload(source):
+    return source.payload()
 
 
 # SAI에게 묻기 view
@@ -151,7 +146,11 @@ class AskView(APIView):
                 **bodies,
             )
             Citation.objects.bulk_create([
-                Citation(company=company, message=message, entry=entry) for entry in cited
+                Citation(
+                    company=company, message=message,
+                    entry=source.entry, chunk=source.chunk,
+                )
+                for source in cited
             ])
 
         payload = {
@@ -161,7 +160,7 @@ class AskView(APIView):
             'verdict': result.verdict,
             'answer': result.answer or None,
             'draftKo': result.draft_ko or None,
-            'citations': [_citation_payload(entry) for entry in cited],
+            'citations': [_citation_payload(source) for source in cited],
             'warnings': warnings,
             'latencyMs': usage['latencyMs'],
         }

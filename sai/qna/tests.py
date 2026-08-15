@@ -9,7 +9,12 @@ from companies.models import Company
 from handbook.models import CompanyScope, HandbookEntry
 from policy.models import RiskKeyword
 
-from .answering import AnswerRateLimited, AnswerResult, find_risk_warnings
+from .answering import (
+    PROMPT_VERSION,
+    AnswerRateLimited,
+    AnswerResult,
+    find_risk_warnings,
+)
 from .models import Citation, Message, Thread
 
 
@@ -91,11 +96,11 @@ class AskTests(TestCase):
 
         self.assertEqual(message.prompt_tokens, 120)
         self.assertEqual(message.completion_tokens, 40)
-        self.assertEqual(message.prompt_version, 'ask-v1')
+        self.assertEqual(message.prompt_version, PROMPT_VERSION)
         self.assertIsNotNone(message.latency_ms)
         # 검색 스냅샷에는 id와 점수만 남는다. 본문은 넣지 않는다.
         # JSONB는 키 순서를 보존하지 않으므로 집합으로 비교한다.
-        self.assertEqual(set(message.retrieval[0]), {'entryId', 'score'})
+        self.assertEqual(set(message.retrieval[0]), {'entryId', 'chunkId', 'score'})
 
     def test_citation_rows_created(self):
         response = self.ask()
