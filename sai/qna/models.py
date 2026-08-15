@@ -72,6 +72,8 @@ class Escalation(models.Model):
     sent_at = models.DateTimeField(null=True, blank=True)
     slack_thread_ref = models.CharField(max_length=200, null=True, blank=True)
     answered_at = models.DateTimeField(null=True, blank=True)
+    # 질문자가 답을 확인한 시각. 이게 없으면 카드가 Answered 열에 계속 남는다.
+    acknowledged_at = models.DateTimeField(null=True, blank=True)
     answer_document = models.ForeignKey('sources.RawDocument', on_delete=models.SET_NULL, null=True, blank=True, related_name='answer_escalations')
     answer_is_answer = models.BooleanField(null=True, blank=True)
     answer_reason = models.CharField(max_length=200, null=True, blank=True)

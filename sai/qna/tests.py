@@ -277,7 +277,7 @@ class AskTests(TestCase):
 
     # 사용량 한도는 장애가 아니다. 429로 알리고 언제 다시 오면 되는지 준다.
     def test_rate_limit_returns_429_with_retry_after(self):
-        with patch('qna.views.answer_question', side_effect=AnswerRateLimited(20)):
+        with patch('qna.services.answer_question', side_effect=AnswerRateLimited(20)):
             response = self.client.post(self.url, {'question': 'hi'}, format='json')
 
         self.assertEqual(response.status_code, 429)

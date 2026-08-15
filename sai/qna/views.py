@@ -6,7 +6,7 @@ from drf_yasg import openapi
 from drf_yasg.utils import no_body, swagger_auto_schema
 from openai import OpenAIError
 from rest_framework import status
-from rest_framework.exceptions import APIException, ValidationError
+from rest_framework.exceptions import ValidationError
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -18,14 +18,8 @@ from handbook.models import CompanyScope, HandbookEntry, HandbookEvidence
 from sources.models import Item
 from sources.slack import SlackError
 
-from .answering import (
-    PROMPT_VERSION,
-    AnswerRateLimited,
-    answer_question,
-    find_risk_warnings,
-)
 from .escalation import draft_from_blank, fetch_reply, judge_reply, send_to_slack
-from .models import Citation, Escalation, Message, Thread
+from .models import Escalation, Message, Thread
 from .serializers import (
     AskInputSerializer,
     AskResultSerializer,
@@ -37,6 +31,7 @@ from .serializers import (
     MessageListSerializer,
     MessageSerializer,
 )
+from .services import NEEDS_OWNER, AnswerUnavailable, ask, open_thread
 
 STATUS_PARAMETER = openapi.Parameter(
     'status',
@@ -44,18 +39,6 @@ STATUS_PARAMETER = openapi.Parameter(
     type=openapi.TYPE_STRING,
     enum=['DRAFT', 'SENT', 'ANSWERED', 'APPROVED', 'DISMISSED'],
 )
-
-# 근거가 없거나 판단이 필요한 경우는 대표 확인이 필요하다는 뜻이다.
-NEEDS_OWNER = {'NO_SOURCE', 'NEEDS_DECISION'}
-
-
-class AnswerUnavailable(APIException):
-    status_code = status.HTTP_503_SERVICE_UNAVAILABLE
-    default_detail = '답변 생성을 사용할 수 없습니다.'
-
-
-def _citation_payload(source):
-    return source.payload()
 
 
 class AskView(APIView):
@@ -84,7 +67,6 @@ class AskView(APIView):
         company = get_member_company(request.user, company_id)
         serializer = AskInputSerializer(data=request.data, context={'company': company})
         serializer.is_valid(raise_exception=True)
-        question = serializer.validated_data['question']
         scope = serializer.validated_data.get('scope')
 
         thread_id = serializer.validated_data.get('threadId')
@@ -97,69 +79,11 @@ class AskView(APIView):
             # 검색만 회사 전반으로 풀린다. 스레드에 저장해 둔 것을 기본값으로 쓴다.
             scope = scope or thread.scope
         else:
-            thread = Thread.objects.create(company=company, user=request.user, scope=scope)
+            thread = open_thread(company, request.user, scope)
 
-        lang = request.user.ui_language if request.user.ui_language in ('ko', 'en') else 'en'
-        body_field = 'body_en' if lang == 'en' else 'body_ko'
-
-        Message.objects.create(
-            company=company, thread=thread, role=Message.Role.USER, **{body_field: question}
+        payload = ask(
+            company, request.user, thread, serializer.validated_data['question'], scope
         )
-
-        try:
-            result, cited, retrieval, usage = answer_question(company, question, lang, scope)
-        except AnswerRateLimited as exc:
-            response = Response(
-                {'detail': 'AI 사용량 한도에 걸렸습니다. 잠시 후 다시 시도해 주세요.'},
-                status=status.HTTP_429_TOO_MANY_REQUESTS,
-            )
-            response['Retry-After'] = str(exc.retry_after)
-            return response
-        except (ImproperlyConfigured, RuntimeError) as exc:
-            raise AnswerUnavailable(str(exc))
-
-        warnings = find_risk_warnings(company, question, result.answer)
-
-        bodies = {body_field: result.answer or None}
-        # 대표 확인이 필요한 답변은 한국어 초안이 본체다.
-        # 여기서 저장해 두지 않으면 나중에 에스컬레이션을 만들 때 초안을 잃어버린다.
-        if result.verdict in NEEDS_OWNER and result.draft_ko:
-            bodies['body_ko'] = result.draft_ko
-
-        with transaction.atomic():
-            message = Message.objects.create(
-                company=company,
-                thread=thread,
-                role=Message.Role.AI,
-                verdict=result.verdict,
-                model=usage['model'],
-                prompt_version=PROMPT_VERSION,
-                prompt_tokens=usage['promptTokens'],
-                completion_tokens=usage['completionTokens'],
-                # 청크 본문은 넣지 않는다. id와 점수만 남긴다.
-                retrieval=retrieval,
-                latency_ms=usage['latencyMs'],
-                **bodies,
-            )
-            Citation.objects.bulk_create([
-                Citation(
-                    company=company, message=message,
-                    entry=source.entry, chunk=source.chunk,
-                )
-                for source in cited
-            ])
-
-        payload = {
-            'threadId': thread.id,
-            'messageId': message.id,
-            'resultType': 'NEEDS_OWNER' if result.verdict in NEEDS_OWNER else 'ANSWERED',
-            'verdict': result.verdict,
-            'answer': result.answer or None,
-            'draftKo': result.draft_ko or None,
-            'citations': [_citation_payload(source) for source in cited],
-            'warnings': warnings,
-            'latencyMs': usage['latencyMs'],
-        }
 
         return Response(AskResultSerializer(payload).data, status=status.HTTP_200_OK)
 
@@ -348,6 +272,38 @@ class EscalationDismissView(APIView):
 
         escalation.status = Escalation.Status.DISMISSED
         escalation.save(update_fields=['status'])
+
+        return Response(EscalationSerializer(escalation).data, status=status.HTTP_200_OK)
+
+
+class EscalationAcknowledgeView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    @swagger_auto_schema(
+        operation_summary='답 확인',
+        operation_description=(
+            '받은 답을 읽었다고 표시합니다. 카드가 Answered 열에서 빠집니다. '
+            '질문을 올린 사람이 누릅니다.'
+        ),
+        request_body=no_body,
+        responses={
+            200: EscalationSerializer(), 400: '아직 답이 오지 않음',
+            401: '인증되지 않음', 403: '회사 접근 권한 없음', 404: '질문을 찾을 수 없음',
+        },
+        tags=['Question'],
+    )
+    def post(self, request, company_id, escalation_id):
+        company = get_member_company(request.user, company_id)
+        escalation = get_object_or_404(
+            _visible_escalations(company, request.user), id=escalation_id
+        )
+
+        if escalation.answered_at is None:
+            raise ValidationError({'status': ['no answer yet']})
+
+        if escalation.acknowledged_at is None:
+            escalation.acknowledged_at = timezone.now()
+            escalation.save(update_fields=['acknowledged_at'])
 
         return Response(EscalationSerializer(escalation).data, status=status.HTTP_200_OK)
 

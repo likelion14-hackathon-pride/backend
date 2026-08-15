@@ -167,7 +167,7 @@ class CardGenerationTests(TestCase):
         self.assertEqual(card.deadline_text, '내일 오전까지')
         self.assertIsNotNone(card.deadline_at)
         self.assertFalse(card.is_deadline_inferred)
-        self.assertEqual(card.status, InstructionCard.Status.NEW)
+        self.assertEqual(card.status, InstructionCard.Status.READY)
         self.assertEqual(card.scope, self.scope)
 
     # 카드를 읽는 사람은 외국인 직원이다. 한국어만 저장되면 읽을 수가 없다.
@@ -586,13 +586,13 @@ class CardApiTests(TestCase):
         self.assertIn(self.card.id, ids)
         self.assertNotIn(other_card.id, ids)
 
-    def test_status_filter(self):
-        response = self.client.get(f'{self.base}?status=DONE')
+    def test_column_filter(self):
+        response = self.client.get(f'{self.base}?column=DONE')
 
         self.assertEqual(response.data['items'], [])
 
-    def test_invalid_status(self):
-        self.assertEqual(self.client.get(f'{self.base}?status=NOPE').status_code, 400)
+    def test_invalid_column(self):
+        self.assertEqual(self.client.get(f'{self.base}?column=NOPE').status_code, 400)
 
     def test_detail_includes_steps_blanks_and_tone(self):
         response = self.client.get(f'{self.base}/{self.card.id}')
@@ -618,7 +618,7 @@ class CardApiTests(TestCase):
         )
 
         self.assertEqual(response.data['assigneeId'], self.other.id)
-        self.assertEqual(response.data['status'], 'NEW')
+        self.assertEqual(response.data['status'], 'READY')
 
     def test_assignee_can_be_cleared(self):
         response = self.client.patch(
@@ -630,10 +630,10 @@ class CardApiTests(TestCase):
     def test_status_and_assignee_together(self):
         response = self.client.patch(
             f'{self.base}/{self.card.id}',
-            {'status': 'OPEN', 'assigneeId': self.other.id}, format='json',
+            {'status': 'IN_PROGRESS', 'assigneeId': self.other.id}, format='json',
         )
 
-        self.assertEqual(response.data['status'], 'OPEN')
+        self.assertEqual(response.data['status'], 'IN_PROGRESS')
         self.assertEqual(response.data['assigneeId'], self.other.id)
 
     # 남의 회사 사람에게 일을 넘길 수는 없다.

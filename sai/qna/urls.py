@@ -2,6 +2,7 @@ from django.urls import path
 
 from .views import (
     AskView,
+    EscalationAcknowledgeView,
     EscalationApproveView,
     EscalationCheckAnswerView,
     EscalationDetailView,
@@ -21,4 +22,5 @@ urlpatterns = [
     path('<int:company_id>/questions/<int:escalation_id>/check-answer', EscalationCheckAnswerView.as_view()),
     path('<int:company_id>/questions/<int:escalation_id>/approve', EscalationApproveView.as_view()),
     path('<int:company_id>/questions/<int:escalation_id>/dismiss', EscalationDismissView.as_view()),
+    path('<int:company_id>/questions/<int:escalation_id>/acknowledge', EscalationAcknowledgeView.as_view()),
 ]

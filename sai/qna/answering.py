@@ -10,7 +10,7 @@ from openai import OpenAI, OpenAIError, RateLimitError
 from pgvector.django import CosineDistance
 from pydantic import BaseModel
 
-from handbook.models import HandbookEntry
+from handbook.retrieval import search_rules
 from handbook.services import scopes_in_view
 from policy.models import RiskKeyword
 from sources.models import Chunk
@@ -154,30 +154,6 @@ def _get_client():
     return OpenAI(api_key=settings.OPENAI_API_KEY, max_retries=0, timeout=30)
 
 
-# 한국어/영어 임베딩을 모두 뒤져 항목별로 더 가까운 쪽을 쓴다.
-# 영어 질문이 한국어로만 쓰인 규칙을 찾을 수 있어야 하기 때문.
-def retrieve_rules(vector, company, scope_ids=None):
-    entries = HandbookEntry.objects.filter(
-        company=company, status=HandbookEntry.Status.CONFIRMED
-    ).select_related('scope')
-    if scope_ids is not None:
-        entries = entries.filter(scope_id__in=scope_ids)
-
-    best = {}
-    for field in ('embedding_ko', 'embedding_en'):
-        rows = (
-            entries.filter(**{f'{field}__isnull': False})
-            .annotate(distance=CosineDistance(field, vector))
-            .filter(distance__lte=MAX_DISTANCE)
-            .order_by('distance')[:TOP_K]
-        )
-        for entry in rows:
-            if entry.id not in best or entry.distance < best[entry.id].distance:
-                best[entry.id] = entry
-
-    return sorted(best.values(), key=lambda entry: entry.distance)[:TOP_K]
-
-
 # 같은 말이 여러 번 올라온 경우 한 번만 쓴다. 같은 문장이 두 줄 뜨면 근거가 빈약해 보인다.
 def retrieve_cases(vector, company, scope_ids=None):
     chunks = Chunk.objects.filter(company=company, embedding__isnull=False)
@@ -214,7 +190,7 @@ def embed_question(client, question):
 # 같은 벡터를 여러 번 쓴다. 사례를 붙이고 범위를 넓히는 데 임베딩 호출이 늘지 않는다.
 def retrieve(vector, company, scope_ids=None):
     return (
-        retrieve_rules(vector, company, scope_ids),
+        search_rules(vector, company, scope_ids, TOP_K, MAX_DISTANCE),
         retrieve_cases(vector, company, scope_ids),
     )
 

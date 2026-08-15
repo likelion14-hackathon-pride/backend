@@ -2,6 +2,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from django.test import TestCase, override_settings
+from django.utils import timezone
 from rest_framework.test import APIClient
 
 from accounts.models import Membership, User
@@ -441,3 +442,37 @@ class EscalationTests(TestCase):
         response = self.client.post(f'{self.base}/{escalation_id}/dismiss')
 
         self.assertEqual(response.status_code, 403)
+
+    # --- 답 확인 ---
+
+    # 확인하지 않으면 카드가 Answered 열에 계속 남는다.
+    def test_acknowledge(self):
+        escalation_id = self.create().data['id']
+        Escalation.objects.filter(id=escalation_id).update(
+            status=Escalation.Status.ANSWERED, answered_at=timezone.now()
+        )
+
+        response = self.client.post(f'{self.base}/{escalation_id}/acknowledge')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIsNotNone(Escalation.objects.get(id=escalation_id).acknowledged_at)
+
+    def test_acknowledge_before_the_answer_is_rejected(self):
+        escalation_id = self.create().data['id']
+
+        response = self.client.post(f'{self.base}/{escalation_id}/acknowledge')
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.data['error']['field'], 'status')
+
+    def test_acknowledge_twice_keeps_the_first_time(self):
+        escalation_id = self.create().data['id']
+        Escalation.objects.filter(id=escalation_id).update(
+            status=Escalation.Status.ANSWERED, answered_at=timezone.now()
+        )
+        self.client.post(f'{self.base}/{escalation_id}/acknowledge')
+        first = Escalation.objects.get(id=escalation_id).acknowledged_at
+
+        self.client.post(f'{self.base}/{escalation_id}/acknowledge')
+
+        self.assertEqual(Escalation.objects.get(id=escalation_id).acknowledged_at, first)

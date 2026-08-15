@@ -3,9 +3,17 @@ from pgvector.django import VectorField
 
 
 class InstructionCard(models.Model):
+    # 사람이 옮기는 상태. 보드의 WAITING / ANSWERED 는 질문 상태에서 나오므로 여기 없다.
     class Status(models.TextChoices):
-        NEW = 'NEW'
-        OPEN = 'OPEN'
+        READY = 'READY'
+        IN_PROGRESS = 'IN_PROGRESS'
+        DONE = 'DONE'
+
+    class Column(models.TextChoices):
+        READY = 'READY'
+        IN_PROGRESS = 'IN_PROGRESS'
+        WAITING = 'WAITING'
+        ANSWERED = 'ANSWERED'
         DONE = 'DONE'
 
     # 완곡한 한국어 요청을 외국인 독자가 오판하는 지점이 급함의 정도다.
@@ -35,7 +43,8 @@ class InstructionCard(models.Model):
     )
     tone_note = models.TextField(null=True, blank=True)
     tone_note_en = models.TextField(null=True, blank=True)
-    status = models.CharField(max_length=6, choices=Status.choices, default=Status.NEW)
+    status = models.CharField(max_length=12, choices=Status.choices, default=Status.READY)
+    read_at = models.DateTimeField(null=True, blank=True)
     # 같은 요청을 슬랙에 여러 번 올리면 카드도 여러 장이 된다.
     # 원문마다 카드를 남기되, 처음 것만 목록에 보여 주고 나머지는 여기로 묶는다.
     duplicate_of = models.ForeignKey(
