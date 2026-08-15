@@ -18,7 +18,7 @@ from sources.text import normalize_slack_text
 from .models import Blank, InstructionCard, Step, ToneEvidence
 
 # 프롬프트를 고치면 올린다.
-GENERATOR_VERSION = 'card-v3'
+GENERATOR_VERSION = 'card-v4'
 
 # 지시 판정은 한 번에 여러 건을 본다. 문서마다 부르면 비용이 몇십 배가 된다.
 JUDGE_BATCH_SIZE = 25
@@ -100,8 +100,28 @@ tool and product names, file names, code, URLs, numbers and times exactly as the
 
 Fill the fields in the order given.
 
-purpose / purpose_en - what the requester actually wants achieved. One sentence. Not a restatement
-  of the message.
+blanks - what the assignee cannot start without knowing, as short English questions.
+  These come first on purpose. Finding the gap is the whole point of the card: a request that
+  reads fine to a Korean colleague often leaves out something a new reader cannot guess.
+
+  Ask when the message does not say
+    - what the work actually is - '시간 될 때 봐주세요' says review, but review what?
+    - which thing to act on - which environment, which channel, which document, which branch
+    - what counts as finished, but only when the request is genuinely open-ended
+
+  Do not ask about anything the message, the thread parent, the rules or the past cases already
+  answer. Do not ask for a deadline that was already given. Two questions at most.
+  Empty list when the request stands on its own.
+
+  These questions are in English. Every field after this one keeps its Korean and English pair -
+  write the Korean version in Korean.
+
+purpose (Korean) / purpose_en (English) - what the requester actually wants achieved. One sentence.
+  Not a restatement of the message: '결제 실패 로그 검토를 요청합니다' just repeats it, while
+  '결제 실패의 원인을 찾는다' says what it is for.
+  Say the work is unstated only when the message names no object at all. '봐주세요' alone names
+  nothing, so write '검토 대상이 무엇인지 원문에 없습니다'. But '배포 스크립트 한번 봐주세요'
+  does name the object - write the purpose normally and ask which one in blanks.
 
 deliverable / deliverable_en - the concrete thing to hand over. Empty strings if the request does
   not name one.
@@ -118,10 +138,14 @@ is_deadline_inferred - true when you had to guess. '내일 오전까지' is expl
 
 urgency - pick one before you write tone_note, then keep tone_note consistent with it.
   URGENT   - the requester needs it now and other work should yield.
-  SOON     - there is a real deadline, but the normal working order is fine.
-  WHENEVER - the requester said it can wait. '급한 건 아닌데', '천천히', '시간 되실 때',
-             '여유 되실 때'. Take them at their word.
-  UNCLEAR  - the message does not say and the past cases do not tell you.
+  SOON     - a deadline was stated. '내일 오전까지', '오늘 중으로', '이번 주 안에' are deadlines
+             even when the sentence around them is soft. Normal working order is fine.
+  WHENEVER - the requester said it can wait and named no deadline. '급한 건 아닌데', '천천히',
+             '시간 되실 때', '여유 되실 때'. Take them at their word.
+  UNCLEAR  - the message states neither a deadline nor that it can wait, and the past cases do
+             not tell you.
+
+  A stated deadline outranks soft wording. '급한 건 아닌데 이번 주 안에' is SOON, not WHENEVER.
 
   A message that denies urgency is not urgent. '급한 건 아닌데 시간 되실 때 봐주세요' is WHENEVER,
   never URGENT and never SOON.
@@ -142,10 +166,8 @@ tone_note / tone_note_en - what this phrasing actually means in practice at this
 
 steps - concrete actions in order. Two to five. Each has text (Korean) and text_en (English).
   rule_index points at a company rule below that governs that step, or -1 when none applies.
-  Do not invent rules.
-
-blanks - anything the assignee cannot proceed without knowing, written as short English questions.
-  Empty list when the request is complete. Do not manufacture questions.
+  Do not invent rules. When you wrote a blank because the work itself is unstated, the first step
+  is to ask - do not fill the gap with plausible-sounding actions.
 
 tone_cases - which past cases you used for tone_note. case_index plus the quote copied EXACTLY
   from that case, in the original Korean. Empty list when tone_note is empty or unsupported.
@@ -182,7 +204,10 @@ class ToneCase(BaseModel):
     quote: str
 
 
+# blanks 가 맨 앞인 이유: 빠진 것을 먼저 찾게 하면 그다음 purpose 를 얼버무리지 않는다.
+# 뒤에 두었더니 '요청한 작업을 검토합니다' 같은 문장을 쓰고 미정 항목은 비워 두었다.
 class CardDraft(BaseModel):
+    blanks: list[CardBlank]
     purpose: str
     purpose_en: str
     deliverable: str
@@ -195,7 +220,6 @@ class CardDraft(BaseModel):
     tone_note: str
     tone_note_en: str
     steps: list[CardStep]
-    blanks: list[CardBlank]
     tone_cases: list[ToneCase]
 
 
