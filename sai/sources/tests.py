@@ -477,6 +477,8 @@ HISTORY = [
     {'ts': '1786700100.000200', 'user': 'U002', 'text': '넵 알겠습니다', 'reply_count': 2},
     {'ts': '1786700200.000300', 'user': 'U001', 'text': '', 'subtype': 'channel_join'},
     {'ts': '1786700300.000400', 'user': 'U001', 'text': '   '},
+    # 슬랙 앱이 올린 메시지. user 가 있어도 봇이므로 수집 대상이 아니다.
+    {'ts': '1786700400.000500', 'user': 'U0BPPRH9HTK', 'bot_id': 'B001', 'text': 'SAI가 보낸 확인 질문'},
 ]
 REPLIES = [
     {'ts': '1786700100.000200', 'user': 'U002', 'text': '넵 알겠습니다'},
@@ -534,6 +536,13 @@ class IngestionTests(TestCase):
 
         self.assertNotIn('1786700200.000300', stored)  # channel_join
         self.assertNotIn('1786700300.000400', stored)  # 공백만
+
+    # 백필도 웹훅과 같은 규칙을 써야 한다. SAI가 보낸 글이 되먹임되면 안 된다.
+    def test_skips_bot_messages(self):
+        self.ingest()
+        stored = set(RawDocument.objects.values_list('external_ref', flat=True))
+
+        self.assertNotIn('1786700400.000500', stored)
 
     def test_thread_reply_keeps_parent_reference(self):
         self.ingest()

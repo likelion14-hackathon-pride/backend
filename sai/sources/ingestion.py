@@ -43,11 +43,19 @@ def _permalink(workspace_url, channel_id, ts):
     return f'{workspace_url.rstrip("/")}/archives/{channel_id}/p{ts.replace(".", "")}'
 
 
-def _is_collectable(message):
+def is_collectable(message):
+    # 봇이 올린 메시지는 수집하지 않는다.
+    # SAI가 보낸 확인 질문도 여기 걸린다. 안 막으면 자기가 쓴 글을 다시 읽고 규칙으로 만든다.
+    # 슬랙은 앱 메시지에 bot_id 와 user 를 함께 실어 보내므로 bot_id 만으로 판단해야 한다.
+    if message.get('bot_id'):
+        return False
     if message.get('subtype') in SKIPPED_SUBTYPES:
         return False
 
     return bool((message.get('text') or '').strip())
+
+
+_is_collectable = is_collectable
 
 
 # 슬랙 사용자를 Identity로 등록하고 {slack_user_id: Identity} 맵을 돌려준다.
@@ -78,18 +86,20 @@ def build_identity_map(connection):
     return identities
 
 
-# 메시지 한 건을 RawDocument로 저장한다. content_hash가 같으면 내용이 안 바뀐 것이다.
-def _save_message(item, message, identity_map, workspace_url, thread_ref=None):
+# 메시지 한 건을 RawDocument로 저장한다.
+# (item, external_ref) 유니크 제약 덕분에 같은 메시지를 다시 받아도 행이 늘지 않는다.
+# 웹훅 재시도와 재수집 양쪽에서 이 성질에 기대고 있다.
+def save_document(item, message, author_identity, workspace_url, thread_ref=None):
     text = message['text'].strip()
     external_ref = message['ts']
 
-    document, is_created = RawDocument.objects.update_or_create(
+    _, is_created = RawDocument.objects.update_or_create(
         item=item,
         external_ref=external_ref,
         defaults={
             'company_id': item.company_id,
             'thread_ref': thread_ref,
-            'author_identity': identity_map.get(message.get('user')),
+            'author_identity': author_identity,
             'occurred_at': _occurred_at(external_ref),
             'permalink': _permalink(workspace_url, item.external_id, external_ref),
             'raw_text': text,
@@ -98,6 +108,12 @@ def _save_message(item, message, identity_map, workspace_url, thread_ref=None):
     )
 
     return is_created
+
+
+def _save_message(item, message, identity_map, workspace_url, thread_ref=None):
+    return save_document(
+        item, message, identity_map.get(message.get('user')), workspace_url, thread_ref
+    )
 
 
 # 채널 하나를 수집한다. (신규, 갱신) 반환.

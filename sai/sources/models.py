@@ -19,6 +19,8 @@ class Connection(models.Model):
     credential_ref = models.CharField(max_length=200, null=True, blank=True)
     external_workspace_id = models.CharField(max_length=32, null=True, blank=True, db_index=True)
     display_name = models.CharField(max_length=200, null=True, blank=True)
+    # 원문 permalink를 조립하는 데 쓴다. 메시지마다 auth.test를 부르지 않으려고 저장해 둔다.
+    workspace_url = models.CharField(max_length=200, null=True, blank=True)
     bot_token = models.CharField(max_length=200, null=True, blank=True)
     signing_secret = models.CharField(max_length=100, null=True, blank=True)
     # status가 ERROR일 때 원인. 채널 조회 실패 같은 건 연결을 막지 않고 여기에 남긴다.
