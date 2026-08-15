@@ -1,15 +1,20 @@
 from django.core.exceptions import ImproperlyConfigured
 from django.db import transaction
 from django.shortcuts import get_object_or_404
-from drf_yasg.utils import swagger_auto_schema
+from django.utils import timezone
+from drf_yasg import openapi
+from drf_yasg.utils import no_body, swagger_auto_schema
 from rest_framework import status
-from rest_framework.exceptions import APIException, PermissionDenied
+from rest_framework.exceptions import APIException, PermissionDenied, ValidationError
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from accounts.models import Membership
 from companies.models import Company
+from handbook.models import CompanyScope, HandbookEntry, HandbookEvidence
+from sources.models import Item
+from sources.slack import SlackError
 
 from .answering import (
     PROMPT_VERSION,
@@ -17,12 +22,25 @@ from .answering import (
     answer_question,
     find_risk_warnings,
 )
-from .models import Citation, Message, Thread
+from .escalation import fetch_reply, judge_reply, send_to_slack
+from .models import Citation, Escalation, Message, Thread
 from .serializers import (
     AskInputSerializer,
     AskResultSerializer,
+    EscalationCreateSerializer,
+    EscalationDraftUpdateSerializer,
+    EscalationListSerializer,
+    EscalationSendSerializer,
+    EscalationSerializer,
     MessageListSerializer,
     MessageSerializer,
+)
+
+STATUS_PARAMETER = openapi.Parameter(
+    'status',
+    openapi.IN_QUERY,
+    type=openapi.TYPE_STRING,
+    enum=['DRAFT', 'SENT', 'ANSWERED', 'APPROVED', 'DISMISSED'],
 )
 
 # 근거가 없거나 판단이 필요한 경우는 대표 확인이 필요하다는 뜻이다.
@@ -111,6 +129,12 @@ class AskView(APIView):
 
         warnings = find_risk_warnings(company, question, result.answer)
 
+        bodies = {body_field: result.answer or None}
+        # 대표 확인이 필요한 답변은 한국어 초안이 본체다.
+        # 여기서 저장해 두지 않으면 나중에 에스컬레이션을 만들 때 초안을 잃어버린다.
+        if result.verdict in NEEDS_OWNER and result.draft_ko:
+            bodies['body_ko'] = result.draft_ko
+
         with transaction.atomic():
             message = Message.objects.create(
                 company=company,
@@ -124,7 +148,7 @@ class AskView(APIView):
                 # 청크 본문은 넣지 않는다. id와 점수만 남긴다.
                 retrieval=retrieval,
                 latency_ms=usage['latencyMs'],
-                **{body_field: result.answer or None},
+                **bodies,
             )
             Citation.objects.bulk_create([
                 Citation(company=company, message=message, entry=entry) for entry in cited
@@ -143,6 +167,295 @@ class AskView(APIView):
         }
 
         return Response(AskResultSerializer(payload).data, status=status.HTTP_200_OK)
+
+
+def get_owner_company(user, company_id):
+    company = get_object_or_404(Company, id=company_id)
+    is_owner = Membership.objects.filter(
+        user=user, company=company, role=Membership.Role.OWNER, left_at__isnull=True
+    ).exists()
+
+    if not is_owner:
+        raise PermissionDenied('owner permission required')
+
+    return company
+
+
+def _visible_escalations(company, user):
+    queryset = Escalation.objects.filter(company=company).select_related('asked_by')
+    is_owner = Membership.objects.filter(
+        user=user, company=company, role=Membership.Role.OWNER, left_at__isnull=True
+    ).exists()
+    # 대표는 전부 보고, 팀원은 자기가 올린 것만 본다.
+    return queryset if is_owner else queryset.filter(asked_by=user)
+
+
+# 대표 확인 질문 목록 / 생성 view
+class EscalationListCreateView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    @swagger_auto_schema(
+        operation_summary='대표 확인 질문 목록',
+        operation_description='대표는 회사 전체를, 팀원은 본인이 올린 것만 봅니다.',
+        manual_parameters=[STATUS_PARAMETER],
+        responses={200: EscalationListSerializer(), 401: '인증되지 않음', 403: '회사 접근 권한 없음'},
+        tags=['Question'],
+    )
+    def get(self, request, company_id):
+        company = get_member_company(request.user, company_id)
+        escalations = _visible_escalations(company, request.user)
+
+        escalation_status = request.query_params.get('status')
+        if escalation_status:
+            escalations = escalations.filter(status=escalation_status)
+
+        serializer = EscalationSerializer(escalations.order_by('-created_at'), many=True)
+
+        return Response({'items': serializer.data}, status=status.HTTP_200_OK)
+
+    @swagger_auto_schema(
+        operation_summary='대표 확인 질문 초안 생성',
+        operation_description=(
+            'Ask SAI가 NO_SOURCE / NEEDS_DECISION으로 답한 메시지를 대표 확인 대기로 올립니다. '
+            'messageId를 주면 그 질문과 SAI가 만든 한국어 초안을 그대로 가져옵니다. '
+            '아직 발송되지는 않으며, 초안을 확인·수정한 뒤 send를 호출해야 슬랙으로 나갑니다.'
+        ),
+        request_body=EscalationCreateSerializer,
+        responses={
+            201: EscalationSerializer(), 400: '잘못된 요청', 401: '인증되지 않음',
+            403: '회사 접근 권한 없음', 404: '메시지를 찾을 수 없음',
+        },
+        tags=['Question'],
+    )
+    def post(self, request, company_id):
+        company = get_member_company(request.user, company_id)
+        serializer = EscalationCreateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+
+        origin = None
+        question_en = data.get('questionEn')
+        draft_ko = data.get('draftKo')
+
+        if data.get('messageId'):
+            origin = get_object_or_404(
+                Message.objects.select_related('thread'),
+                id=data['messageId'], company=company, thread__user=request.user,
+            )
+            if hasattr(origin, 'escalation'):
+                raise ValidationError({'messageId': ['already escalated']})
+            question = Message.objects.filter(
+                thread=origin.thread, role=Message.Role.USER, id__lt=origin.id
+            ).order_by('-id').first()
+            question_en = question_en or (question.body_en or question.body_ko if question else None)
+            draft_ko = draft_ko or _draft_from_message(origin)
+
+        if not question_en:
+            raise ValidationError({'questionEn': ['question text not found']})
+        # 초안이 없으면 영어 원문이 그대로 대표에게 나간다. 그럴 바엔 막고 받는다.
+        if not draft_ko:
+            raise ValidationError({'draftKo': ['korean draft required']})
+
+        escalation = Escalation.objects.create(
+            company=company,
+            asked_by=request.user,
+            scope=origin.thread.scope if origin else None,
+            origin_message=origin,
+            question_en=question_en,
+            draft_ko=draft_ko,
+        )
+
+        return Response(EscalationSerializer(escalation).data, status=status.HTTP_201_CREATED)
+
+
+# AI 답변 메시지에 저장해 둔 한국어 초안. NEEDS_OWNER 판정일 때만 채워져 있다.
+def _draft_from_message(message):
+    if message.verdict not in NEEDS_OWNER:
+        return None
+
+    return (message.body_ko or '').strip() or None
+
+
+class EscalationDetailView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    @swagger_auto_schema(
+        operation_summary='대표 확인 질문 상세',
+        responses={200: EscalationSerializer(), 401: '인증되지 않음', 403: '회사 접근 권한 없음', 404: '없음'},
+        tags=['Question'],
+    )
+    def get(self, request, company_id, escalation_id):
+        company = get_member_company(request.user, company_id)
+        escalation = get_object_or_404(_visible_escalations(company, request.user), id=escalation_id)
+
+        return Response(EscalationSerializer(escalation).data, status=status.HTTP_200_OK)
+
+    @swagger_auto_schema(
+        operation_summary='발송 전 초안 수정',
+        operation_description='아직 보내지 않은 질문만 고칠 수 있습니다.',
+        request_body=EscalationDraftUpdateSerializer,
+        responses={200: EscalationSerializer(), 400: '이미 발송됨', 401: '인증되지 않음', 404: '없음'},
+        tags=['Question'],
+    )
+    def patch(self, request, company_id, escalation_id):
+        company = get_member_company(request.user, company_id)
+        escalation = get_object_or_404(_visible_escalations(company, request.user), id=escalation_id)
+
+        if escalation.status != Escalation.Status.DRAFT:
+            raise ValidationError({'draftKo': ['already sent']})
+
+        serializer = EscalationDraftUpdateSerializer(escalation, data=request.data)
+        serializer.is_valid(raise_exception=True)
+        escalation = serializer.save()
+
+        return Response(EscalationSerializer(escalation).data, status=status.HTTP_200_OK)
+
+
+# 슬랙으로 질문 발송 view
+class EscalationSendView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    @swagger_auto_schema(
+        operation_summary='슬랙으로 질문 발송',
+        operation_description=(
+            '지정한 채널에 한국어 질문을 올립니다. 대표가 그 스레드에 답장하면 check-answer로 회수합니다. '
+            '한 번 보낸 질문은 다시 보낼 수 없습니다.'
+        ),
+        request_body=EscalationSendSerializer,
+        responses={
+            200: EscalationSerializer(), 400: '이미 발송됨 / 슬랙 오류',
+            401: '인증되지 않음', 403: '회사 접근 권한 없음', 404: '질문 또는 채널 없음',
+        },
+        tags=['Question'],
+    )
+    def post(self, request, company_id, escalation_id):
+        company = get_member_company(request.user, company_id)
+        escalation = get_object_or_404(_visible_escalations(company, request.user), id=escalation_id)
+        serializer = EscalationSendSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        if escalation.status != Escalation.Status.DRAFT:
+            raise ValidationError({'status': ['already sent']})
+
+        item = get_object_or_404(
+            Item, id=serializer.validated_data['itemId'], company=company, removed_at__isnull=True
+        )
+        try:
+            escalation = send_to_slack(escalation, item)
+        except SlackError as exc:
+            raise ValidationError({'slack': [exc.code]})
+
+        return Response(EscalationSerializer(escalation).data, status=status.HTTP_200_OK)
+
+
+# 대표 답장 회수 view
+class EscalationCheckAnswerView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    @swagger_auto_schema(
+        operation_summary='대표 답장 확인',
+        operation_description=(
+            '보낸 슬랙 스레드에 달린 답장을 가져와, 그것이 실제로 질문에 답하는지 AI가 판정합니다. '
+            '"확인해볼게요" 같은 회피성 답변은 answerIsAnswer=false로 남고 상태는 그대로입니다. '
+            '답이 맞으면 한국어·영어로 정리해 저장하고 ANSWERED로 바뀝니다.'
+        ),
+        request_body=no_body,
+        responses={
+            200: EscalationSerializer(), 400: '아직 발송되지 않음 / 슬랙 오류',
+            401: '인증되지 않음', 404: '질문 없음', 503: '판정 불가',
+        },
+        tags=['Question'],
+    )
+    def post(self, request, company_id, escalation_id):
+        company = get_member_company(request.user, company_id)
+        escalation = get_object_or_404(_visible_escalations(company, request.user), id=escalation_id)
+
+        if escalation.status == Escalation.Status.DRAFT:
+            raise ValidationError({'status': ['not sent yet']})
+
+        try:
+            reply, text = fetch_reply(escalation)
+        except SlackError as exc:
+            raise ValidationError({'slack': [exc.code]})
+
+        if reply is None:
+            return Response(EscalationSerializer(escalation).data, status=status.HTTP_200_OK)
+
+        try:
+            judgement = judge_reply(escalation.question_en, escalation.draft_ko, text)
+        except (ImproperlyConfigured, RuntimeError) as exc:
+            raise AnswerUnavailable(str(exc))
+
+        escalation.answer_is_answer = judgement.is_answer
+        escalation.answer_reason = judgement.reason[:200]
+        escalation.answer_needs_review = judgement.needs_review
+        if judgement.is_answer:
+            escalation.answer_ko = judgement.answer_ko
+            escalation.answer_en = judgement.answer_en
+            escalation.answered_at = timezone.now()
+            escalation.status = Escalation.Status.ANSWERED
+        escalation.save()
+
+        return Response(EscalationSerializer(escalation).data, status=status.HTTP_200_OK)
+
+
+# 답변을 핸드북 규칙으로 승격하는 view
+class EscalationApproveView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    @swagger_auto_schema(
+        operation_summary='답변을 핸드북 규칙으로 승격',
+        operation_description=(
+            '대표 답변을 핸드북 초안으로 만듭니다. 다음 사람이 같은 질문을 하면 Ask SAI가 바로 답할 수 있게 됩니다. '
+            '만들어진 항목은 DRAFT이며 확정은 별도로 해야 합니다.'
+        ),
+        request_body=no_body,
+        responses={
+            201: EscalationSerializer(), 400: '아직 답변이 없음',
+            401: '인증되지 않음', 403: 'Owner 권한 없음', 404: '질문 없음',
+        },
+        tags=['Question'],
+    )
+    def post(self, request, company_id, escalation_id):
+        company = get_owner_company(request.user, company_id)
+        escalation = get_object_or_404(Escalation, id=escalation_id, company=company)
+
+        if escalation.status != Escalation.Status.ANSWERED or not escalation.answer_ko:
+            raise ValidationError({'status': ['no answer to promote']})
+
+        scope = escalation.scope or CompanyScope.objects.filter(
+            company=company, kind=CompanyScope.Kind.COMPANY,
+            area_key=CompanyScope.AreaKey.COMPANY,
+        ).first()
+        if scope is None:
+            raise ValidationError({'scope': ['no scope available']})
+
+        with transaction.atomic():
+            entry = HandbookEntry.objects.create(
+                company=company,
+                scope=scope,
+                title=escalation.question_en[:200],
+                body_ko=escalation.answer_ko,
+                body_en=escalation.answer_en or None,
+                original_lang='ko',
+                status=HandbookEntry.Status.DRAFT,
+                origin=HandbookEntry.Origin.ESCALATION,
+                confidence=HandbookEntry.Confidence.MEDIUM,
+            )
+            HandbookEvidence.objects.create(
+                company=company,
+                entry=entry,
+                quote=escalation.answer_ko,
+                tag=HandbookEvidence.Tag.OWNER,
+                source_label='대표 확인 답변',
+                speaker_name=None,
+                occurred_at=escalation.answered_at,
+            )
+            escalation.proposed_entry = entry
+            escalation.status = Escalation.Status.APPROVED
+            escalation.save(update_fields=['proposed_entry', 'status'])
+
+        return Response(EscalationSerializer(escalation).data, status=status.HTTP_201_CREATED)
 
 
 # 질문 스레드 대화 이력 view

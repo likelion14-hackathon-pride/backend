@@ -120,6 +120,10 @@ class SlackClient:
 
         return messages[:max_messages]
 
+    # 채널에 메시지를 올린다. 응답의 ts가 스레드 식별자가 되어 답변을 되받는 데 쓰인다.
+    def post_message(self, channel_id, text):
+        return self._call('chat.postMessage', data={'channel': channel_id, 'text': text})
+
     # 워크스페이스 사용자 목록. 슬랙 user_id를 사람 이름으로 바꾸는 데 쓴다.
     def users_list(self, max_pages=20):
         members = []

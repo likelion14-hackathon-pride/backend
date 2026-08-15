@@ -2,7 +2,7 @@ from rest_framework import serializers
 
 from handbook.models import CompanyScope
 
-from .models import Message
+from .models import Escalation, Message
 
 
 class AskInputSerializer(serializers.Serializer):
@@ -83,3 +83,81 @@ class MessageSerializer(serializers.ModelSerializer):
 
 class MessageListSerializer(serializers.Serializer):
     items = MessageSerializer(many=True)
+
+
+# --- 에스컬레이션 (대표 확인 질문) ---
+
+
+class EscalationSerializer(serializers.ModelSerializer):
+    askedById = serializers.IntegerField(source='asked_by_id', read_only=True)
+    askedByName = serializers.CharField(source='asked_by.display_name', read_only=True)
+    questionEn = serializers.CharField(source='question_en', read_only=True)
+    draftKo = serializers.CharField(source='draft_ko', read_only=True)
+    sentText = serializers.CharField(source='sent_text', read_only=True)
+    slackThreadRef = serializers.CharField(source='slack_thread_ref', read_only=True)
+    answerKo = serializers.CharField(source='answer_ko', read_only=True)
+    answerEn = serializers.CharField(source='answer_en', read_only=True)
+    answerIsAnswer = serializers.BooleanField(source='answer_is_answer', read_only=True)
+    answerReason = serializers.CharField(source='answer_reason', read_only=True)
+    answerNeedsReview = serializers.BooleanField(source='answer_needs_review', read_only=True)
+    proposedEntryId = serializers.IntegerField(source='proposed_entry_id', read_only=True)
+    originMessageId = serializers.IntegerField(source='origin_message_id', read_only=True)
+    scopeId = serializers.IntegerField(source='scope_id', read_only=True)
+    sentAt = serializers.DateTimeField(source='sent_at', read_only=True)
+    answeredAt = serializers.DateTimeField(source='answered_at', read_only=True)
+    createdAt = serializers.DateTimeField(source='created_at', read_only=True)
+
+    class Meta:
+        model = Escalation
+        fields = [
+            'id',
+            'status',
+            'askedById',
+            'askedByName',
+            'questionEn',
+            'draftKo',
+            'sentText',
+            'slackThreadRef',
+            'answerKo',
+            'answerEn',
+            'answerIsAnswer',
+            'answerReason',
+            'answerNeedsReview',
+            'proposedEntryId',
+            'originMessageId',
+            'scopeId',
+            'sentAt',
+            'answeredAt',
+            'createdAt',
+        ]
+
+
+class EscalationListSerializer(serializers.Serializer):
+    items = EscalationSerializer(many=True)
+
+
+# 답변받지 못한 질문을 대표 확인 대기로 올린다.
+class EscalationCreateSerializer(serializers.Serializer):
+    messageId = serializers.IntegerField(required=False)
+    questionEn = serializers.CharField(max_length=2000, required=False)
+    draftKo = serializers.CharField(max_length=2000, required=False)
+
+    def validate(self, attrs):
+        if not attrs.get('messageId') and not attrs.get('questionEn'):
+            raise serializers.ValidationError('messageId 또는 questionEn 중 하나는 필요합니다')
+
+        return attrs
+
+
+class EscalationDraftUpdateSerializer(serializers.Serializer):
+    draftKo = serializers.CharField(source='draft_ko', max_length=2000, trim_whitespace=True)
+
+    def update(self, instance, validated_data):
+        instance.draft_ko = validated_data['draft_ko']
+        instance.save(update_fields=['draft_ko'])
+
+        return instance
+
+
+class EscalationSendSerializer(serializers.Serializer):
+    itemId = serializers.IntegerField(help_text='질문을 올릴 슬랙 채널(수집 대상 채널) ID')
