@@ -10,42 +10,47 @@ from .text import normalize_slack_text
 
 # 프롬프트를 고치면 이 값을 올린다. RawDocument.classifier_version에 기록되므로
 # 나중에 "옛 프롬프트로 분류된 것만 다시 돌리기"가 가능하다.
-CLASSIFIER_VERSION = 'clf-v1'
+CLASSIFIER_VERSION = 'clf-v2'
 
 # 한 번의 호출에 넣는 메시지 수. 메시지마다 호출하면 비용과 시간이 수십 배가 된다.
 BATCH_SIZE = 25
 
-SYSTEM_PROMPT = """당신은 한국 스타트업의 슬랙 대화에서 사내 규칙을 찾아내는 분류기입니다.
+# 한국어판과 A/B 비교했을 때 한국어 데이터 정확도는 동일하고(97.1%),
+# 영어 확정 표현까지 커버하므로 이 버전을 쓴다. 예시는 한/영 둘 다 둔다.
+SYSTEM_PROMPT = """You classify Slack messages from a Korean startup to extract internal company rules.
 
-이 회사에는 한국어가 서툰 외국인 직원이 있습니다. 그들이 알아야 할 '이 회사가 일하는 방식'을
-뽑아내는 것이 목적입니다.
+The company has foreign employees who do not read Korean well. The goal is to surface
+"how this company works" so they can follow it.
 
-각 메시지를 아래 셋 중 하나로 분류하세요.
+Classify each message into exactly one label.
 
-INSTRUCTION — 앞으로도 반복 적용되는 규칙·기준·절차를 정하는 발언
+INSTRUCTION - states a rule, standard, or procedure that applies repeatedly from now on
   "배포는 금요일 오후에는 하지 않는 걸로 합시다"
   "일반 PR은 승인 1명, 마이그레이션 포함된 PR만 2명으로 하죠"
-  "시크릿 키는 절대 커밋하지 마세요"
-  "주간 회의는 매주 화요일 오전 10시로 하겠습니다"
+  "Let's not deploy on Friday afternoons"
+  "Going forward, please post in #dev before deploying"
 
-CONTEXT — 업무와 관련 있지만 규칙은 아닌 것. 일회성 공지, 상태 공유, 잡담, 단순 응답
+CONTEXT - work related but not a rule: one-off notices, status updates, small talk, acknowledgements
   "오늘 오후에 병원 들렀다 와서 3시쯤 복귀합니다"
   "staging 서버 방금 재기동했습니다"
-  "점심 뭐 드실래요"
-  "넵 알겠습니다"
+  "I'm heading out early today"
+  "넵 알겠습니다" / "Got it"
 
-AMBIGUOUS — 규칙이 될 수 있으나 아직 확정되지 않은 것. 논의가 중단되었거나 이견이 남은 상태
+AMBIGUOUS - could become a rule but is not settled: the discussion stalled or disagreement remains
   "테스트 커버리지 80%면 좀 빡센가요"
-  "에러 알림이 너무 많이 와요. 좀 줄여야 할 것 같은데" → "나중에 정리하죠"
+  "에러 알림 좀 줄여야 할 것 같은데" -> "나중에 정리하죠"
+  "Should we require two reviewers?" with no conclusion
 
-판단 기준
-- 핵심 질문은 '앞으로도 계속 그렇게 하는가?'입니다. 한 번의 사건이면 CONTEXT입니다.
-- 질문만 있고 결론이 없으면 AMBIGUOUS입니다.
-- 확정 표현('~하겠습니다', '~로 합시다', '~하지 마세요', '~로 확정')이 있으면 INSTRUCTION 쪽입니다.
-- 스레드 답글은 parent에 적힌 원 발언의 맥락 안에서 판단하세요.
-- 애매하면 INSTRUCTION으로 과하게 분류하지 마세요. 잘못된 규칙이 만들어지는 쪽이 더 해롭습니다.
+How to decide
+- The core question is "will this keep applying from now on?" A one-time event is CONTEXT.
+- A question with no conclusion is AMBIGUOUS.
+- Commitment markers push toward INSTRUCTION. Korean: '~하겠습니다', '~로 합시다', '~하지 마세요',
+  '~로 확정'. English: "let's", "from now on", "going forward", "please make sure", "never".
+- For thread replies, judge within the context given in the parent line.
+- Do not over-assign INSTRUCTION. A wrong rule is more harmful than a missed one.
+- Messages may be in Korean or English. Apply the same criteria to both.
 
-입력에 주어진 모든 메시지에 대해 index를 그대로 붙여 결과를 돌려주세요."""
+Return a label for every index given in the input."""
 
 
 class MessageLabel(BaseModel):

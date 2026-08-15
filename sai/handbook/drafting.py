@@ -1,0 +1,241 @@
+import hashlib
+import re
+from typing import Literal
+
+from django.conf import settings
+from django.core.exceptions import ImproperlyConfigured
+from django.db import transaction
+from openai import OpenAI, OpenAIError
+from pydantic import BaseModel
+
+from sources.classifier import build_lookup
+from sources.models import RawDocument
+from sources.text import normalize_slack_text
+
+from .models import CompanyScope, HandbookEntry, HandbookEvidence
+
+# 프롬프트를 고치면 올린다. 재생성 대상을 고를 때 쓴다.
+DRAFTER_VERSION = 'draft-v1'
+
+# 한 번에 모델에 넣는 원문 수. 한 범위 안의 규칙끼리 묶으려면 함께 봐야 한다.
+BATCH_SIZE = 40
+
+SYSTEM_PROMPT = """You turn Slack messages into company handbook rules.
+
+The messages given to you were already classified as containing rules. The readers are foreign
+employees who need to know how this company works.
+
+Group related messages into ONE rule each. Produce one entry per distinct policy.
+
+For every rule return:
+- title: a short Korean noun phrase naming the rule (max 40 characters). Not a sentence.
+- body: the rule written in Korean as something the reader must follow. One to three sentences.
+  Write the rule itself, not a summary of the conversation. No "~라고 합니다" reporting style.
+- confidence: HIGH when the messages state it explicitly and agree, MEDIUM when you had to infer
+  part of it, LOW when the evidence is thin.
+- citations: which messages this rule came from.
+
+Citation rules - these matter most:
+- quote MUST be copied character for character from that message's text. Do not paraphrase,
+  do not fix typos, do not translate, do not add quotation marks.
+- Quote only the part that states the rule, not the whole message.
+- Cite every message that contributed. If two messages state the same rule, make ONE rule
+  citing both.
+- If a later message overrides an earlier one, write the rule as it stands NOW and cite both.
+
+Never invent a rule that is not in the messages. Producing fewer, well-supported rules is better
+than producing many weak ones."""
+
+
+class DraftCitation(BaseModel):
+    index: int
+    quote: str
+
+
+class DraftRule(BaseModel):
+    title: str
+    body: str
+    confidence: Literal['HIGH', 'MEDIUM', 'LOW']
+    citations: list[DraftCitation]
+
+
+class DraftResult(BaseModel):
+    rules: list[DraftRule]
+
+
+def _get_client():
+    if not settings.OPENAI_API_KEY:
+        raise ImproperlyConfigured('OPENAI_API_KEY 설정이 없어 초안 생성을 실행할 수 없습니다')
+
+    return OpenAI(api_key=settings.OPENAI_API_KEY)
+
+
+def _dedupe_key(scope_id, title):
+    normalized = re.sub(r'\s+', ' ', title).strip().lower()
+
+    return hashlib.sha256(f'{scope_id}:{normalized}'.encode()).hexdigest()
+
+
+# 채널에 연결된 지식공간을 쓰고, 없으면 회사 전반 규칙으로 보낸다.
+# HandbookEntry.scope가 NOT NULL이라 대안이 없다.
+def _resolve_scope(document, fallback):
+    return document.item.scope or fallback
+
+
+def _render(document, index, channels, users):
+    text = normalize_slack_text(document.raw_text, channels, users)
+    author = document.author_identity.external_handle if document.author_identity else '?'
+
+    return f'[{index}] author={author} at={document.occurred_at:%Y-%m-%d}\n    text: {text}'
+
+
+# 모델이 인용을 지어내지 않았는지 원문과 대조한다.
+# 정규화한 본문 기준으로 확인한다. 모델이 본 것이 그 텍스트이기 때문.
+def _verify_quote(quote, document, channels, users):
+    source = normalize_slack_text(document.raw_text, channels, users)
+    cleaned = quote.strip().strip('"“”\'')
+
+    return cleaned if cleaned and cleaned in source else None
+
+
+def _build_entry(company, scope, rule, documents, channels, users):
+    verified = []
+    seen_quotes = set()
+    for citation in rule.citations:
+        document = documents.get(citation.index)
+        if document is None:
+            continue
+        quote = _verify_quote(citation.quote, document, channels, users)
+        # 같은 문장이 여러 번 올라온 경우 원문은 여러 건이지만 근거로는 한 줄이면 된다.
+        if quote and quote not in seen_quotes:
+            seen_quotes.add(quote)
+            verified.append((document, quote))
+
+    # 근거가 하나도 남지 않으면 규칙 자체를 버린다. 출처 없는 규칙은 만들지 않는다.
+    if not verified:
+        return None
+
+    dedupe_key = _dedupe_key(scope.id, rule.title)
+    existing = HandbookEntry.objects.filter(company=company, dedupe_key=dedupe_key).first()
+    # 대표가 이미 확정하거나 보관한 항목은 건드리지 않는다.
+    if existing and existing.status != HandbookEntry.Status.DRAFT:
+        return None
+
+    entry = existing or HandbookEntry(company=company, dedupe_key=dedupe_key)
+    entry.scope = scope
+    entry.title = rule.title[:200]
+    entry.body_ko = rule.body
+    entry.original_lang = 'ko'
+    entry.status = HandbookEntry.Status.DRAFT
+    entry.confidence = rule.confidence
+    entry.origin = HandbookEntry.Origin.SLACK
+    entry.save()
+
+    # 근거는 매번 새로 쓴다. 초안을 다시 만들면 인용도 바뀌기 때문.
+    entry.evidences.all().delete()
+    HandbookEvidence.objects.bulk_create([
+        HandbookEvidence(
+            company=company,
+            entry=entry,
+            document=document,
+            quote=quote,
+            tag=HandbookEvidence.Tag.SLACK,
+            source_label=document.item.label,
+            speaker_name=(
+                document.author_identity.external_handle if document.author_identity else None
+            ),
+            permalink=document.permalink,
+            occurred_at=document.occurred_at,
+        )
+        for document, quote in verified
+    ])
+
+    return entry
+
+
+def _draft_batch(client, company, scope, batch, channels, users):
+    prompt = '\n'.join(_render(d, i, channels, users) for i, d in enumerate(batch))
+    completion = client.chat.completions.parse(
+        model=settings.OPENAI_DRAFTER_MODEL,
+        messages=[
+            {'role': 'system', 'content': SYSTEM_PROMPT},
+            {'role': 'user', 'content': prompt},
+        ],
+        response_format=DraftResult,
+        temperature=0,
+    )
+    result = completion.choices[0].message.parsed
+    documents = dict(enumerate(batch))
+
+    entries = []
+    for rule in result.rules:
+        with transaction.atomic():
+            entry = _build_entry(company, scope, rule, documents, channels, users)
+        if entry:
+            entries.append(entry)
+
+    return entries
+
+
+# INSTRUCTION으로 분류된 원문에서 핸드북 초안을 만든다.
+# 채널에 연결된 지식공간별로 나눠서 처리한다. 같은 범위의 규칙끼리 묶여야 하기 때문.
+def draft_entries(company):
+    documents = list(
+        RawDocument.objects.filter(
+            company=company,
+            classified_as=RawDocument.ClassifiedAs.INSTRUCTION,
+            sync_state=RawDocument.SyncState.CURRENT,
+        )
+        .select_related('item', 'item__scope', 'author_identity')
+        .order_by('occurred_at')
+    )
+    if not documents:
+        return [], []
+
+    fallback_scope = CompanyScope.objects.filter(
+        company=company,
+        kind=CompanyScope.Kind.COMPANY,
+        area_key=CompanyScope.AreaKey.COMPANY,
+    ).first()
+    if fallback_scope is None:
+        raise ImproperlyConfigured('회사 전반 규칙 범위가 없습니다. 기본 범위 시딩을 확인하세요.')
+
+    by_scope = {}
+    for document in documents:
+        scope = _resolve_scope(document, fallback_scope)
+        by_scope.setdefault(scope, []).append(document)
+
+    channels, users = build_lookup(company.id)
+    client = _get_client()
+    entries = []
+    errors = []
+
+    for scope, scope_documents in by_scope.items():
+        for start in range(0, len(scope_documents), BATCH_SIZE):
+            batch = scope_documents[start:start + BATCH_SIZE]
+            try:
+                entries += _draft_batch(client, company, scope, batch, channels, users)
+            except (OpenAIError, ValueError) as exc:
+                errors.append({
+                    'scope': 'draft',
+                    'scopeId': scope.id,
+                    'code': type(exc).__name__,
+                })
+
+    if not errors:
+        _prune_stale_drafts(company, entries)
+
+    return entries, errors
+
+
+# 이번 실행에서 다시 만들어지지 않은 AI 초안을 지운다.
+# 채널의 지식공간을 바꾸면 dedupe_key가 달라져 예전 범위에 초안이 남는데,
+# 그대로 두면 같은 규칙이 두 범위에 중복으로 보인다.
+# 대표가 확정하거나 보관한 항목, 사람이 직접 만든 항목은 대상이 아니다.
+# 일부 배치가 실패한 실행에서는 호출하지 않는다. 살아 있어야 할 초안을 지울 수 있기 때문.
+def _prune_stale_drafts(company, entries):
+    HandbookEntry.objects.filter(
+        company=company,
+        status=HandbookEntry.Status.DRAFT,
+        origin=HandbookEntry.Origin.SLACK,
+    ).exclude(id__in=[entry.id for entry in entries]).delete()

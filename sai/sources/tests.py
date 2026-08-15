@@ -511,8 +511,10 @@ class IngestionTests(TestCase):
                    side_effect=history_error), \
              patch('sources.ingestion.SlackClient.thread_replies',
                    return_value=replies if replies is not None else REPLIES), \
-             patch('sources.ingestion.classify_documents', return_value=(0, [])) as classify:
+             patch('sources.ingestion.classify_documents', return_value=(0, [])) as classify, \
+             patch('sources.ingestion.draft_entries', return_value=([], [])) as draft:
             self.classify_mock = classify
+            self.draft_mock = draft
             return self.client.post(self.url, payload or {}, format='json')
 
     # --- 수집 ---
@@ -659,10 +661,35 @@ class IngestionTests(TestCase):
 
     # --- 분류 연동 ---
 
-    def test_ingestion_triggers_classification(self):
+    def test_ingestion_triggers_classification_then_drafting(self):
         self.ingest()
 
         self.classify_mock.assert_called_once_with(self.company.id)
+        self.draft_mock.assert_called_once_with(self.company)
+
+    def test_entry_count_records_drafts(self):
+        with patch('sources.ingestion.SlackClient.auth_test', return_value=AUTH_WITH_URL), \
+             patch('sources.ingestion.SlackClient.users_list', return_value=USERS), \
+             patch('sources.ingestion.SlackClient.channel_history', return_value=HISTORY), \
+             patch('sources.ingestion.SlackClient.thread_replies', return_value=REPLIES), \
+             patch('sources.ingestion.classify_documents', return_value=(0, [])), \
+             patch('sources.ingestion.draft_entries', return_value=([1, 2, 3], [])):
+            response = self.client.post(self.url, {}, format='json')
+
+        self.assertEqual(response.data['candidateCount'], 3)
+
+    # 분류가 실패하면 초안 생성도 건너뛴다. 라벨 없는 원문으로 규칙을 쓸 수 없다.
+    def test_no_drafting_when_classification_failed(self):
+        with patch('sources.ingestion.SlackClient.auth_test', return_value=AUTH_WITH_URL), \
+             patch('sources.ingestion.SlackClient.users_list', return_value=USERS), \
+             patch('sources.ingestion.SlackClient.channel_history', return_value=HISTORY), \
+             patch('sources.ingestion.SlackClient.thread_replies', return_value=REPLIES), \
+             patch('sources.ingestion.classify_documents',
+                   side_effect=ImproperlyConfigured('no key')), \
+             patch('sources.ingestion.draft_entries') as draft:
+            self.client.post(self.url, {}, format='json')
+
+        draft.assert_not_called()
 
     # 분류가 실패해도 수집한 원문은 남고 작업만 PARTIAL이 된다.
     def test_classification_failure_is_partial(self):

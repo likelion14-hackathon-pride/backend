@@ -1,12 +1,19 @@
+from types import SimpleNamespace
+from unittest.mock import patch
+
+from django.core.exceptions import ImproperlyConfigured
 from django.db import IntegrityError
-from django.test import TestCase
+from django.test import TestCase, override_settings
+from django.utils import timezone
 from rest_framework.test import APIClient
 
 from accounts.models import Membership, User
 from accounts.serializers import OwnerSignupSerializer
 from companies.models import Company
+from sources.models import Connection, Identity, Item, RawDocument
 
-from .models import CompanyScope
+from .drafting import DraftResult, DraftRule, draft_entries
+from .models import CompanyScope, HandbookEntry, HandbookEvidence
 from .services import DEFAULT_COMPANY_SCOPES, seed_default_scopes
 
 
@@ -136,6 +143,383 @@ class CreateProjectScopeTests(TestCase):
         response = self.post(outsider, {'kind': 'PROJECT', 'name': 'payment-api'})
 
         self.assertEqual(response.status_code, 403)
+
+
+class DraftEntriesTests(TestCase):
+    def setUp(self):
+        self.company = Company.objects.create(name='에코랩', code='TESTCODE1')
+        seed_default_scopes(self.company)
+        self.connection = Connection.objects.create(
+            company=self.company, kind=Connection.Kind.SLACK, bot_token='xoxb-test'
+        )
+        self.project = CompanyScope.objects.create(
+            company=self.company, kind=CompanyScope.Kind.PROJECT, name='결제 시스템'
+        )
+        self.item = Item.objects.create(
+            company=self.company, connection=self.connection,
+            external_id='C001', label='#dev', scope=self.project,
+        )
+        self.identity = Identity.objects.create(
+            company=self.company, connection=self.connection,
+            external_user_id='U001', external_handle='조상원',
+        )
+        self.document = self._document('100.1', '배포는 금요일 오후에는 하지 않는 걸로 합시다')
+
+    def _document(self, ref, text, item=None, classified='INSTRUCTION'):
+        return RawDocument.objects.create(
+            company=self.company, item=item or self.item, external_ref=ref,
+            author_identity=self.identity, raw_text=text,
+            content_hash=ref.ljust(64, '0'), classified_as=classified,
+            occurred_at=timezone.now(), permalink=f'https://slack/{ref}',
+        )
+
+    def draft(self, rules):
+        parsed = DraftResult(rules=[DraftRule(**rule) for rule in rules])
+        completion = SimpleNamespace(
+            choices=[SimpleNamespace(message=SimpleNamespace(parsed=parsed))]
+        )
+        with patch('handbook.drafting.OpenAI') as client:
+            client.return_value.chat.completions.parse.return_value = completion
+            return draft_entries(self.company)
+
+    @override_settings(OPENAI_API_KEY='test-key')
+    def test_creates_draft_with_evidence(self):
+        entries, errors = self.draft([{
+            'title': '금요일 오후 배포 금지',
+            'body': '배포는 금요일 오후에 하지 않습니다.',
+            'confidence': 'HIGH',
+            'citations': [{'index': 0, 'quote': '배포는 금요일 오후에는 하지 않는 걸로 합시다'}],
+        }])
+
+        self.assertEqual((len(entries), errors), (1, []))
+        entry = entries[0]
+        self.assertEqual(entry.status, HandbookEntry.Status.DRAFT)
+        self.assertEqual(entry.origin, HandbookEntry.Origin.SLACK)
+        self.assertEqual(entry.confidence, 'HIGH')
+        # 채널에 연결된 지식공간을 그대로 물려받는다.
+        self.assertEqual(entry.scope_id, self.project.id)
+
+        evidence = entry.evidences.get()
+        self.assertEqual(evidence.tag, HandbookEvidence.Tag.SLACK)
+        self.assertEqual(evidence.source_label, '#dev')
+        self.assertEqual(evidence.speaker_name, '조상원')
+        self.assertEqual(evidence.document_id, self.document.id)
+
+    # 모델이 지어낸 인용은 버린다. 근거 없는 규칙을 만들지 않기 위함.
+    @override_settings(OPENAI_API_KEY='test-key')
+    def test_fabricated_quote_is_dropped(self):
+        entries, _ = self.draft([{
+            'title': '금요일 오후 배포 금지',
+            'body': '배포는 금요일 오후에 하지 않습니다.',
+            'confidence': 'HIGH',
+            'citations': [{'index': 0, 'quote': '이런 말은 원문에 없습니다'}],
+        }])
+
+        self.assertEqual(entries, [])
+        self.assertFalse(HandbookEntry.objects.exists())
+
+    # 일부만 지어낸 경우 검증을 통과한 인용만 남는다.
+    @override_settings(OPENAI_API_KEY='test-key')
+    def test_partially_valid_citations(self):
+        self._document('100.2', '핫픽스는 예외로 하겠습니다')
+        entries, _ = self.draft([{
+            'title': '금요일 오후 배포 금지',
+            'body': '배포는 금요일 오후에 하지 않습니다. 핫픽스는 예외입니다.',
+            'confidence': 'HIGH',
+            'citations': [
+                {'index': 0, 'quote': '금요일 오후에는 하지 않는'},
+                {'index': 1, 'quote': '없는 인용'},
+            ],
+        }])
+
+        self.assertEqual(entries[0].evidences.count(), 1)
+
+    # 따옴표로 감싸서 돌려주는 경우가 있어 벗겨내고 대조한다.
+    @override_settings(OPENAI_API_KEY='test-key')
+    def test_quote_surrounded_by_quotation_marks(self):
+        entries, _ = self.draft([{
+            'title': '금요일 오후 배포 금지',
+            'body': '배포는 금요일 오후에 하지 않습니다.',
+            'confidence': 'HIGH',
+            'citations': [{'index': 0, 'quote': '"금요일 오후에는 하지 않는"'}],
+        }])
+
+        self.assertEqual(entries[0].evidences.get().quote, '금요일 오후에는 하지 않는')
+
+    # 같은 제목이면 새로 만들지 않고 기존 초안을 갱신한다.
+    @override_settings(OPENAI_API_KEY='test-key')
+    def test_rerun_updates_existing_draft(self):
+        rule = {
+            'title': '금요일 오후 배포 금지',
+            'body': '배포는 금요일 오후에 하지 않습니다.',
+            'confidence': 'HIGH',
+            'citations': [{'index': 0, 'quote': '배포는 금요일 오후에는 하지 않는 걸로 합시다'}],
+        }
+        self.draft([rule])
+        self.draft([{**rule, 'body': '금요일 오후 배포는 금지입니다.'}])
+
+        self.assertEqual(HandbookEntry.objects.count(), 1)
+        entry = HandbookEntry.objects.get()
+        self.assertEqual(entry.body_ko, '금요일 오후 배포는 금지입니다.')
+        # 근거도 중복되지 않는다.
+        self.assertEqual(entry.evidences.count(), 1)
+
+    # 대표가 확정한 항목은 재실행이 덮어쓰지 않는다.
+    @override_settings(OPENAI_API_KEY='test-key')
+    def test_confirmed_entry_is_never_overwritten(self):
+        rule = {
+            'title': '금요일 오후 배포 금지',
+            'body': '배포는 금요일 오후에 하지 않습니다.',
+            'confidence': 'HIGH',
+            'citations': [{'index': 0, 'quote': '배포는 금요일 오후에는 하지 않는 걸로 합시다'}],
+        }
+        self.draft([rule])
+        HandbookEntry.objects.update(status=HandbookEntry.Status.CONFIRMED, body_ko='대표가 고친 내용')
+
+        self.draft([{**rule, 'body': 'AI가 다시 쓴 내용'}])
+
+        entry = HandbookEntry.objects.get()
+        self.assertEqual(entry.body_ko, '대표가 고친 내용')
+        self.assertEqual(entry.status, HandbookEntry.Status.CONFIRMED)
+
+    # 채널에 지식공간이 없으면 회사 전반 규칙으로 보낸다. scope는 NOT NULL이라 대안이 없다.
+    @override_settings(OPENAI_API_KEY='test-key')
+    def test_unmapped_channel_falls_back_to_company_scope(self):
+        self.item.scope = None
+        self.item.save()
+
+        entries, _ = self.draft([{
+            'title': '금요일 오후 배포 금지',
+            'body': '배포는 금요일 오후에 하지 않습니다.',
+            'confidence': 'HIGH',
+            'citations': [{'index': 0, 'quote': '배포는 금요일 오후에는 하지 않는 걸로 합시다'}],
+        }])
+
+        self.assertEqual(entries[0].scope.area_key, CompanyScope.AreaKey.COMPANY)
+
+    # INSTRUCTION이 아닌 원문은 초안 재료가 아니다.
+    @override_settings(OPENAI_API_KEY='test-key')
+    def test_only_instruction_documents_are_used(self):
+        RawDocument.objects.update(classified_as='CONTEXT')
+
+        entries, errors = self.draft([])
+
+        self.assertEqual((entries, errors), ([], []))
+
+    # 채널 범위를 바꾸면 dedupe_key가 달라져 예전 범위에 초안이 남는다.
+    # 재생성 때 정리되어야 같은 규칙이 두 범위에 중복으로 보이지 않는다.
+    @override_settings(OPENAI_API_KEY='test-key')
+    def test_scope_change_moves_draft_instead_of_duplicating(self):
+        rule = {
+            'title': '금요일 오후 배포 금지',
+            'body': '배포는 금요일 오후에 하지 않습니다.',
+            'confidence': 'HIGH',
+            'citations': [{'index': 0, 'quote': '배포는 금요일 오후에는 하지 않는 걸로 합시다'}],
+        }
+        self.draft([rule])
+        self.assertEqual(HandbookEntry.objects.get().scope_id, self.project.id)
+
+        other_scope = CompanyScope.objects.get(
+            company=self.company, area_key=CompanyScope.AreaKey.PRODUCT_ENG
+        )
+        self.item.scope = other_scope
+        self.item.save()
+
+        self.draft([rule])
+
+        self.assertEqual(HandbookEntry.objects.count(), 1)
+        self.assertEqual(HandbookEntry.objects.get().scope_id, other_scope.id)
+
+    # 사람이 만든 항목과 확정된 항목은 정리 대상이 아니다.
+    @override_settings(OPENAI_API_KEY='test-key')
+    def test_prune_spares_manual_and_confirmed_entries(self):
+        manual = HandbookEntry.objects.create(
+            company=self.company, scope=self.project, title='직접 등록한 규칙',
+            status=HandbookEntry.Status.DRAFT, origin=HandbookEntry.Origin.DIRECT_ENTRY,
+        )
+        confirmed = HandbookEntry.objects.create(
+            company=self.company, scope=self.project, title='확정된 규칙',
+            status=HandbookEntry.Status.CONFIRMED, origin=HandbookEntry.Origin.SLACK,
+        )
+
+        self.draft([{
+            'title': '금요일 오후 배포 금지',
+            'body': '배포는 금요일 오후에 하지 않습니다.',
+            'confidence': 'HIGH',
+            'citations': [{'index': 0, 'quote': '배포는 금요일 오후에는 하지 않는 걸로 합시다'}],
+        }])
+
+        self.assertTrue(HandbookEntry.objects.filter(id=manual.id).exists())
+        self.assertTrue(HandbookEntry.objects.filter(id=confirmed.id).exists())
+
+    @override_settings(OPENAI_API_KEY='')
+    def test_missing_api_key_raises(self):
+        with self.assertRaises(ImproperlyConfigured):
+            draft_entries(self.company)
+
+
+class HandbookReviewTests(TestCase):
+    def setUp(self):
+        self.company = Company.objects.create(name='에코랩', code='TESTCODE1')
+        seed_default_scopes(self.company)
+        self.scope = CompanyScope.objects.get(
+            company=self.company, area_key=CompanyScope.AreaKey.PRODUCT_ENG
+        )
+        self.owner = User.objects.create_user(email='owner@example.com', password='pw', display_name='대표')
+        Membership.objects.create(user=self.owner, company=self.company, role=Membership.Role.OWNER)
+        self.member = User.objects.create_user(email='m@example.com', password='pw', display_name='팀원')
+        Membership.objects.create(user=self.member, company=self.company, role=Membership.Role.MEMBER)
+
+        self.entry = self._entry('금요일 오후 배포 금지')
+        HandbookEvidence.objects.create(
+            company=self.company, entry=self.entry, quote='배포는 금요일 오후에는 하지 않는 걸로 합시다',
+            tag=HandbookEvidence.Tag.SLACK, source_label='#dev', speaker_name='조상원',
+            permalink='https://slack/1', occurred_at=timezone.now(),
+        )
+        self.client = APIClient()
+        self.client.force_authenticate(user=self.owner)
+        self.base = f'/api/companies/{self.company.id}/handbook/entries'
+
+    def _entry(self, title, status=HandbookEntry.Status.DRAFT):
+        return HandbookEntry.objects.create(
+            company=self.company, scope=self.scope, title=title,
+            body_ko='본문', status=status, origin=HandbookEntry.Origin.SLACK,
+        )
+
+    # --- 근거 조회 ---
+
+    def test_member_can_read_evidence(self):
+        self.client.force_authenticate(user=self.member)
+        response = self.client.get(f'{self.base}/{self.entry.id}/evidence')
+
+        self.assertEqual(response.status_code, 200)
+        item = response.data['items'][0]
+        self.assertEqual(item['quote'], '배포는 금요일 오후에는 하지 않는 걸로 합시다')
+        self.assertEqual(item['sourceLabel'], '#dev')
+        self.assertEqual(item['speakerName'], '조상원')
+        self.assertEqual(item['tag'], 'SLACK')
+
+    def test_other_company_entry_evidence_is_404(self):
+        other = Company.objects.create(name='다른회사', code='TESTCODE2')
+        other_owner = User.objects.create_user(email='o@example.com', password='pw', display_name='다른대표')
+        Membership.objects.create(user=other_owner, company=other, role=Membership.Role.OWNER)
+
+        self.client.force_authenticate(user=other_owner)
+        response = self.client.get(
+            f'/api/companies/{other.id}/handbook/entries/{self.entry.id}/evidence'
+        )
+
+        self.assertEqual(response.status_code, 404)
+
+    # --- 단건 검토 ---
+
+    def test_approve_confirms_entry(self):
+        response = self.client.post(
+            f'{self.base}/{self.entry.id}/review', {'decision': 'APPROVE'}, format='json'
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data['status'], 'CONFIRMED')
+        self.entry.refresh_from_db()
+        self.assertIsNotNone(self.entry.confirmed_at)
+
+    def test_reject_archives_entry(self):
+        response = self.client.post(
+            f'{self.base}/{self.entry.id}/review', {'decision': 'REJECT'}, format='json'
+        )
+
+        self.assertEqual(response.data['status'], 'ARCHIVED')
+        self.entry.refresh_from_db()
+        self.assertIsNone(self.entry.confirmed_at)
+
+    # 보류를 담을 컬럼이 없어 DRAFT 그대로 둔다.
+    def test_hold_leaves_draft(self):
+        response = self.client.post(
+            f'{self.base}/{self.entry.id}/review', {'decision': 'HOLD'}, format='json'
+        )
+
+        self.assertEqual(response.data['status'], 'DRAFT')
+
+    # 내용이 없는 항목을 확정하면 빈 규칙이 핸드북에 올라간다.
+    def test_blank_entry_cannot_be_approved(self):
+        blank = self._entry('테스트 정책', status=HandbookEntry.Status.BLANK)
+
+        response = self.client.post(
+            f'{self.base}/{blank.id}/review', {'decision': 'APPROVE'}, format='json'
+        )
+
+        self.assertEqual(response.status_code, 400)
+        blank.refresh_from_db()
+        self.assertEqual(blank.status, HandbookEntry.Status.BLANK)
+
+    def test_invalid_decision_rejected(self):
+        response = self.client.post(
+            f'{self.base}/{self.entry.id}/review', {'decision': 'MAYBE'}, format='json'
+        )
+
+        self.assertEqual(response.status_code, 400)
+
+    def test_member_cannot_review(self):
+        self.client.force_authenticate(user=self.member)
+        response = self.client.post(
+            f'{self.base}/{self.entry.id}/review', {'decision': 'APPROVE'}, format='json'
+        )
+
+        self.assertEqual(response.status_code, 403)
+
+    # --- 일괄 승인 ---
+
+    def test_bulk_approve(self):
+        second = self._entry('PR 승인 규칙')
+
+        response = self.client.post(
+            f'{self.base}/review-all',
+            {'entryIds': [self.entry.id, second.id]},
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data['approvedCount'], 2)
+        self.assertEqual(response.data['skipped'], [])
+        self.assertEqual(
+            HandbookEntry.objects.filter(status=HandbookEntry.Status.CONFIRMED).count(), 2
+        )
+
+    # 승인 못 하는 항목은 전체를 실패시키지 않고 사유와 함께 건너뛴다.
+    def test_bulk_approve_reports_skipped(self):
+        blank = self._entry('테스트 정책', status=HandbookEntry.Status.BLANK)
+
+        response = self.client.post(
+            f'{self.base}/review-all',
+            {'entryIds': [self.entry.id, blank.id, 99999]},
+            format='json',
+        )
+
+        self.assertEqual(response.data['approvedCount'], 1)
+        self.assertEqual(
+            response.data['skipped'],
+            [{'entryId': blank.id, 'reason': 'blank_entry'},
+             {'entryId': 99999, 'reason': 'not_found'}],
+        )
+
+    # 다른 회사 항목이 id로 섞여 들어와도 승인되면 안 된다.
+    def test_bulk_approve_ignores_other_company_entries(self):
+        other = Company.objects.create(name='다른회사', code='TESTCODE2')
+        other_scope = CompanyScope.objects.create(
+            company=other, kind=CompanyScope.Kind.PROJECT, name='남의 프로젝트'
+        )
+        foreign = HandbookEntry.objects.create(
+            company=other, scope=other_scope, title='남의 규칙',
+            status=HandbookEntry.Status.DRAFT, origin=HandbookEntry.Origin.SLACK,
+        )
+
+        response = self.client.post(
+            f'{self.base}/review-all', {'entryIds': [foreign.id]}, format='json'
+        )
+
+        self.assertEqual(response.data['approvedCount'], 0)
+        foreign.refresh_from_db()
+        self.assertEqual(foreign.status, HandbookEntry.Status.DRAFT)
 
 
 class OwnerSignupScopeTests(TestCase):

@@ -1,4 +1,5 @@
 from django.shortcuts import get_object_or_404
+from django.utils import timezone
 from drf_yasg import openapi
 from drf_yasg.utils import swagger_auto_schema
 from rest_framework import status
@@ -9,15 +10,20 @@ from rest_framework.views import APIView
 from accounts.models import Membership
 from companies.models import Company
 
-from .models import CompanyScope, HandbookEntry
+from .models import CompanyScope, HandbookEntry, HandbookEvidence
 from .serializers import (
     CompanyScopeCreateSerializer,
     CompanyScopeListSerializer,
     CompanyScopeSerializer,
+    HandbookBulkReviewResultSerializer,
+    HandbookBulkReviewSerializer,
     HandbookEntryCreateSerializer,
     HandbookEntryListSerializer,
     HandbookEntrySerializer,
     HandbookEntryUpdateSerializer,
+    HandbookEvidenceListSerializer,
+    HandbookEvidenceSerializer,
+    HandbookReviewSerializer,
 )
 
 
@@ -209,6 +215,126 @@ class HandbookEntryDetailView(APIView):
         response_serializer = HandbookEntrySerializer(entry)
 
         return Response(response_serializer.data, status=status.HTTP_200_OK)
+
+
+# 핸드북 항목 근거 조회 view
+class HandbookEntryEvidenceView(APIView):
+    @swagger_auto_schema(
+        operation_summary='핸드북 항목 근거 조회',
+        operation_description=(
+            'AI가 이 항목을 만들 때 인용한 원문입니다. quote는 슬랙 원문에서 그대로 발췌한 문장이며, '
+            '원문과 대조에 실패한 인용은 저장 단계에서 버려집니다.'
+        ),
+        responses={
+            200: HandbookEvidenceListSerializer(),
+            401: '인증되지 않음',
+            403: '회사 접근 권한 없음',
+            404: '회사 또는 핸드북 항목을 찾을 수 없음',
+        },
+        tags=['Handbook'],
+    )
+    def get(self, request, company_id, entry_id):
+        company = get_member_company(request.user, company_id)
+        entry = get_object_or_404(HandbookEntry, id=entry_id, company=company)
+        evidences = HandbookEvidence.objects.filter(entry=entry).order_by('occurred_at', 'id')
+        serializer = HandbookEvidenceSerializer(evidences, many=True)
+
+        return Response({'items': serializer.data}, status=status.HTTP_200_OK)
+
+
+def _apply_decision(entry, decision):
+    if decision == 'APPROVE':
+        entry.status = HandbookEntry.Status.CONFIRMED
+        entry.confirmed_at = timezone.now()
+        entry.save(update_fields=['status', 'confirmed_at'])
+    elif decision == 'REJECT':
+        entry.status = HandbookEntry.Status.ARCHIVED
+        entry.save(update_fields=['status'])
+    # HOLD는 DRAFT를 그대로 둔다. 보류 상태를 따로 담을 컬럼이 없다.
+
+    return entry
+
+
+# 핸드북 초안 검토 view
+class HandbookEntryReviewView(APIView):
+    @swagger_auto_schema(
+        operation_summary='핸드북 초안 승인/거절/보류',
+        operation_description=(
+            'APPROVE는 확정(CONFIRMED), REJECT는 보관(ARCHIVED)으로 바꿉니다. '
+            'HOLD는 초안 상태를 그대로 두며 아무것도 기록하지 않습니다. '
+            '내용이 없는 BLANK 항목은 승인할 수 없습니다.'
+        ),
+        request_body=HandbookReviewSerializer,
+        responses={
+            200: HandbookEntrySerializer(),
+            400: '잘못된 요청 (내용 없는 항목 승인)',
+            401: '인증되지 않음',
+            403: 'Owner 권한 없음',
+            404: '회사 또는 핸드북 항목을 찾을 수 없음',
+        },
+        tags=['Handbook'],
+    )
+    def post(self, request, company_id, entry_id):
+        company = get_owner_company(request.user, company_id)
+        entry = get_object_or_404(
+            HandbookEntry.objects.select_related('scope'), id=entry_id, company=company
+        )
+        serializer = HandbookReviewSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        decision = serializer.validated_data['decision']
+
+        if decision == 'APPROVE' and entry.status == HandbookEntry.Status.BLANK:
+            raise ValidationError({'decision': ['cannot approve a blank entry']})
+
+        entry = _apply_decision(entry, decision)
+        response_serializer = HandbookEntrySerializer(entry)
+
+        return Response(response_serializer.data, status=status.HTTP_200_OK)
+
+
+# 핸드북 초안 일괄 승인 view
+class HandbookEntryBulkReviewView(APIView):
+    @swagger_auto_schema(
+        operation_summary='핸드북 초안 일괄 승인',
+        operation_description=(
+            '여러 초안을 한 번에 확정합니다. 승인할 수 없는 항목(내용 없는 BLANK, 다른 회사 항목)은 '
+            '건너뛰고 skipped에 사유와 함께 담아 돌려줍니다.'
+        ),
+        request_body=HandbookBulkReviewSerializer,
+        responses={
+            200: HandbookBulkReviewResultSerializer(),
+            400: '잘못된 요청',
+            401: '인증되지 않음',
+            403: 'Owner 권한 없음',
+            404: '회사를 찾을 수 없음',
+        },
+        tags=['Handbook'],
+    )
+    def post(self, request, company_id):
+        company = get_owner_company(request.user, company_id)
+        serializer = HandbookBulkReviewSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        requested_ids = serializer.validated_data['entryIds']
+
+        entries = {
+            entry.id: entry
+            for entry in HandbookEntry.objects.filter(id__in=requested_ids, company=company)
+        }
+
+        approved = 0
+        skipped = []
+        for entry_id in requested_ids:
+            entry = entries.get(entry_id)
+            if entry is None:
+                skipped.append({'entryId': entry_id, 'reason': 'not_found'})
+                continue
+            if entry.status == HandbookEntry.Status.BLANK:
+                skipped.append({'entryId': entry_id, 'reason': 'blank_entry'})
+                continue
+            _apply_decision(entry, 'APPROVE')
+            approved += 1
+
+        return Response({'approvedCount': approved, 'skipped': skipped}, status=status.HTTP_200_OK)
 
 
 # 회사 규칙과 프로젝트 범위 목록 조회 view
