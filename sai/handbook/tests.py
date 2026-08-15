@@ -333,6 +333,24 @@ class DraftEntriesTests(TestCase):
         self.assertEqual(HandbookEntry.objects.count(), 1)
         self.assertEqual(HandbookEntry.objects.get().scope_id, other_scope.id)
 
+    # 대표가 보류해 둔 초안을 재생성이 지우면 안 된다.
+    @override_settings(OPENAI_API_KEY='test-key')
+    def test_prune_spares_held_drafts(self):
+        held = HandbookEntry.objects.create(
+            company=self.company, scope=self.project, title='보류한 규칙',
+            status=HandbookEntry.Status.DRAFT, origin=HandbookEntry.Origin.SLACK,
+            reviewed_at=timezone.now(),
+        )
+
+        self.draft([{
+            'title': '금요일 오후 배포 금지',
+            'body': '배포는 금요일 오후에 하지 않습니다.',
+            'confidence': 'HIGH',
+            'citations': [{'index': 0, 'quote': '배포는 금요일 오후에는 하지 않는 걸로 합시다'}],
+        }])
+
+        self.assertTrue(HandbookEntry.objects.filter(id=held.id).exists())
+
     # 사람이 만든 항목과 확정된 항목은 정리 대상이 아니다.
     @override_settings(OPENAI_API_KEY='test-key')
     def test_prune_spares_manual_and_confirmed_entries(self):
@@ -435,13 +453,68 @@ class HandbookReviewTests(TestCase):
         self.entry.refresh_from_db()
         self.assertIsNone(self.entry.confirmed_at)
 
-    # 보류를 담을 컬럼이 없어 DRAFT 그대로 둔다.
-    def test_hold_leaves_draft(self):
+    # 보류는 상태를 바꾸지 않지만 '봤다'는 사실은 남는다.
+    def test_hold_keeps_draft_but_records_review(self):
         response = self.client.post(
             f'{self.base}/{self.entry.id}/review', {'decision': 'HOLD'}, format='json'
         )
 
         self.assertEqual(response.data['status'], 'DRAFT')
+        self.assertEqual(response.data['reviewStatus'], 'HELD')
+        self.entry.refresh_from_db()
+        self.assertIsNotNone(self.entry.reviewed_at)
+
+    # --- 검토 상태 파생 ---
+
+    def test_review_status_transitions(self):
+        self.assertEqual(self.entry.review_status, 'PENDING')
+
+        self.client.post(f'{self.base}/{self.entry.id}/review', {'decision': 'HOLD'}, format='json')
+        self.entry.refresh_from_db()
+        self.assertEqual(self.entry.review_status, 'HELD')
+
+        self.client.post(f'{self.base}/{self.entry.id}/review', {'decision': 'APPROVE'}, format='json')
+        self.entry.refresh_from_db()
+        self.assertEqual(self.entry.review_status, 'APPROVED')
+
+        self.client.post(f'{self.base}/{self.entry.id}/review', {'decision': 'REJECT'}, format='json')
+        self.entry.refresh_from_db()
+        self.assertEqual(self.entry.review_status, 'REJECTED')
+
+    # 검토 큐는 아직 보지 않은 것만 보여야 한다. 보류한 항목이 계속 뜨면 큐가 안 줄어든다.
+    def test_pending_filter_excludes_held(self):
+        held = self._entry('보류할 규칙')
+        self.client.post(f'{self.base}/{held.id}/review', {'decision': 'HOLD'}, format='json')
+
+        response = self.client.get(f'{self.base}?reviewStatus=PENDING')
+
+        ids = [item['id'] for item in response.data['items']]
+        self.assertIn(self.entry.id, ids)
+        self.assertNotIn(held.id, ids)
+
+    def test_held_filter(self):
+        held = self._entry('보류할 규칙')
+        self.client.post(f'{self.base}/{held.id}/review', {'decision': 'HOLD'}, format='json')
+
+        response = self.client.get(f'{self.base}?reviewStatus=HELD')
+
+        self.assertEqual([item['id'] for item in response.data['items']], [held.id])
+
+    def test_approved_and_rejected_filters(self):
+        rejected = self._entry('거절할 규칙')
+        self.client.post(f'{self.base}/{self.entry.id}/review', {'decision': 'APPROVE'}, format='json')
+        self.client.post(f'{self.base}/{rejected.id}/review', {'decision': 'REJECT'}, format='json')
+
+        approved_response = self.client.get(f'{self.base}?reviewStatus=APPROVED')
+        rejected_response = self.client.get(f'{self.base}?reviewStatus=REJECTED')
+
+        self.assertEqual([i['id'] for i in approved_response.data['items']], [self.entry.id])
+        self.assertEqual([i['id'] for i in rejected_response.data['items']], [rejected.id])
+
+    def test_invalid_review_status_filter(self):
+        response = self.client.get(f'{self.base}?reviewStatus=NOPE')
+
+        self.assertEqual(response.status_code, 400)
 
     # 내용이 없는 항목을 확정하면 빈 규칙이 핸드북에 올라간다.
     def test_blank_entry_cannot_be_approved(self):

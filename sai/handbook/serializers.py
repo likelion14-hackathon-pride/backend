@@ -84,6 +84,8 @@ class HandbookEntrySerializer(serializers.ModelSerializer):
     originalKo = serializers.CharField(source='body_ko', read_only=True)
     questionCount = serializers.IntegerField(source='ask_count', read_only=True)
     sourceType = serializers.CharField(source='origin', read_only=True)
+    reviewStatus = serializers.CharField(source='review_status', read_only=True)
+    reviewedAt = serializers.DateTimeField(source='reviewed_at', read_only=True)
     translatedAt = serializers.DateTimeField(source='translated_at', read_only=True)
     embeddedAt = serializers.DateTimeField(source='embedded_at', read_only=True)
     createdAt = serializers.DateTimeField(source='created_at', read_only=True)
@@ -102,6 +104,8 @@ class HandbookEntrySerializer(serializers.ModelSerializer):
             'ruleEn',
             'originalKo',
             'status',
+            'reviewStatus',
+            'reviewedAt',
             'confidence',
             'questionCount',
             'sourceType',
