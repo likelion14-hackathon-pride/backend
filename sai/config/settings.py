@@ -238,6 +238,10 @@ SLACK_BOT_TOKEN = get_secret('SLACK_BOT_TOKEN')
 
 # 키가 없어도 서버는 뜬다. 분류를 실행하는 시점에만 필요하고,
 # 그때 ImproperlyConfigured로 실패하며 수집 결과는 그대로 남는다.
+# 수집 작업을 요청 안에서 바로 돌린다. 워커(manage.py run_jobs)를 띄우기 번거로운
+# 로컬에서만 켠다. 켜면 응답이 수십 초 걸린다.
+INGESTION_RUN_INLINE = get_bool('INGESTION_RUN_INLINE', False)
+
 OPENAI_API_KEY = get_secret('OPENAI_API_KEY', '')
 # 분류는 라벨 하나만 고르면 되므로 저가 모델로 충분하다.
 OPENAI_CLASSIFIER_MODEL = get_secret('OPENAI_CLASSIFIER_MODEL', 'gpt-4o-mini')

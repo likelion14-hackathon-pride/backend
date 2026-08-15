@@ -1,6 +1,7 @@
 import json
 import logging
 
+from django.conf import settings
 from django.shortcuts import get_object_or_404
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_POST
@@ -16,7 +17,6 @@ from rest_framework.views import APIView
 from accounts.models import Membership
 from companies.models import Company
 
-from .ingestion import run_ingestion
 from .models import Connection, IngestionJob, Item
 from .serializers import (
     AvailableChannelListSerializer,
@@ -39,6 +39,7 @@ from .services import (
     remove_channel,
 )
 from .slack import SlackClient, SlackError
+from .worker import drain
 from .webhook import (
     find_connection,
     handle_event,
@@ -389,11 +390,13 @@ class IngestionJobListCreateView(APIView):
             '수집 대상 채널의 메시지를 원문으로 가져옵니다. 스레드 답글도 함께 수집합니다. '
             'itemIds를 생략하면 등록된 채널 전체가 대상입니다. '
             '이미 가져온 메시지는 다시 저장하지 않습니다(내용이 바뀌면 갱신). '
-            '현재는 요청 안에서 동기로 처리하며 채널당 최대 1000건까지만 가져옵니다.'
+            '작업은 큐에 쌓이고 워커가 처리하므로 즉시 202로 응답합니다. '
+            'GET /ingestion-jobs/{jobId} 로 progress 와 status 를 폴링하세요. '
+            '채널당 최대 1000건까지 가져옵니다.'
         ),
         request_body=INGESTION_JOB_REQUEST_BODY,
         responses={
-            201: IngestionJobSerializer(),
+            202: IngestionJobSerializer(),
             400: '잘못된 요청 (수집 대상 채널 없음)',
             401: '인증되지 않음',
             403: 'Owner 권한 없음',
@@ -424,12 +427,17 @@ class IngestionJobListCreateView(APIView):
             raise ValidationError({'itemIds': [code]})
 
         job = IngestionJob.objects.create(company=company, item_ids=item_ids)
-        # 지금은 동기 실행. 데이터가 커지면 이 한 줄만 큐 적재로 바꾸면 된다.
-        run_ingestion(job, connection)
+
+        # 수집 한 번에 LLM 호출이 수십 번 나간다. 요청 안에서 처리하면 타임아웃이다.
+        # 워커(manage.py run_jobs)가 큐에서 꺼내 처리하고, 클라이언트는 진행률을 폴링한다.
+        # 워커를 띄우기 번거로운 로컬에서는 INGESTION_RUN_INLINE 로 그 자리에서 돌린다.
+        if settings.INGESTION_RUN_INLINE:
+            drain(limit=1)
+            job.refresh_from_db()
 
         response_serializer = IngestionJobSerializer(job)
 
-        return Response(response_serializer.data, status=status.HTTP_201_CREATED)
+        return Response(response_serializer.data, status=status.HTTP_202_ACCEPTED)
 
 
 # 수집 작업 상태 조회 view
