@@ -4,6 +4,7 @@ from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from drf_yasg import openapi
 from drf_yasg.utils import no_body, swagger_auto_schema
+from openai import OpenAIError
 from rest_framework import status
 from rest_framework.exceptions import APIException, PermissionDenied, ValidationError
 from rest_framework.permissions import IsAuthenticated
@@ -11,6 +12,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from accounts.models import Membership
+from cards.models import Blank
 from companies.models import Company
 from handbook.models import CompanyScope, HandbookEntry, HandbookEvidence
 from sources.models import Item
@@ -22,7 +24,7 @@ from .answering import (
     answer_question,
     find_risk_warnings,
 )
-from .escalation import fetch_reply, judge_reply, send_to_slack
+from .escalation import draft_from_blank, fetch_reply, judge_reply, send_to_slack
 from .models import Citation, Escalation, Message, Thread
 from .serializers import (
     AskInputSerializer,
@@ -215,14 +217,18 @@ class EscalationListCreateView(APIView):
     @swagger_auto_schema(
         operation_summary='대표 확인 질문 초안 생성',
         operation_description=(
-            'Ask SAI가 NO_SOURCE / NEEDS_DECISION으로 답한 메시지를 대표 확인 대기로 올립니다. '
-            'messageId를 주면 그 질문과 SAI가 만든 한국어 초안을 그대로 가져옵니다. '
+            '답을 얻지 못한 질문을 대표 확인 대기로 올립니다. '
+            'messageId 는 Ask SAI가 NO_SOURCE / NEEDS_DECISION으로 답한 메시지이며, '
+            '그 질문과 SAI가 만든 한국어 초안을 그대로 가져옵니다. '
+            'blankId 는 지시 카드의 미정 항목이며, 카드의 원문과 목적을 함께 넣어 '
+            '한국어 질문을 새로 만듭니다. 답이 오면 카드의 해당 항목에도 함께 채워집니다. '
             '아직 발송되지는 않으며, 초안을 확인·수정한 뒤 send를 호출해야 슬랙으로 나갑니다.'
         ),
         request_body=EscalationCreateSerializer,
         responses={
             201: EscalationSerializer(), 400: '잘못된 요청', 401: '인증되지 않음',
-            403: '회사 접근 권한 없음', 404: '메시지를 찾을 수 없음',
+            403: '회사 접근 권한 없음', 404: '메시지 또는 미정 항목을 찾을 수 없음',
+            503: 'AI 사용 불가',
         },
         tags=['Question'],
     )
@@ -233,8 +239,28 @@ class EscalationListCreateView(APIView):
         data = serializer.validated_data
 
         origin = None
+        blank = None
+        scope = None
         question_en = data.get('questionEn')
         draft_ko = data.get('draftKo')
+
+        if data.get('blankId'):
+            blank = get_object_or_404(
+                Blank.objects.select_related('card', 'card__scope', 'card__document'),
+                id=data['blankId'], company=company,
+            )
+            if blank.escalation_id:
+                raise ValidationError({'blankId': ['already escalated']})
+
+            scope = blank.card.scope
+            question_en = question_en or blank.question_en
+            if not draft_ko:
+                try:
+                    draft_ko = draft_from_blank(blank)
+                except ImproperlyConfigured as exc:
+                    raise AnswerUnavailable(str(exc))
+                except (OpenAIError, ValueError) as exc:
+                    raise AnswerUnavailable(f'draft_failed: {type(exc).__name__}')
 
         if data.get('messageId'):
             origin = get_object_or_404(
@@ -255,14 +281,18 @@ class EscalationListCreateView(APIView):
         if not draft_ko:
             raise ValidationError({'draftKo': ['korean draft required']})
 
-        escalation = Escalation.objects.create(
-            company=company,
-            asked_by=request.user,
-            scope=origin.thread.scope if origin else None,
-            origin_message=origin,
-            question_en=question_en,
-            draft_ko=draft_ko,
-        )
+        with transaction.atomic():
+            escalation = Escalation.objects.create(
+                company=company,
+                asked_by=request.user,
+                scope=origin.thread.scope if origin else scope,
+                origin_message=origin,
+                question_en=question_en,
+                draft_ko=draft_ko,
+            )
+            if blank is not None:
+                blank.escalation = escalation
+                blank.save(update_fields=['escalation'])
 
         return Response(EscalationSerializer(escalation).data, status=status.HTTP_201_CREATED)
 
@@ -394,6 +424,13 @@ class EscalationCheckAnswerView(APIView):
             escalation.answered_at = timezone.now()
             escalation.status = Escalation.Status.ANSWERED
         escalation.save()
+
+        # 카드에서 올라온 질문이면 카드에도 답을 채운다.
+        # 여기서 안 채우면 답은 왔는데 카드는 그대로 비어 있다.
+        if judgement.is_answer:
+            escalation.card_blanks.update(
+                sai_answer_ko=judgement.answer_ko, sai_answer_en=judgement.answer_en
+            )
 
         return Response(EscalationSerializer(escalation).data, status=status.HTTP_200_OK)
 

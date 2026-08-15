@@ -162,14 +162,21 @@ class EscalationListSerializer(serializers.Serializer):
 
 
 # 답변받지 못한 질문을 대표 확인 대기로 올린다.
+# 출처는 세 가지다. Ask SAI 답변(messageId), 지시 카드의 미정 항목(blankId), 직접 입력.
 class EscalationCreateSerializer(serializers.Serializer):
     messageId = serializers.IntegerField(required=False)
+    blankId = serializers.IntegerField(required=False)
     questionEn = serializers.CharField(max_length=2000, required=False)
     draftKo = serializers.CharField(max_length=2000, required=False)
 
     def validate(self, attrs):
-        if not attrs.get('messageId') and not attrs.get('questionEn'):
-            raise serializers.ValidationError('messageId 또는 questionEn 중 하나는 필요합니다')
+        if attrs.get('messageId') and attrs.get('blankId'):
+            raise serializers.ValidationError('messageId 와 blankId 는 함께 쓸 수 없습니다')
+
+        if not any(attrs.get(key) for key in ('messageId', 'blankId', 'questionEn')):
+            raise serializers.ValidationError(
+                'messageId, blankId, questionEn 중 하나는 필요합니다'
+            )
 
         return attrs
 
