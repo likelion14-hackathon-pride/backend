@@ -36,7 +36,6 @@ def get_secret(key, default=None):
     raise ImproperlyConfigured(f'{key} 설정이 없습니다')
 
 
-
 def get_bool(key, default=False):
     value = get_secret(key, default)
     if isinstance(value, str):

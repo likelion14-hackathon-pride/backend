@@ -1,7 +1,12 @@
 from django.core.exceptions import ImproperlyConfigured
 from django.db import transaction
+from django.utils import timezone
+from openai import OpenAIError
 from rest_framework import status
-from rest_framework.exceptions import APIException
+from rest_framework.exceptions import APIException, ValidationError
+
+from handbook.models import CompanyScope, HandbookEntry, HandbookEvidence
+from sources.slack import SlackError
 
 from .answering import (
     PROMPT_VERSION,
@@ -9,7 +14,8 @@ from .answering import (
     answer_question,
     find_risk_warnings,
 )
-from .models import Citation, Message, Thread
+from .escalation import draft_from_blank, fetch_reply, judge_reply
+from .models import Citation, Escalation, Message, Thread
 
 # 근거가 없거나 판단이 필요한 경우는 대표 확인이 필요하다는 뜻이다.
 NEEDS_OWNER = {'NO_SOURCE', 'NEEDS_DECISION'}
@@ -35,6 +41,123 @@ def language_of(user):
 
 def open_thread(company, user, scope=None):
     return Thread.objects.create(company=company, user=user, scope=scope)
+
+
+def draft_for_blank(blank):
+    try:
+        return draft_from_blank(blank)
+    except ImproperlyConfigured as exc:
+        raise AnswerUnavailable(str(exc))
+    except (OpenAIError, ValueError) as exc:
+        raise AnswerUnavailable(f'draft_failed: {type(exc).__name__}')
+
+
+# AI 답변 메시지에 저장해 둔 한국어 초안. NEEDS_OWNER 판정일 때만 채워져 있다.
+# AI 답변 메시지에 저장해 둔 한국어 초안. NEEDS_OWNER 판정일 때만 채워져 있다.
+def draft_from_message(message):
+    if message.verdict not in NEEDS_OWNER:
+        return None
+
+    return (message.body_ko or '').strip() or None
+
+
+def create_escalation(company, user, question_en, draft_ko, scope=None, origin=None, blank=None):
+    if not question_en:
+        raise ValidationError({'questionEn': ['question text not found']})
+    # 초안이 없으면 영어 원문이 그대로 대표에게 나간다. 그럴 바엔 막고 받는다.
+    if not draft_ko:
+        raise ValidationError({'draftKo': ['korean draft required']})
+
+    with transaction.atomic():
+        escalation = Escalation.objects.create(
+            company=company,
+            asked_by=user,
+            scope=origin.thread.scope if origin else scope,
+            origin_message=origin,
+            question_en=question_en,
+            draft_ko=draft_ko,
+        )
+        if blank is not None:
+            blank.escalation = escalation
+            blank.save(update_fields=['escalation'])
+
+    return escalation
+
+
+# 대표 답장을 회수해 판정한다. 아직 답이 없으면 아무것도 바꾸지 않는다.
+def collect_answer(escalation):
+    try:
+        reply, text = fetch_reply(escalation)
+    except SlackError as exc:
+        raise ValidationError({'slack': [exc.code]})
+
+    if reply is None:
+        return escalation
+
+    try:
+        judgement = judge_reply(escalation.question_en, escalation.draft_ko, text)
+    except (ImproperlyConfigured, RuntimeError) as exc:
+        raise AnswerUnavailable(str(exc))
+
+    escalation.answer_is_answer = judgement.is_answer
+    escalation.answer_reason = judgement.reason[:200]
+    escalation.answer_needs_review = judgement.needs_review
+    if judgement.is_answer:
+        escalation.answer_ko = judgement.answer_ko
+        escalation.answer_en = judgement.answer_en
+        escalation.answered_at = timezone.now()
+        escalation.status = Escalation.Status.ANSWERED
+    escalation.save()
+
+    # 카드에서 올라온 질문이면 카드에도 답을 채운다.
+    # 여기서 안 채우면 답은 왔는데 카드는 그대로 비어 있다.
+    if judgement.is_answer:
+        escalation.card_blanks.update(
+            sai_answer_ko=judgement.answer_ko, sai_answer_en=judgement.answer_en
+        )
+
+    return escalation
+
+
+# 대표 답변을 핸드북 초안으로 만든다. 확정은 별도 검토에서 한다.
+def promote_to_entry(escalation):
+    company = escalation.company
+    if escalation.status != Escalation.Status.ANSWERED or not escalation.answer_ko:
+        raise ValidationError({'status': ['no answer to promote']})
+
+    scope = escalation.scope or CompanyScope.objects.filter(
+        company=company, kind=CompanyScope.Kind.COMPANY,
+        area_key=CompanyScope.AreaKey.COMPANY,
+    ).first()
+    if scope is None:
+        raise ValidationError({'scope': ['no scope available']})
+
+    with transaction.atomic():
+        entry = HandbookEntry.objects.create(
+            company=company,
+            scope=scope,
+            title=escalation.question_en[:200],
+            body_ko=escalation.answer_ko,
+            body_en=escalation.answer_en or None,
+            original_lang='ko',
+            status=HandbookEntry.Status.DRAFT,
+            origin=HandbookEntry.Origin.ESCALATION,
+            confidence=HandbookEntry.Confidence.MEDIUM,
+        )
+        HandbookEvidence.objects.create(
+            company=company,
+            entry=entry,
+            quote=escalation.answer_ko,
+            tag=HandbookEvidence.Tag.OWNER,
+            source_label='대표 확인 답변',
+            speaker_name=None,
+            occurred_at=escalation.answered_at,
+        )
+        escalation.proposed_entry = entry
+        escalation.status = Escalation.Status.APPROVED
+        escalation.save(update_fields=['proposed_entry', 'status'])
+
+    return escalation
 
 
 def ask(company, user, thread, question, scope=None, context=None):

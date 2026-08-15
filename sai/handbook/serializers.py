@@ -5,7 +5,6 @@ from .finalizing import mark_stale
 from .models import CompanyScope, HandbookEntry, HandbookEvidence, HandbookRevision
 
 
-# 핸드북 범위 응답용 시리얼라이저
 class CompanyScopeSerializer(serializers.ModelSerializer):
     areaKey = serializers.CharField(source='area_key', read_only=True, allow_null=True)
 
@@ -16,9 +15,9 @@ class CompanyScopeSerializer(serializers.ModelSerializer):
 
 class CompanyScopeListSerializer(serializers.Serializer):
     items = CompanyScopeSerializer(many=True)
+    nextCursor = serializers.CharField(allow_null=True)
 
 
-# 프로젝트 범위 생성용 시리얼라이저
 class CompanyScopeCreateSerializer(serializers.ModelSerializer):
     class Meta:
         model = CompanyScope
@@ -47,7 +46,6 @@ class CompanyScopeCreateSerializer(serializers.ModelSerializer):
         return CompanyScope.objects.create(company=self.context['company'], **validated_data)
 
 
-# 핸드북 항목 직접 등록용 시리얼라이저
 class HandbookEntryCreateSerializer(serializers.ModelSerializer):
     ruleEn = serializers.CharField(source='body_en')
     originalKo = serializers.CharField(source='body_ko')
@@ -73,7 +71,6 @@ class HandbookEntryCreateSerializer(serializers.ModelSerializer):
         )
 
 
-# 핸드북 항목 응답용 시리얼라이저
 class HandbookEntrySerializer(serializers.ModelSerializer):
     companyId = serializers.IntegerField(source='company_id', read_only=True)
     scopeId = serializers.IntegerField(source='scope_id', read_only=True)
@@ -116,13 +113,11 @@ class HandbookEntrySerializer(serializers.ModelSerializer):
         ]
 
 
-# 핸드북 목록 응답용 시리얼라이저
 class HandbookEntryListSerializer(serializers.Serializer):
     items = HandbookEntrySerializer(many=True)
     nextCursor = serializers.CharField(allow_null=True)
 
 
-# 핸드북 항목 수정용 시리얼라이저
 class HandbookEntryUpdateSerializer(serializers.ModelSerializer):
     ruleEn = serializers.CharField(source='body_en', required=False)
     originalKo = serializers.CharField(source='body_ko', required=False)
@@ -161,7 +156,6 @@ class HandbookEntryUpdateSerializer(serializers.ModelSerializer):
         return super().update(instance, validated_data)
 
 
-# 핸드북 항목 근거 응답용 시리얼라이저
 class HandbookEvidenceSerializer(serializers.ModelSerializer):
     documentId = serializers.IntegerField(source='document_id', read_only=True)
     chunkId = serializers.IntegerField(source='chunk_id', read_only=True)
@@ -187,6 +181,7 @@ class HandbookEvidenceSerializer(serializers.ModelSerializer):
 
 class HandbookEvidenceListSerializer(serializers.Serializer):
     items = HandbookEvidenceSerializer(many=True)
+    nextCursor = serializers.CharField(allow_null=True)
 
 
 # 대표의 초안 검토. APPROVE=확정, REJECT=보관, HOLD=초안 유지.

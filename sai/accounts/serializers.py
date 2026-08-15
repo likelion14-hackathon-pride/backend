@@ -43,7 +43,6 @@ class SignupSerializer(serializers.Serializer):
         )
 
 
-# 대표 회원가입용 시리얼라이저
 class OwnerSignupSerializer(SignupSerializer):
     companyName = serializers.CharField(max_length=100)
 
@@ -62,7 +61,6 @@ class OwnerSignupSerializer(SignupSerializer):
         )
 
 
-# 팀원 회원가입용 시리얼라이저
 class MemberSignupSerializer(SignupSerializer):
     companyCode = serializers.CharField(max_length=16)
 
@@ -82,7 +80,6 @@ class MemberSignupSerializer(SignupSerializer):
         )
 
 
-# 로그인용 시리얼라이저
 class AuthSerializer(serializers.Serializer):
     email = serializers.EmailField(required=True)
     password = serializers.CharField(required=True, write_only=True)
@@ -114,7 +111,6 @@ class AuthSerializer(serializers.Serializer):
         return attrs
 
 
-# 사용자 정보 조회용 시리얼라이저
 class UserSerializer(serializers.ModelSerializer):
     name = serializers.CharField(source='display_name', read_only=True)
     locale = serializers.CharField(source='ui_language', read_only=True)
@@ -124,7 +120,6 @@ class UserSerializer(serializers.ModelSerializer):
         fields = ['id', 'email', 'name', 'locale', 'timezone']
 
 
-# 회사 정보 조회용 시리얼라이저
 class CompanySerializer(serializers.ModelSerializer):
     onboardingStatus = serializers.SerializerMethodField()
 
@@ -140,7 +135,6 @@ class CompanySerializer(serializers.ModelSerializer):
         return 'IN_PROGRESS'
 
 
-# 회사 구성원 정보 조회용 시리얼라이저
 class MembershipSerializer(serializers.ModelSerializer):
     userId = serializers.IntegerField(source='user_id', read_only=True)
     companyId = serializers.IntegerField(source='company_id', read_only=True)

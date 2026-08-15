@@ -40,7 +40,7 @@ class ToneEvidenceSerializer(serializers.ModelSerializer):
         ]
 
 
-class CardListItemSerializer(serializers.ModelSerializer):
+class CardSerializer(serializers.ModelSerializer):
     # 보드 열. cards_for() 가 계산해 붙인다.
     column = serializers.CharField(read_only=True)
     assigneeId = serializers.IntegerField(source='assignee_id', read_only=True)
@@ -140,7 +140,7 @@ class CardQuestionSerializer(serializers.Serializer):
     blankId = serializers.IntegerField(source='id')
 
 
-class CardDetailSerializer(CardListItemSerializer):
+class CardDetailSerializer(CardSerializer):
     documentId = serializers.IntegerField(source='document_id', read_only=True)
     originalText = serializers.CharField(source='document.raw_text', read_only=True, default=None)
     steps = StepSerializer(many=True, read_only=True)
@@ -151,8 +151,8 @@ class CardDetailSerializer(CardListItemSerializer):
     riskWarnings = RiskWarningSerializer(many=True, read_only=True)
     questions = CardQuestionSerializer(many=True, read_only=True)
 
-    class Meta(CardListItemSerializer.Meta):
-        fields = CardListItemSerializer.Meta.fields + [
+    class Meta(CardSerializer.Meta):
+        fields = CardSerializer.Meta.fields + [
             'documentId', 'originalText', 'steps', 'blanks', 'toneEvidences',
             'duplicateSources', 'relatedRules', 'riskWarnings', 'questions',
         ]
@@ -170,7 +170,7 @@ class CardDetailSerializer(CardListItemSerializer):
 
 
 class CardListSerializer(serializers.Serializer):
-    items = CardListItemSerializer(many=True)
+    items = CardSerializer(many=True)
     nextCursor = serializers.CharField(allow_null=True)
 
 

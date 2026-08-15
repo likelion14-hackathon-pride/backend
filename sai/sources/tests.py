@@ -57,7 +57,7 @@ class SlackConnectionApiTests(TestCase):
             'signingSecret': SIGNING_SECRET,
         }
         # 연동 직후 채널 동기화가 실제 슬랙을 부르지 않도록 함께 막는다.
-        with patch('sources.views.SlackClient.auth_test', return_value=auth_result, side_effect=side_effect), \
+        with patch('sources.services.SlackClient.auth_test', return_value=auth_result, side_effect=side_effect), \
              patch('sources.services.SlackClient.list_channels', return_value=channels if channels is not None else []):
             return self.client.post(self.url, body, format='json')
 
@@ -108,7 +108,7 @@ class SlackConnectionApiTests(TestCase):
         self.assertFalse(Connection.objects.exists())
 
     def test_malformed_token_rejected_before_slack_call(self):
-        with patch('sources.views.SlackClient.auth_test') as auth_test:
+        with patch('sources.services.SlackClient.auth_test') as auth_test:
             self.client.force_authenticate(user=self.owner)
             response = self.client.post(
                 self.url,
@@ -128,7 +128,7 @@ class SlackConnectionApiTests(TestCase):
         Membership.objects.create(user=other_owner, company=other, role=Membership.Role.OWNER)
 
         self.client.force_authenticate(user=other_owner)
-        with patch('sources.views.SlackClient.auth_test', return_value=AUTH_TEST_OK), \
+        with patch('sources.services.SlackClient.auth_test', return_value=AUTH_TEST_OK), \
              patch('sources.services.SlackClient.list_channels', return_value=[]):
             response = self.client.post(
                 f'/api/companies/{other.id}/source-connections',
@@ -169,7 +169,7 @@ class SlackConnectionApiTests(TestCase):
     # 채널 조회가 실패해도 연결은 살리고 원인을 남긴다.
     def test_channel_registration_failure_keeps_connection(self):
         self.client.force_authenticate(user=self.owner)
-        with patch('sources.views.SlackClient.auth_test', return_value=AUTH_TEST_OK), \
+        with patch('sources.services.SlackClient.auth_test', return_value=AUTH_TEST_OK), \
              patch('sources.services.SlackClient.list_channels', side_effect=SlackError('missing_scope')):
             response = self.client.post(
                 self.url,

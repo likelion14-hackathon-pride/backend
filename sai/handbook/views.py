@@ -8,10 +8,17 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from companies.access import get_member_company, get_owner_company
-from config.pagination import CURSOR_PARAMETER, LIMIT_PARAMETER, paginate
+from config.filters import enum_parameter, enum_value, filter_enum, filter_int
+from config.pagination import (
+    CURSOR_PARAMETER,
+    LIMIT_PARAMETER,
+    page_response,
+    paged_response,
+)
 
 from .finalizing import finalize_entries
 from .models import CompanyScope, HandbookEntry, HandbookEvidence
+from .queries import entries_for, filter_by_review_status
 from .serializers import (
     CompanyScopeCreateSerializer,
     CompanyScopeListSerializer,
@@ -29,56 +36,17 @@ from .serializers import (
 
 
 SCOPE_ID_PARAMETER = openapi.Parameter(
-    'scopeId',
-    openapi.IN_QUERY,
-    type=openapi.TYPE_INTEGER,
+    'scopeId', openapi.IN_QUERY, type=openapi.TYPE_INTEGER,
 )
-SCOPE_KIND_PARAMETER = openapi.Parameter(
-    'scopeKind',
-    openapi.IN_QUERY,
-    type=openapi.TYPE_STRING,
-    enum=['COMPANY', 'PROJECT'],
-)
-KIND_PARAMETER = openapi.Parameter(
-    'kind',
-    openapi.IN_QUERY,
-    type=openapi.TYPE_STRING,
-    enum=['COMPANY', 'PROJECT'],
-)
-STATUS_PARAMETER = openapi.Parameter(
-    'status',
-    openapi.IN_QUERY,
-    type=openapi.TYPE_STRING,
-    enum=['DRAFT', 'CONFIRMED', 'BLANK', 'ARCHIVED'],
-)
-REVIEW_STATUS_PARAMETER = openapi.Parameter(
-    'reviewStatus',
-    openapi.IN_QUERY,
-    description='검토 상태. PENDING은 아직 보지 않은 초안, HELD는 보고 미뤄 둔 초안입니다.',
-    type=openapi.TYPE_STRING,
-    enum=['PENDING', 'APPROVED', 'REJECTED', 'HELD'],
+SCOPE_KIND_PARAMETER = enum_parameter('scopeKind', CompanyScope.Kind)
+KIND_PARAMETER = enum_parameter('kind', CompanyScope.Kind)
+STATUS_PARAMETER = enum_parameter('status', HandbookEntry.Status)
+REVIEW_STATUS_PARAMETER = enum_parameter(
+    'reviewStatus', HandbookEntry.ReviewStatus,
+    'PENDING은 아직 보지 않은 초안, HELD는 보고 미뤄 둔 초안입니다.',
 )
 
 
-# review_status는 status와 reviewed_at에서 파생되므로 쿼리로도 같은 규칙을 따른다.
-def _filter_by_review_status(entries, review_status):
-    Status = HandbookEntry.Status
-    ReviewStatus = HandbookEntry.ReviewStatus
-    reviewable = entries.exclude(status__in=[Status.CONFIRMED, Status.ARCHIVED])
-
-    if review_status == ReviewStatus.APPROVED:
-        return entries.filter(status=Status.CONFIRMED)
-    if review_status == ReviewStatus.REJECTED:
-        return entries.filter(status=Status.ARCHIVED)
-    if review_status == ReviewStatus.HELD:
-        return reviewable.filter(reviewed_at__isnull=False)
-    if review_status == ReviewStatus.PENDING:
-        return reviewable.filter(reviewed_at__isnull=True)
-
-    raise ValidationError({'reviewStatus': ['invalid reviewStatus']})
-
-
-# 핸드북 항목 직접 등록 view
 class HandbookEntryListCreateView(APIView):
     @swagger_auto_schema(
         operation_summary='핸드북 항목 목록 조회',
@@ -101,32 +69,16 @@ class HandbookEntryListCreateView(APIView):
     )
     def get(self, request, company_id):
         company = get_member_company(request.user, company_id)
-        entries = HandbookEntry.objects.filter(company=company).select_related('scope')
+        entries = entries_for(company)
+        entries = filter_enum(entries, request, 'scopeKind', CompanyScope.Kind, 'scope__kind')
+        entries = filter_int(entries, request, 'scopeId', 'scope_id')
+        entries = filter_enum(entries, request, 'status', HandbookEntry.Status)
 
-        scope_id = request.query_params.get('scopeId')
-        scope_kind = request.query_params.get('scopeKind')
-        entry_status = request.query_params.get('status')
-
-        if scope_kind:
-            entries = entries.filter(scope__kind=scope_kind)
-        if scope_id:
-            try:
-                entries = entries.filter(scope_id=int(scope_id))
-            except ValueError:
-                raise ValidationError({'scopeId': ['invalid scopeId']})
-        if entry_status:
-            entries = entries.filter(status=entry_status)
-
-        review_status = request.query_params.get('reviewStatus')
+        review_status = enum_value(request, 'reviewStatus', HandbookEntry.ReviewStatus)
         if review_status:
-            entries = _filter_by_review_status(entries, review_status)
+            entries = filter_by_review_status(entries, review_status)
 
-        items, next_cursor = paginate(entries, request)
-
-        return Response(
-            {'items': HandbookEntrySerializer(items, many=True).data, 'nextCursor': next_cursor},
-            status=status.HTTP_200_OK,
-        )
+        return paged_response(HandbookEntrySerializer, entries, request)
 
     @swagger_auto_schema(
         operation_summary='핸드북 항목 직접 추가',
@@ -150,7 +102,6 @@ class HandbookEntryListCreateView(APIView):
         return Response(response_serializer.data, status=status.HTTP_201_CREATED)
 
 
-# 핸드북 항목 상세 조회 view
 class HandbookEntryDetailView(APIView):
     @swagger_auto_schema(
         operation_summary='핸드북 항목 별 상세 조회',
@@ -200,7 +151,6 @@ class HandbookEntryDetailView(APIView):
         return Response(response_serializer.data, status=status.HTTP_200_OK)
 
 
-# 핸드북 항목 근거 조회 view
 class HandbookEntryEvidenceView(APIView):
     @swagger_auto_schema(
         operation_summary='핸드북 항목 근거 조회',
@@ -220,9 +170,8 @@ class HandbookEntryEvidenceView(APIView):
         company = get_member_company(request.user, company_id)
         entry = get_object_or_404(HandbookEntry, id=entry_id, company=company)
         evidences = HandbookEvidence.objects.filter(entry=entry).order_by('occurred_at', 'id')
-        serializer = HandbookEvidenceSerializer(evidences, many=True)
 
-        return Response({'items': serializer.data}, status=status.HTTP_200_OK)
+        return page_response(HandbookEvidenceSerializer, evidences)
 
 
 def _apply_decision(entry, decision):
@@ -244,7 +193,6 @@ def _apply_decision(entry, decision):
     return entry
 
 
-# 핸드북 초안 검토 view
 class HandbookEntryReviewView(APIView):
     @swagger_auto_schema(
         operation_summary='핸드북 초안 승인/거절/보류',
@@ -285,7 +233,6 @@ class HandbookEntryReviewView(APIView):
         return Response(response_serializer.data, status=status.HTTP_200_OK)
 
 
-# 핸드북 초안 일괄 승인 view
 class HandbookEntryBulkReviewView(APIView):
     @swagger_auto_schema(
         operation_summary='핸드북 초안 일괄 승인',
@@ -334,7 +281,6 @@ class HandbookEntryBulkReviewView(APIView):
         )
 
 
-# 회사 규칙과 프로젝트 범위 목록 조회 view
 class CompanyScopeListView(APIView):
     @swagger_auto_schema(
         operation_summary='핸드북 범위 목록 조회',
@@ -351,17 +297,9 @@ class CompanyScopeListView(APIView):
     def get(self, request, company_id):
         company = get_member_company(request.user, company_id)
         scopes = CompanyScope.objects.filter(company=company)
-        scope_kind = request.query_params.get('kind')
+        scopes = filter_enum(scopes, request, 'kind', CompanyScope.Kind)
 
-        if scope_kind:
-            if scope_kind not in CompanyScope.Kind.values:
-                raise ValidationError({'kind': ['invalid kind']})
-            scopes = scopes.filter(kind=scope_kind)
-
-        scopes = scopes.order_by('kind', 'name')
-        serializer = CompanyScopeSerializer(scopes, many=True)
-
-        return Response({'items': serializer.data}, status=status.HTTP_200_OK)
+        return page_response(CompanyScopeSerializer, scopes.order_by('kind', 'name'))
 
     @swagger_auto_schema(
         operation_summary='프로젝트 범위 생성',

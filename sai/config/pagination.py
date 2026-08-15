@@ -1,5 +1,7 @@
 from drf_yasg import openapi
+from rest_framework import status
 from rest_framework.exceptions import ValidationError
+from rest_framework.response import Response
 
 DEFAULT_LIMIT = 20
 MAX_LIMIT = 100
@@ -45,3 +47,14 @@ def paginate(queryset, request):
     next_cursor = str(items[-1].id) if len(rows) > limit else None
 
     return items, next_cursor
+
+
+def page_response(serializer_class, items, next_cursor=None):
+    return Response(
+        {'items': serializer_class(items, many=True).data, 'nextCursor': next_cursor},
+        status=status.HTTP_200_OK,
+    )
+
+
+def paged_response(serializer_class, queryset, request):
+    return page_response(serializer_class, *paginate(queryset, request))
