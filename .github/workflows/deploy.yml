@@ -3,7 +3,7 @@ name: Deploy to EC2
 on:
   push:
     branches: [develop]
-  workflow_dispatch: 
+  workflow_dispatch:
 
 jobs:
   deploy:
@@ -16,10 +16,34 @@ jobs:
           username: ${{ secrets.EC2_USER }}
           key: ${{ secrets.EC2_SSH_KEY }}
           script: |
+            set -e
+
             cd ~/backend
             git pull origin develop
             cd sai
+
             ~/.local/bin/poetry install --no-root
             ~/.local/bin/poetry run python manage.py migrate --noinput
             ~/.local/bin/poetry run python manage.py collectstatic --noinput
+
             sudo systemctl restart gunicorn
+
+            if systemctl list-unit-files | grep -q '^sai-worker.service'; then
+              sudo systemctl restart sai-worker
+            else
+              echo "::warning::sai-worker 서비스가 없습니다. 수집 작업이 QUEUED 상태로 쌓입니다."
+            fi
+
+      - name: Health check
+        run: |
+          for i in $(seq 1 10); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' https://saisai.n-e.kr/health/ || true)
+            if [ "$code" = "200" ]; then
+              echo "health OK"
+              exit 0
+            fi
+            echo "attempt $i: $code"
+            sleep 3
+          done
+          echo "health check 실패"
+          exit 1
