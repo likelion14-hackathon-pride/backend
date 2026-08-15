@@ -14,13 +14,13 @@ from handbook.retrieval import search_rules
 from handbook.services import scopes_in_view
 from sources.classifier import build_lookup
 from sources.models import Chunk, Identity, RawDocument
-from sources.text import normalize_slack_text
+from sources.text import normalize_document_text
 
 from .models import Blank, InstructionCard, Step, ToneEvidence
 from .prompts import CARD_PROMPT, JUDGE_PROMPT
 
 # 프롬프트를 고치면 올린다.
-GENERATOR_VERSION = 'card-v4'
+GENERATOR_VERSION = 'card-v5'
 
 # 지시 판정은 한 번에 여러 건을 본다. 문서마다 부르면 비용이 몇십 배가 된다.
 JUDGE_BATCH_SIZE = 25
@@ -129,7 +129,9 @@ def _parse_deadline(value, company):
 
 def _judge_batch(client, batch, channels, users):
     prompt = '\n'.join(
-        f'[{index}] {normalize_slack_text(document.raw_text, channels, users)[:300]}'
+        f'[{index}] source={document.item.connection.kind} '
+        f'type={document.external_ref.split(":", 1)[0]} '
+        f'{normalize_document_text(document, channels, users)[:300]}'
         for index, document in enumerate(batch)
     )
     completion = client.chat.completions.parse(
@@ -288,9 +290,10 @@ def _render_cases(cases):
             if chunk.document.author_identity else '?'
         )
         when = chunk.document.occurred_at
+        occurred_at = when.strftime('%Y-%m-%d') if when else '?'
         lines.append(
             f'[{index}] {author} in {chunk.document.item.label}'
-            f'{when:%Y-%m-%d} : {chunk.text[:200]}'
+            f'{occurred_at} : {chunk.text[:200]}'
         )
 
     return '\n'.join(lines)
@@ -361,7 +364,7 @@ def _save_card(company, document, draft, rules, cases, assignee, vector):
 
 
 def _build_card(client, company, document, channels, users):
-    text = normalize_slack_text(document.raw_text, channels, users)
+    text = normalize_document_text(document, channels, users)
     rules, vector = _find_rules(client, company, text, document.item.scope)
 
     # 카드 생성 호출 전에 거른다. 중복 한 건마다 gpt-4o 호출이 통째로 절약된다.
@@ -377,17 +380,21 @@ def _build_card(client, company, document, channels, users):
     parent = None
     if document.thread_ref:
         parent = RawDocument.objects.filter(
-            company=company, external_ref=document.thread_ref
-        ).values_list('raw_text', flat=True).first()
+            company=company,
+            item=document.item,
+            external_ref=document.thread_ref,
+        ).select_related('item__connection').first()
 
     user_content = (
         f'Company timezone: {company.timezone}\n'
         f'Current time: {now:%Y-%m-%d %H:%M} ({now:%A})\n'
         f'Working hours end: {company.working_hours_end:%H:%M}\n\n'
-        f'Message from {author} in {document.item.label}:\n{text}\n'
+        f'Source: {document.item.connection.kind} / {document.item.label}\n'
+        f'Content from {author}:\n{text}\n'
     )
     if parent:
-        user_content += f'\nThread parent:\n{normalize_slack_text(parent, channels, users)[:300]}\n'
+        parent_text = normalize_document_text(parent, channels, users)
+        user_content += f'\nThread parent:\n{parent_text[:300]}\n'
     user_content += (
         f'\nCompany rules that may apply:\n{_render_rules(rules)}\n'
         f'\nPast messages with similar phrasing (for tone_note):\n{_render_cases(cases)}'
@@ -423,7 +430,7 @@ def generate_cards(company, documents=None):
         # 이미 지시가 아니라고 본 것은 다시 보지 않는다.
         # 프롬프트를 고쳐 GENERATOR_VERSION 을 올리면 전부 다시 판정한다.
         .exclude(card_version=GENERATOR_VERSION)
-        .select_related('item', 'item__scope', 'author_identity')
+        .select_related('item__connection', 'item__scope', 'author_identity')
         # 판정 결과가 인덱스로 돌아온다. 동시각 문서가 있으면 순서를 id 로 고정해야 한다.
         .order_by('occurred_at', 'id')
     )

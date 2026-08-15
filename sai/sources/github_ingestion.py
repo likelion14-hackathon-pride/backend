@@ -218,6 +218,12 @@ def ingest_repository(item, client):
 
 
 def run_github_ingestion(job, connection):
+    from .ingestion import PROGRESS_COLLECTED, _set_progress, process_documents
+
+    job.status = IngestionJob.Status.RUNNING
+    job.started_at = job.started_at or timezone.now()
+    job.save(update_fields=['status', 'started_at'])
+
     items = list(
         Item.objects.filter(
             connection=connection,
@@ -233,31 +239,24 @@ def run_github_ingestion(job, connection):
         job.save(update_fields=['status', 'errors', 'progress', 'completed_at'])
         return job
 
-    client = GitHubClient(
-        settings.GITHUB_APP_ID,
-        settings.GITHUB_PRIVATE_KEY,
-        settings.GITHUB_INSTALLATION_ID,
-    )
     errors = []
+    collection_failed = False
 
-    for index, item in enumerate(items, start=1):
-        try:
-            ingest_repository(item, client)
-        except GitHubError as exc:
-            errors.append({'itemId': item.id, 'label': item.label, 'code': exc.code})
+    # PROCESS는 웹훅 등으로 이미 저장된 GitHub 원문만 AI 처리한다.
+    if job.kind == IngestionJob.Kind.COLLECT:
+        client = GitHubClient(
+            settings.GITHUB_APP_ID,
+            settings.GITHUB_PRIVATE_KEY,
+            settings.GITHUB_INSTALLATION_ID,
+        )
+        for index, item in enumerate(items, start=1):
+            try:
+                ingest_repository(item, client)
+            except GitHubError as exc:
+                errors.append({'itemId': item.id, 'label': item.label, 'code': exc.code})
 
-        job.progress = int(100 * index / len(items))
-        job.save(update_fields=['progress'])
+            _set_progress(job, int(PROGRESS_COLLECTED * index / len(items)))
 
-    if len(errors) == len(items):
-        job.status = IngestionJob.Status.FAILED
-    elif errors:
-        job.status = IngestionJob.Status.PARTIAL
-    else:
-        job.status = IngestionJob.Status.SUCCEEDED
+        collection_failed = bool(errors) and len(errors) == len(items)
 
-    job.errors = errors or None
-    job.completed_at = timezone.now()
-    job.save(update_fields=['status', 'errors', 'completed_at'])
-
-    return job
+    return process_documents(job, errors, collection_failed)

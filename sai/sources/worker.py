@@ -93,9 +93,6 @@ def run_job(job):
     if connection.disconnected_at is not None:
         return _fail(job, 'source_not_connected')
 
-    if connection.kind == Connection.Kind.GITHUB and job.kind == IngestionJob.Kind.PROCESS:
-        return _fail(job, 'github_process_not_supported')
-
     if connection.kind == Connection.Kind.GITHUB:
         runner = run_github_ingestion
     elif connection.kind == Connection.Kind.SLACK:

@@ -236,6 +236,46 @@ def _finish(job, errors, collection_failed=False):
     return job
 
 
+# 수집한 원문을 분류하고 검색용 벡터, 핸드북 초안, 지시 카드까지 만든다.
+# Slack과 GitHub가 같은 처리 순서를 사용한다.
+def process_documents(job, errors=None, collection_failed=False):
+    errors = errors or []
+
+    # 처리할 것이 없으면 AI 단계를 건너뛴다.
+    # 초안 생성은 매번 규칙 문서 전체를 다시 부르므로, 주기 실행에서 그냥 두면 비용이 계속 나간다.
+    if not collection_failed and not has_pending_work(job.company):
+        return _finish(job, errors)
+
+    # 뒷단계가 실패해도 앞단계 결과는 남긴다.
+    if not collection_failed:
+        try:
+            _, classify_errors = classify_documents(job.company_id)
+            errors += classify_errors
+            _set_progress(job, PROGRESS_CLASSIFIED)
+            # 과거 사례 검색용 벡터. 말투 해석과 사례 기반 답변이 여기에 기댄다.
+            _, chunk_errors = sync_chunks(job.company)
+            errors += chunk_errors
+            # 확정 시점에 놓친 규칙을 여기서 거둔다. Day 0 답변이 대부분 여기 걸린다.
+            result = finalize_entries(unfinished_entries(job.company))
+            errors += [{'scope': 'finalize', **error} for error in result['errors']]
+            _set_progress(job, PROGRESS_EMBEDDED)
+        except ImproperlyConfigured:
+            errors.append({'scope': 'classify', 'code': 'openai_not_configured'})
+        else:
+            try:
+                entries, draft_errors = draft_entries(job.company)
+                errors += draft_errors
+                job.entry_count = len(entries)
+                _set_progress(job, PROGRESS_DRAFTED)
+                # 규칙과 별개로, 사람에게 내려온 지시는 카드로 만든다.
+                _, card_errors = generate_cards(job.company)
+                errors += card_errors
+            except ImproperlyConfigured:
+                errors.append({'scope': 'draft', 'code': 'openai_not_configured'})
+
+    return _finish(job, errors, collection_failed)
+
+
 # 수집 작업 실행. 워커가 큐에서 꺼내 호출한다.
 def run_ingestion(job, connection):
     job.status = IngestionJob.Status.RUNNING
@@ -276,40 +316,4 @@ def run_ingestion(job, connection):
 
         collection_failed = bool(errors) and len(errors) == len(items)
 
-    # 처리할 것이 없으면 AI 단계를 건너뛴다.
-    # 초안 생성은 매번 규칙 문서 전체를 다시 부르므로, 주기 실행에서 그냥 두면 비용이 계속 나간다.
-    if not collection_failed and not has_pending_work(job.company):
-        _finish(job, errors)
-
-        return job
-
-    # 뒷단계가 실패해도 앞단계 결과는 남긴다.
-    if not collection_failed:
-        try:
-            _, classify_errors = classify_documents(job.company_id)
-            errors += classify_errors
-            _set_progress(job, PROGRESS_CLASSIFIED)
-            # 과거 사례 검색용 벡터. 말투 해석과 사례 기반 답변이 여기에 기댄다.
-            _, chunk_errors = sync_chunks(job.company)
-            errors += chunk_errors
-            # 확정 시점에 놓친 규칙을 여기서 거둔다. Day 0 답변이 대부분 여기 걸린다.
-            result = finalize_entries(unfinished_entries(job.company))
-            errors += [{'scope': 'finalize', **error} for error in result['errors']]
-            _set_progress(job, PROGRESS_EMBEDDED)
-        except ImproperlyConfigured:
-            errors.append({'scope': 'classify', 'code': 'openai_not_configured'})
-        else:
-            try:
-                entries, draft_errors = draft_entries(job.company)
-                errors += draft_errors
-                job.entry_count = len(entries)
-                _set_progress(job, PROGRESS_DRAFTED)
-                # 규칙과 별개로, 사람에게 내려온 지시는 카드로 만든다.
-                _, card_errors = generate_cards(job.company)
-                errors += card_errors
-            except ImproperlyConfigured:
-                errors.append({'scope': 'draft', 'code': 'openai_not_configured'})
-
-    _finish(job, errors, collection_failed)
-
-    return job
+    return process_documents(job, errors, collection_failed)
