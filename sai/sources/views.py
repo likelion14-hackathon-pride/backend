@@ -400,7 +400,9 @@ class IngestionJobListCreateView(APIView):
 
         item_ids = list(items.values_list('id', flat=True))
         if not item_ids:
-            raise ValidationError({'itemIds': ['no channel to ingest']})
+            # 어느 쪽이 문제인지 구분해 준다. Swagger 기본값 [0] 을 그대로 보내는 일이 흔하다.
+            code = 'no matching channel' if requested_ids else 'no channel registered'
+            raise ValidationError({'itemIds': [code]})
 
         job = IngestionJob.objects.create(company=company, item_ids=item_ids)
         # 지금은 동기 실행. 데이터가 커지면 이 한 줄만 큐 적재로 바꾸면 된다.
