@@ -1,4 +1,5 @@
 from django.db import models
+from pgvector.django import VectorField
 
 
 class InstructionCard(models.Model):
@@ -6,6 +7,14 @@ class InstructionCard(models.Model):
         NEW = 'NEW'
         OPEN = 'OPEN'
         DONE = 'DONE'
+
+    # 완곡한 한국어 요청을 외국인 독자가 오판하는 지점이 급함의 정도다.
+    # 문장으로만 두면 '급하지 않지만 빨리' 같은 모순이 섞여 나온다. 먼저 하나를 고르게 한다.
+    class Urgency(models.TextChoices):
+        URGENT = 'URGENT'      # 하던 일을 멈추고
+        SOON = 'SOON'          # 기한이 있음
+        WHENEVER = 'WHENEVER'  # 여유 있을 때. 요청자가 그렇게 말했다
+        UNCLEAR = 'UNCLEAR'    # 근거가 없어 판단하지 않음
 
     company = models.ForeignKey('companies.Company', on_delete=models.CASCADE, related_name='instruction_cards')
     scope = models.ForeignKey('handbook.CompanyScope', on_delete=models.PROTECT, null=True, blank=True, related_name='instruction_cards')
@@ -21,9 +30,19 @@ class InstructionCard(models.Model):
     deadline_text_en = models.CharField(max_length=60, null=True, blank=True)
     deadline_at = models.DateTimeField(null=True, blank=True)
     is_deadline_inferred = models.BooleanField(default=False)
+    urgency = models.CharField(
+        max_length=8, choices=Urgency.choices, default=Urgency.UNCLEAR
+    )
     tone_note = models.TextField(null=True, blank=True)
     tone_note_en = models.TextField(null=True, blank=True)
     status = models.CharField(max_length=6, choices=Status.choices, default=Status.NEW)
+    # 같은 요청을 슬랙에 여러 번 올리면 카드도 여러 장이 된다.
+    # 원문마다 카드를 남기되, 처음 것만 목록에 보여 주고 나머지는 여기로 묶는다.
+    duplicate_of = models.ForeignKey(
+        'self', on_delete=models.SET_NULL, null=True, blank=True, related_name='duplicates'
+    )
+    # 중복 판정에 쓰는 원문 벡터. 카드마다 들고 있어야 청크 유무와 무관하게 비교할 수 있다.
+    embedding = VectorField(dimensions=1536, null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:

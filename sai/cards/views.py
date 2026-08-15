@@ -1,3 +1,4 @@
+from django.db.models import Count
 from django.shortcuts import get_object_or_404
 from drf_yasg import openapi
 from drf_yasg.utils import swagger_auto_schema
@@ -46,8 +47,13 @@ def get_member_company(user, company_id):
 
 
 def _cards(company):
-    return InstructionCard.objects.filter(company=company).select_related(
-        'assignee', 'scope', 'document', 'document__item', 'document__author_identity'
+    return (
+        InstructionCard.objects.filter(company=company)
+        .select_related(
+            'assignee', 'scope', 'document', 'document__item', 'document__author_identity'
+        )
+        # 반복 횟수를 카드마다 세면 목록 한 번에 COUNT 이 카드 수만큼 나간다.
+        .annotate(duplicate_count=Count('duplicates'))
     )
 
 
@@ -59,7 +65,8 @@ class CardListView(APIView):
         operation_summary='지시 카드 목록',
         operation_description=(
             '슬랙 지시를 해석한 카드입니다. mine=true 로 내게 배정된 것만 볼 수 있습니다. '
-            '담당자는 슬랙 멘션과 이메일이 일치하는 계정으로 자동 지정되며, 없으면 비어 있습니다.'
+            '담당자는 슬랙 멘션과 이메일이 일치하는 계정으로 자동 지정되며, 없으면 비어 있습니다. '
+            '같은 요청이 여러 번 올라온 경우 처음 것만 나오고 duplicateCount 로 반복 횟수를 알립니다.'
         ),
         manual_parameters=[STATUS_PARAMETER, MINE_PARAMETER, CURSOR_PARAMETER, LIMIT_PARAMETER],
         responses={
@@ -73,7 +80,8 @@ class CardListView(APIView):
     )
     def get(self, request, company_id):
         company = get_member_company(request.user, company_id)
-        cards = _cards(company).prefetch_related('blanks')
+        # 같은 요청을 반복해 올린 것은 목록에 한 번만 보인다. 나머지는 원본에 묶여 있다.
+        cards = _cards(company).filter(duplicate_of__isnull=True).prefetch_related('blanks')
 
         card_status = request.query_params.get('status')
         if card_status:

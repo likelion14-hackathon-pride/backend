@@ -1,13 +1,15 @@
+from datetime import timedelta
 from unittest.mock import patch
 
 from django.test import TestCase, override_settings
+from django.utils import timezone
 from rest_framework.test import APIClient
 
 from accounts.models import Membership, User
 from companies.models import Company
 
 from .models import Connection, IngestionJob, Item
-from .worker import claim_job, drain, run_job, work_forever
+from .worker import STALE_AFTER, claim_job, drain, reap_stale_jobs, run_job, work_forever
 
 
 class WorkerTests(TestCase):
@@ -39,6 +41,46 @@ class WorkerTests(TestCase):
 
     def test_nothing_to_claim(self):
         self.assertIsNone(claim_job())
+
+    def test_claim_records_start_time(self):
+        self.job()
+
+        self.assertIsNotNone(claim_job().started_at)
+
+    # --- 죽은 워커가 남긴 작업 ---
+
+    # 워커가 중간에 내려가면 RUNNING 인 채로 남아 화면에서 영원히 진행 중으로 보인다.
+    def test_stale_running_job_is_failed(self):
+        job = self.job(
+            status=IngestionJob.Status.RUNNING,
+            started_at=timezone.now() - STALE_AFTER - timedelta(minutes=1),
+        )
+
+        self.assertEqual(reap_stale_jobs(), 1)
+        job.refresh_from_db()
+        self.assertEqual(job.status, IngestionJob.Status.FAILED)
+        self.assertEqual(job.errors[0]['code'], 'worker_died')
+        self.assertIsNotNone(job.completed_at)
+
+    # 아직 돌고 있는 작업을 죽이면 안 된다.
+    def test_running_job_within_the_window_is_left_alone(self):
+        job = self.job(status=IngestionJob.Status.RUNNING, started_at=timezone.now())
+
+        self.assertEqual(reap_stale_jobs(), 0)
+        job.refresh_from_db()
+        self.assertEqual(job.status, IngestionJob.Status.RUNNING)
+
+    # 큐가 빌 때마다 정리한다.
+    def test_worker_loop_reaps(self):
+        job = self.job(
+            status=IngestionJob.Status.RUNNING,
+            started_at=timezone.now() - STALE_AFTER - timedelta(minutes=1),
+        )
+
+        work_forever(idle_seconds=0, stop_after_idle=1)
+
+        job.refresh_from_db()
+        self.assertEqual(job.status, IngestionJob.Status.FAILED)
 
     # 이미 잡힌 작업을 다른 워커가 또 잡으면 안 된다.
     def test_running_job_is_not_claimed_again(self):

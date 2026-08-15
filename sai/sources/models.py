@@ -110,6 +110,9 @@ class RawDocument(models.Model):
     content_hash = models.CharField(max_length=64)
     classified_as = models.CharField(max_length=14, choices=ClassifiedAs.choices, default=ClassifiedAs.UNCLASSIFIED)
     classifier_version = models.CharField(max_length=20, null=True, blank=True)
+    # 지시가 아니라고 판정된 문서에 남기는 표시.
+    # 없으면 카드를 만들 때마다 과거 전체를 다시 판정하게 된다.
+    card_version = models.CharField(max_length=20, null=True, blank=True)
     sync_state = models.CharField(max_length=10, choices=SyncState.choices, default=SyncState.CURRENT)
     first_seen_at = models.DateTimeField(auto_now_add=True)
     last_seen_at = models.DateTimeField(auto_now=True)
@@ -167,6 +170,8 @@ class IngestionJob(models.Model):
     entry_count = models.IntegerField(default=0)
     errors = models.JSONField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
+    # 워커가 잡은 시각. 이게 없으면 죽은 워커가 남긴 RUNNING 을 구분할 수 없다.
+    started_at = models.DateTimeField(null=True, blank=True)
     completed_at = models.DateTimeField(null=True, blank=True)
 
     class Meta:
