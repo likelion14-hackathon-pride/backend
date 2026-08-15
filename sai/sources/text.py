@@ -41,6 +41,14 @@ def normalize_slack_text(text, channels=None, users=None):
     return html.unescape(text).strip()
 
 
+# Slack 원문만 전용 마크업을 풀고, GitHub 등 다른 소스는 저장된 본문을 그대로 쓴다.
+def normalize_document_text(document, channels=None, users=None):
+    if document.item.connection.kind == 'SLACK':
+        return normalize_slack_text(document.raw_text, channels, users)
+
+    return (document.raw_text or '').strip()
+
+
 # 채팅에 실수로 붙여넣는 자격증명들. 임베딩은 외부로 나가는 경로라 그 전에 지운다.
 # 한 번 나가면 회수할 수 없으므로, 놓치는 것보다 과하게 가리는 쪽을 택한다.
 SECRET_PATTERNS = [

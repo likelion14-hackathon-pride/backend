@@ -6,18 +6,19 @@ from openai import OpenAI, OpenAIError
 from pydantic import BaseModel
 
 from .models import Identity, Item, RawDocument
-from .text import normalize_slack_text
+from .text import normalize_document_text
 
 # 프롬프트를 고치면 이 값을 올린다. RawDocument.classifier_version에 기록되므로
 # 나중에 "옛 프롬프트로 분류된 것만 다시 돌리기"가 가능하다.
-CLASSIFIER_VERSION = 'clf-v2'
+CLASSIFIER_VERSION = 'clf-v3'
 
 # 한 번의 호출에 넣는 메시지 수. 메시지마다 호출하면 비용과 시간이 수십 배가 된다.
 BATCH_SIZE = 25
 
 # 한국어판과 A/B 비교했을 때 한국어 데이터 정확도는 동일하고(97.1%),
 # 영어 확정 표현까지 커버하므로 이 버전을 쓴다. 예시는 한/영 둘 다 둔다.
-SYSTEM_PROMPT = """You classify Slack messages from a Korean startup to extract internal company rules.
+SYSTEM_PROMPT = """You classify Slack messages and GitHub repository documents from a Korean startup
+to extract internal company rules.
 
 The company has foreign employees who do not read Korean well. The goal is to surface
 "how this company works" so they can follow it.
@@ -47,6 +48,8 @@ How to decide
 - Commitment markers push toward INSTRUCTION. Korean: '~하겠습니다', '~로 합시다', '~하지 마세요',
   '~로 확정'. English: "let's", "from now on", "going forward", "please make sure", "never".
 - For thread replies, judge within the context given in the parent line.
+- A README can contain recurring development or collaboration rules. An Issue or Pull Request about
+  one specific task is usually CONTEXT unless it clearly establishes a rule for future work.
 - Do not over-assign INSTRUCTION. A wrong rule is more harmful than a missed one.
 - Messages may be in Korean or English. Apply the same criteria to both.
 
@@ -85,14 +88,21 @@ def build_lookup(company_id):
 
 
 def _render(document, index, channels, users, parents):
-    text = normalize_slack_text(document.raw_text, channels, users)
+    text = normalize_document_text(document, channels, users)
     author = document.author_identity.external_handle if document.author_identity else '알수없음'
-    lines = [f'[{index}] 채널={document.item.label} 작성자={author}']
+    if document.item.connection.kind == 'GITHUB':
+        document_type = document.external_ref.split(':', 1)[0]
+        lines = [
+            f'[{index}] 소스=GitHub 저장소={document.item.label} '
+            f'유형={document_type} 작성자={author}'
+        ]
+    else:
+        lines = [f'[{index}] 채널={document.item.label} 작성자={author}']
 
     # 스레드 답글은 부모 발언을 봐야 의미가 잡힌다.
-    parent = parents.get(document.thread_ref)
+    parent = parents.get((document.item_id, document.thread_ref))
     if parent:
-        lines.append(f'    parent: {normalize_slack_text(parent, channels, users)[:200]}')
+        lines.append(f'    parent: {normalize_document_text(parent, channels, users)[:200]}')
 
     lines.append(f'    text: {text}')
 
@@ -128,7 +138,7 @@ def classify_documents(company_id, documents=None):
     # 미분류(version=None)와 옛 버전으로 분류된 것은 모두 다시 돌린다.
     documents = list(
         documents.exclude(classifier_version=CLASSIFIER_VERSION)
-        .select_related('item', 'author_identity')
+        .select_related('item__connection', 'author_identity')
         # 라벨을 인덱스로 되받으므로 순서가 흔들리면 남의 라벨이 붙는다.
         # occurred_at 이 같은 문서가 있어 id 로 한 번 더 묶는다.
         .order_by('occurred_at', 'id')
@@ -139,10 +149,13 @@ def classify_documents(company_id, documents=None):
     channels, users = build_lookup(company_id)
     # 스레드 답글의 부모 본문. 답글만 있는 배치에서도 맥락을 잃지 않게 미리 모아 둔다.
     thread_refs = {d.thread_ref for d in documents if d.thread_ref}
-    parents = dict(
-        RawDocument.objects.filter(company_id=company_id, external_ref__in=thread_refs)
-        .values_list('external_ref', 'raw_text')
-    )
+    parent_documents = RawDocument.objects.filter(
+        company_id=company_id, external_ref__in=thread_refs
+    ).select_related('item__connection')
+    parents = {
+        (document.item_id, document.external_ref): document
+        for document in parent_documents
+    }
 
     client = _get_client()
     classified = 0
