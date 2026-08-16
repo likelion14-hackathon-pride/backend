@@ -152,6 +152,22 @@ class HomeTests(TestCase):
 
         self.assertEqual((resolution['answered'], resolution['total']), (2, 3))
 
+    # 대표에게 넘어간 것만 실패다.
+    def test_a_decision_needs_the_owner(self):
+        self.answer(Message.Verdict.NEEDS_DECISION)
+
+        resolution = self.get()['resolution']
+
+        self.assertEqual((resolution['answered'], resolution['total']), (0, 1))
+
+    # 회사 규칙에 대한 질문이 아니었던 것을 실패로 세면 비율이 실제보다 낮아진다.
+    def test_an_out_of_scope_question_is_not_a_failure(self):
+        self.answer(Message.Verdict.OUT_OF_SCOPE)
+
+        resolution = self.get()['resolution']
+
+        self.assertEqual((resolution['answered'], resolution['total']), (1, 1))
+
     def test_old_answers_fall_out_of_the_window(self):
         self.answer(Message.Verdict.GROUNDED, when=timezone.now() - timedelta(days=30))
 

@@ -7,6 +7,7 @@ from django.utils import timezone
 from handbook.models import HandbookEntry
 from handbook.queries import scopes_with_counts
 from qna.models import Escalation, Message
+from qna.services import NEEDS_OWNER
 from sources.models import RawDocument
 
 from .models import InstructionCard
@@ -19,9 +20,6 @@ RESOLUTION_DAYS = 7
 
 # 핸드북이 자라는 모양을 보여 줄 주 수.
 GROWTH_WEEKS = 4
-
-# 대표를 부르지 않고 끝난 답변.
-RESOLVED = [Message.Verdict.GROUNDED, Message.Verdict.GROUNDED_BY_CASES]
 
 
 # '오늘'은 회사가 있는 곳 기준이다. UTC 자정으로 자르면 서울에서 아침 9시에
@@ -73,15 +71,20 @@ def _unread(company):
 
 
 # 물어본 것 중 대표를 부르지 않고 끝난 비율.
-# 카드의 미정 항목을 핸드북으로 먼저 답한 것도 여기 들어간다.
+# 근거로 답한 것만 세면 회사 규칙과 무관한 질문(OUT_OF_SCOPE)까지 실패로 잡혀
+# 비율이 실제보다 낮아진다. 대표에게 넘어간 것만 빼는 쪽이 맞다.
+#
+# 카드의 미정 항목을 SAI가 먼저 답한 것은 여기 잡히지 않는다.
+# 그 경로는 Message 를 남기지 않는다.
 def _resolution(company, since):
     answers = Message.objects.filter(
         company=company, role=Message.Role.AI, created_at__gte=since
     )
+    total = answers.count()
 
     return {
-        'answered': answers.filter(verdict__in=RESOLVED).count(),
-        'total': answers.count(),
+        'answered': total - answers.filter(verdict__in=NEEDS_OWNER).count(),
+        'total': total,
         'since': since,
     }
 
