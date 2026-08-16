@@ -1,9 +1,11 @@
 from rest_framework import serializers
 
 from accounts.models import Membership
+from companies.timing import STATES
 from qna.serializers import RiskWarningSerializer
 
 from .models import Blank, InstructionCard, Step, ToneEvidence
+from .timing import BASES
 
 
 class StepSerializer(serializers.ModelSerializer):
@@ -176,6 +178,54 @@ class CardListSerializer(serializers.Serializer):
 
 class CardAskSerializer(serializers.Serializer):
     question = serializers.CharField(max_length=2000, trim_whitespace=True)
+
+
+class PersonTimingSerializer(serializers.Serializer):
+    name = serializers.CharField(allow_null=True)
+    timezone = serializers.CharField()
+    state = serializers.ChoiceField(choices=STATES)
+
+
+class WorkingHoursSerializer(serializers.Serializer):
+    enabled = serializers.BooleanField()
+    start = serializers.TimeField()
+    end = serializers.TimeField()
+    timezone = serializers.CharField()
+
+
+class ReplyExpectedSerializer(serializers.Serializer):
+    at = serializers.DateTimeField()
+    basis = serializers.ChoiceField(choices=BASES)
+    sampleSize = serializers.IntegerField()
+
+
+class CanDoSerializer(serializers.Serializer):
+    cardId = serializers.IntegerField()
+    stepId = serializers.IntegerField()
+    title = serializers.CharField()
+    entryId = serializers.IntegerField(allow_null=True)
+    entryTitle = serializers.CharField(allow_null=True)
+    scopeName = serializers.CharField(allow_null=True)
+
+
+class NeedsPersonSerializer(serializers.Serializer):
+    cardId = serializers.IntegerField()
+    blankId = serializers.IntegerField()
+    title = serializers.CharField()
+    scopeName = serializers.CharField(allow_null=True)
+    escalationStatus = serializers.CharField(allow_null=True)
+
+
+class TimingSerializer(serializers.Serializer):
+    now = serializers.DateTimeField()
+    you = PersonTimingSerializer()
+    owner = PersonTimingSerializer()
+    workingHours = WorkingHoursSerializer()
+    replyExpected = ReplyExpectedSerializer()
+    canDo = CanDoSerializer(many=True)
+    canDoTotal = serializers.IntegerField()
+    needsPerson = NeedsPersonSerializer(many=True)
+    needsPersonTotal = serializers.IntegerField()
 
 
 # 담당자는 슬랙 멘션으로 자동 지정된다. 멘션이 없으면 비어 있고, 잘못 잡히기도 한다.

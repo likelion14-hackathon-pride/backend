@@ -21,6 +21,7 @@ from .serializers import (
     CardListSerializer,
     CardSerializer,
     CardUpdateSerializer,
+    TimingSerializer,
 )
 from .services import (
     card_context,
@@ -29,6 +30,7 @@ from .services import (
     original_text,
     related_rules,
 )
+from .timing import BUCKET_LIMIT, timing_for
 
 COLUMN_PARAMETER = enum_parameter(
     'column', InstructionCard.Column,
@@ -153,6 +155,44 @@ class CardDetailView(APIView):
         # 상태가 바뀌면 열도 바뀐다. 계산된 값을 다시 받으려면 새로 읽어야 한다.
         return Response(
             CardDetailSerializer(_detailed(company, card_id)).data,
+            status=status.HTTP_200_OK,
+        )
+
+
+class TimingView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    @swagger_auto_schema(
+        operation_summary='시차 · 응답 대기 현황',
+        operation_description=(
+            '내 시각과 대표 시각, 지금이 근무시간인지, 지금 보내면 언제쯤 답이 오는지를 돌려줍니다. '
+            'state 는 근무시간 기준이며 접속 여부가 아닙니다. 근무시간을 쓰지 않는 회사는 UNKNOWN 입니다. '
+            'replyExpected.basis 가 HISTORY 면 실제 답변 이력의 중앙값, '
+            'WORKING_HOURS 면 표본이 모자라 다음 근무 시작 시각을 쓴 것입니다. '
+            'canDo 는 대표의 답을 기다리지 않는 카드의 단계로, 핸드북 근거가 있는 것부터 나옵니다. '
+            'entryId 가 있으면 그 규칙이 근거이고 없으면 근거로 삼을 규칙이 없다는 뜻입니다. '
+            'needsPerson 은 대표의 답이 있어야 풀리는 미정 항목이며, '
+            '미정 항목이 남은 카드의 단계는 canDo 에 나오지 않습니다. '
+            f'두 목록은 각각 {BUCKET_LIMIT}건까지 나오고 전체 개수는 canDoTotal / needsPersonTotal 입니다.'
+        ),
+        manual_parameters=[SCOPE_PARAMETER, MINE_PARAMETER],
+        responses={
+            200: TimingSerializer(),
+            400: '잘못된 요청',
+            401: '인증되지 않음',
+            403: '회사 접근 권한 없음',
+            404: '회사를 찾을 수 없음',
+        },
+        tags=['Card'],
+    )
+    def get(self, request, company_id):
+        company = get_member_company(request.user, company_id)
+        cards = filter_int(cards_for(company), request, 'scopeId', 'scope_id')
+        if flag(request, 'mine'):
+            cards = cards.filter(assignee=request.user)
+
+        return Response(
+            TimingSerializer(timing_for(company, request.user, cards)).data,
             status=status.HTTP_200_OK,
         )
 
