@@ -231,6 +231,35 @@ class SlackConnectionCreateSerializer(serializers.Serializer):
         return value
 
 
-# GitHub App 자격증명은 서버 설정에 있으므로, 연결 요청에는 provider만 받는다.
+# 대표가 GitHub App 연결 화면에서 입력하는 값.
 class GitHubConnectionCreateSerializer(serializers.Serializer):
     provider = serializers.ChoiceField(choices=[Connection.Kind.GITHUB])
+    appId = serializers.CharField(trim_whitespace=True, write_only=True)
+    installationId = serializers.CharField(trim_whitespace=True, write_only=True)
+    privateKey = serializers.FileField(write_only=True)
+
+    def validate_appId(self, value):
+        if not value.isdigit():
+            raise serializers.ValidationError('app id must be a number')
+
+        return value
+
+    def validate_installationId(self, value):
+        if not value.isdigit():
+            raise serializers.ValidationError('installation id must be a number')
+
+        return value
+
+    def validate_privateKey(self, value):
+        if value.size > 64 * 1024:
+            raise serializers.ValidationError('private key file is too large')
+
+        try:
+            private_key = value.read().decode('utf-8').strip()
+        except UnicodeDecodeError as exc:
+            raise serializers.ValidationError('private key must be a PEM file') from exc
+
+        if '-----BEGIN' not in private_key or 'PRIVATE KEY-----' not in private_key:
+            raise serializers.ValidationError('private key must be a PEM file')
+
+        return private_key + '\n'
