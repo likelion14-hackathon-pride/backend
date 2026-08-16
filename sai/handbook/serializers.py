@@ -2,6 +2,13 @@ from django.utils import timezone
 from drf_yasg.utils import swagger_serializer_method
 from rest_framework import serializers
 
+from config.errors import (
+    SCOPE_KIND_NOT_ALLOWED,
+    SCOPE_NAME_BLANK,
+    SCOPE_NAME_TAKEN,
+    SCOPE_NOT_FOUND,
+)
+
 from .finalizing import mark_stale
 from .models import CompanyScope, HandbookEntry, HandbookEvidence, HandbookRevision
 
@@ -30,18 +37,20 @@ class CompanyScopeCreateSerializer(serializers.ModelSerializer):
     # 회사 전반 규칙 범위는 회사 생성 시 고정된 4개로 시딩되므로 추가 생성을 막는다.
     def validate_kind(self, value):
         if value != CompanyScope.Kind.PROJECT:
-            raise serializers.ValidationError('only PROJECT scope can be created')
+            raise serializers.ValidationError(
+                'only PROJECT scope can be created', code=SCOPE_KIND_NOT_ALLOWED
+            )
 
         return value
 
     def validate_name(self, value):
         name = value.strip()
         if not name:
-            raise serializers.ValidationError('name must not be blank')
+            raise serializers.ValidationError('name must not be blank', code=SCOPE_NAME_BLANK)
 
         # 대소문자만 다른 이름도 중복으로 본다. 채널 연결 시 헷갈리기 때문.
         if CompanyScope.objects.filter(company=self.context['company'], name__iexact=name).exists():
-            raise serializers.ValidationError('scope name already exists')
+            raise serializers.ValidationError('scope name already exists', code=SCOPE_NAME_TAKEN)
 
         return name
 
@@ -61,7 +70,7 @@ class HandbookEntryCreateSerializer(serializers.ModelSerializer):
 
     def validate_scopeId(self, value):
         if value.company != self.context['company']:
-            raise serializers.ValidationError('scope not found')
+            raise serializers.ValidationError('scope not found', code=SCOPE_NOT_FOUND)
 
         return value
 
@@ -169,7 +178,7 @@ class HandbookEntryUpdateSerializer(serializers.ModelSerializer):
 
     def validate_scopeId(self, value):
         if value.company != self.instance.company:
-            raise serializers.ValidationError('scope not found')
+            raise serializers.ValidationError('scope not found', code=SCOPE_NOT_FOUND)
 
         return value
 

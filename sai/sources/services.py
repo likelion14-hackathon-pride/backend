@@ -6,6 +6,8 @@ from django.conf import settings
 from django.utils import timezone
 from rest_framework.exceptions import ValidationError
 
+from config.errors import GITHUB_INSTALLATION_TAKEN, SLACK_WORKSPACE_TAKEN
+
 from .models import Connection, Item
 from .github import GitHubClient, GitHubError
 from .local_files import create_upload_target, delete_file
@@ -90,12 +92,12 @@ def add_channel(connection, external_id):
     channel = next((c for c in client.list_channels() if c['id'] == external_id), None)
 
     if channel is None:
-        raise SlackError('channel_not_found')
+        raise SlackError('channel_not_found', field='externalId')
 
     if not channel.get('is_member'):
         # 비공개 채널은 봇이 스스로 들어갈 수 없다. 사람이 슬랙에서 초대해야 한다.
         if channel.get('is_private'):
-            raise SlackError('cannot_join_private_channel')
+            raise SlackError('cannot_join_private_channel', field='externalId')
         client.join_channel(external_id)
 
     item, _ = Item.objects.update_or_create(
@@ -133,10 +135,8 @@ def github_client(connection):
 # 대표가 입력한 GitHub App을 회사 소스로 연결한다.
 def connect_github(company, app_id, installation_id, private_key):
     client = GitHubClient(app_id, private_key, installation_id)
-    try:
-        installation = client.installation()
-    except GitHubError as exc:
-        raise ValidationError({'github': [exc.code]})
+    # GitHubError 는 DomainError 라서 그대로 두면 깃허브가 준 코드가 봉투에 실린다.
+    installation = client.installation()
 
     installation_id = str(installation['id'])
     account = installation.get('account') or {}
@@ -151,7 +151,10 @@ def connect_github(company, app_id, installation_id, private_key):
         .exists()
     )
     if taken:
-        raise ValidationError({'github': ['installation already connected to another company']})
+        raise ValidationError(
+            'installation already connected to another company',
+            code=GITHUB_INSTALLATION_TAKEN,
+        )
 
     connection = Connection.objects.filter(
         company=company, kind=Connection.Kind.GITHUB, disconnected_at__isnull=True
@@ -179,10 +182,7 @@ def connect_github(company, app_id, installation_id, private_key):
 # 이미 연결된 회사가 다시 호출하면 자격증명을 교체한다.
 def connect_slack(company, bot_token, signing_secret):
     # 저장 전에 슬랙에 직접 물어본다. 잘못된 키를 DB에 남기지 않기 위함.
-    try:
-        auth = SlackClient(bot_token).auth_test()
-    except SlackError as exc:
-        raise ValidationError({'botToken': [exc.code]})
+    auth = SlackClient(bot_token).auth_test()
 
     workspace_id = auth.get('team_id')
     # 한 워크스페이스가 두 회사에 붙으면 웹훅의 team_id로 회사를 특정할 수 없다.
@@ -194,7 +194,9 @@ def connect_slack(company, bot_token, signing_secret):
         .exists()
     )
     if taken:
-        raise ValidationError({'botToken': ['workspace already connected to another company']})
+        raise ValidationError(
+            'workspace already connected to another company', code=SLACK_WORKSPACE_TAKEN
+        )
 
     connection = Connection.objects.filter(
         company=company, kind=Connection.Kind.SLACK, disconnected_at__isnull=True

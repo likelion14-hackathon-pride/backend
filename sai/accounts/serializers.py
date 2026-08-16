@@ -5,6 +5,13 @@ from django.db import transaction
 from rest_framework import serializers
 
 from companies.models import Company
+from config.errors import (
+    COMPANY_CODE_NOT_FOUND,
+    EMAIL_TAKEN,
+    INVALID_CREDENTIALS,
+    PROFILE_FIELD_REQUIRED,
+    WEAK_PASSWORD,
+)
 from companies.utils import generate_company_code
 from handbook.services import seed_default_scopes
 
@@ -24,7 +31,7 @@ class SignupSerializer(serializers.Serializer):
         # 대소문자만 다른 이메일로 중복 가입되지 않도록 정규화 후 비교한다.
         value = value.lower().strip()
         if User.objects.filter(email=value).exists():
-            raise serializers.ValidationError('email already registered', code='email_taken')
+            raise serializers.ValidationError('email already registered', code=EMAIL_TAKEN)
         return value
 
     def validate_password(self, value):
@@ -32,7 +39,7 @@ class SignupSerializer(serializers.Serializer):
         try:
             run_password_validators(value)
         except DjangoValidationError as exc:
-            raise serializers.ValidationError(exc.messages, code='weak_password')
+            raise serializers.ValidationError(exc.messages, code=WEAK_PASSWORD)
         return value
 
     def create_user(self, validated_data, ui_language):
@@ -70,7 +77,7 @@ class MemberSignupSerializer(SignupSerializer):
             return Company.objects.get(code=value.strip())
         except Company.DoesNotExist:
             raise serializers.ValidationError(
-                'no company matches this code', code='company_code_not_found'
+                'no company matches this code', code=COMPANY_CODE_NOT_FOUND
             )
 
     @transaction.atomic
@@ -94,7 +101,7 @@ class AuthSerializer(serializers.Serializer):
         )
         if user is None:
             raise serializers.ValidationError(
-                'email or password is incorrect', code='invalid_credentials'
+                'email or password is incorrect', code=INVALID_CREDENTIALS
             )
 
         membership = (
@@ -105,7 +112,7 @@ class AuthSerializer(serializers.Serializer):
         # 소속이 없거나 퇴사한 경우.
         if membership is None:
             raise serializers.ValidationError(
-                'email or password is incorrect', code='invalid_credentials'
+                'email or password is incorrect', code=INVALID_CREDENTIALS
             )
 
         attrs['membership'] = membership
@@ -139,7 +146,9 @@ class ProfileUpdateSerializer(serializers.Serializer):
 
     def validate(self, attrs):
         if not attrs:
-            raise serializers.ValidationError('location, role or locale is required')
+            raise serializers.ValidationError(
+                'location, role or locale is required', code=PROFILE_FIELD_REQUIRED
+            )
 
         return attrs
 

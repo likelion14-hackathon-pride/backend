@@ -8,6 +8,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from companies.access import get_member_company, get_owner_company
+from config.errors import CANNOT_APPROVE_BLANK, ENTRY_NOT_CONFIRMED
 from config.filters import enum_parameter, enum_value, filter_enum, filter_int
 from config.pagination import (
     CURSOR_PARAMETER,
@@ -174,7 +175,9 @@ class HandbookEntryDetailView(APIView):
         entry = get_object_or_404(live_entries(company), id=entry_id)
 
         if entry.status != HandbookEntry.Status.CONFIRMED:
-            raise ValidationError({'status': ['only a confirmed entry can be deleted']})
+            raise ValidationError(
+                'only a confirmed entry can be deleted', code=ENTRY_NOT_CONFIRMED
+            )
 
         entry.deleted_at = timezone.now()
         entry.save(update_fields=['deleted_at'])
@@ -250,7 +253,7 @@ class HandbookEntryReviewView(APIView):
         decision = serializer.validated_data['decision']
 
         if decision == 'APPROVE' and entry.status == HandbookEntry.Status.BLANK:
-            raise ValidationError({'decision': ['cannot approve a blank entry']})
+            raise ValidationError('cannot approve a blank entry', code=CANNOT_APPROVE_BLANK)
 
         entry = _apply_decision(entry, decision)
         # 확정된 규칙만 번역·임베딩한다. 실패해도 확정은 되돌리지 않는다.

@@ -2,6 +2,18 @@ from pathlib import Path
 
 from rest_framework import serializers
 
+from config.errors import (
+    INVALID_APP_ID,
+    INVALID_BOT_TOKEN,
+    INVALID_FILE_NAME,
+    INVALID_INSTALLATION_ID,
+    INVALID_PRIVATE_KEY,
+    MIME_TYPE_MISMATCH,
+    PRIVATE_KEY_TOO_LARGE,
+    SCOPE_NOT_FOUND,
+    UNSUPPORTED_FILE_TYPE,
+    field_error,
+)
 from handbook.models import CompanyScope
 
 from .local_files import LOCAL_FILE_MAX_SIZE
@@ -74,7 +86,7 @@ class ChannelScopeUpdateSerializer(serializers.Serializer):
 
     def validate_scopeId(self, value):
         if value is not None and value.company_id != self.context['company'].id:
-            raise serializers.ValidationError('scope not found')
+            raise serializers.ValidationError('scope not found', code=SCOPE_NOT_FOUND)
 
         return value
 
@@ -146,18 +158,20 @@ class LocalFileUploadCreateSerializer(serializers.Serializer):
 
     def validate_fileName(self, value):
         if Path(value).name != value:
-            raise serializers.ValidationError('file name is invalid')
+            raise serializers.ValidationError('file name is invalid', code=INVALID_FILE_NAME)
         if Path(value).suffix.lower() not in LOCAL_FILE_EXTENSIONS:
-            raise serializers.ValidationError('file type is not supported')
+            raise serializers.ValidationError(
+                'file type is not supported', code=UNSUPPORTED_FILE_TYPE
+            )
 
         return value
 
     def validate(self, attrs):
         extension = Path(attrs['fileName']).suffix.lower()
         if attrs['mimeType'] not in LOCAL_FILE_MIME_TYPES[extension]:
-            raise serializers.ValidationError({
-                'mimeType': ['mime type does not match file extension'],
-            })
+            raise field_error(
+                'mimeType', 'mime type does not match file extension', MIME_TYPE_MISMATCH
+            )
 
         return attrs
 
@@ -343,7 +357,9 @@ class SlackConnectionCreateSerializer(serializers.Serializer):
     def validate_botToken(self, value):
         # 붙여넣기 실수를 슬랙 호출 전에 걸러 낸다.
         if not value.startswith('xoxb-'):
-            raise serializers.ValidationError('bot token must start with xoxb-')
+            raise serializers.ValidationError(
+                'bot token must start with xoxb-', code=INVALID_BOT_TOKEN
+            )
 
         return value
 
@@ -357,27 +373,35 @@ class GitHubConnectionCreateSerializer(serializers.Serializer):
 
     def validate_appId(self, value):
         if not value.isdigit():
-            raise serializers.ValidationError('app id must be a number')
+            raise serializers.ValidationError('app id must be a number', code=INVALID_APP_ID)
 
         return value
 
     def validate_installationId(self, value):
         if not value.isdigit():
-            raise serializers.ValidationError('installation id must be a number')
+            raise serializers.ValidationError(
+                'installation id must be a number', code=INVALID_INSTALLATION_ID
+            )
 
         return value
 
     def validate_privateKey(self, value):
         if value.size > 64 * 1024:
-            raise serializers.ValidationError('private key file is too large')
+            raise serializers.ValidationError(
+                'private key file is too large', code=PRIVATE_KEY_TOO_LARGE
+            )
 
         try:
             private_key = value.read().decode('utf-8').strip()
         except UnicodeDecodeError as exc:
-            raise serializers.ValidationError('private key must be a PEM file') from exc
+            raise serializers.ValidationError(
+                'private key must be a PEM file', code=INVALID_PRIVATE_KEY
+            ) from exc
 
         if '-----BEGIN' not in private_key or 'PRIVATE KEY-----' not in private_key:
-            raise serializers.ValidationError('private key must be a PEM file')
+            raise serializers.ValidationError(
+                'private key must be a PEM file', code=INVALID_PRIVATE_KEY
+            )
 
         return private_key + '\n'
 

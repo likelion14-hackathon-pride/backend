@@ -1,5 +1,6 @@
 from rest_framework import serializers
 
+from config.errors import WORKING_HOURS_IDENTICAL
 from config.fields import TimeZoneField
 
 from .models import Company
@@ -119,7 +120,7 @@ class CompanySettingsSerializer(serializers.ModelSerializer):
         end = attrs.get('working_hours_end', instance and instance.working_hours_end)
         if start == end:
             raise serializers.ValidationError(
-                {'workingHoursEnd': ['must differ from workingHoursStart']}
+                'must differ from workingHoursStart', code=WORKING_HOURS_IDENTICAL
             )
 
         return attrs

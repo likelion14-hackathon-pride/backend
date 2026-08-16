@@ -3,16 +3,18 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+from config.errors import DomainError
+
 SLACK_API_BASE = 'https://slack.com/api/'
 DEFAULT_TIMEOUT = 10
 
 
 # 슬랙 API가 ok=false를 돌려주거나 네트워크가 실패한 경우.
 # code에는 슬랙의 error 값(invalid_auth, missing_scope 등)이 들어간다.
-class SlackError(Exception):
-    def __init__(self, code):
-        self.code = code
-        super().__init__(code)
+# DomainError 를 상속하므로 요청 중에 터지면 뷰가 옮겨 담지 않아도 그대로 400 봉투가 된다.
+# 워커에서는 지금처럼 잡아서 exc.code 를 작업 기록에 남긴다.
+class SlackError(DomainError):
+    pass
 
 
 # 봇 토큰으로 슬랙 Web API를 호출하는 최소 클라이언트.

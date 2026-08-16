@@ -9,6 +9,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from companies.access import get_owner_company
+from config.errors import PROJECT_SCOPE_REQUIRED, UNKNOWN_QUESTION
 from handbook.finalizing import finalize_entries
 from handbook.models import CompanyScope, HandbookEntry
 from handbook.queries import live_entries
@@ -39,7 +40,7 @@ def _get_project_scope(company, scope_id):
 
     scope = get_object_or_404(CompanyScope, id=scope_id, company=company)
     if scope.kind != CompanyScope.Kind.PROJECT:
-        raise ValidationError({'scopeId': ['project scope required']})
+        raise ValidationError('project scope required', code=PROJECT_SCOPE_REQUIRED)
 
     return scope
 
@@ -131,7 +132,7 @@ class OnboardingQuestionDetailView(APIView):
         company = get_owner_company(request.user, company_id)
         spec = questions.find(template_key)
         if spec is None:
-            raise ValidationError({'templateKey': ['unknown question']})
+            raise ValidationError('unknown question', code=UNKNOWN_QUESTION)
 
         serializer = OnboardingQuestionUpdateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -139,7 +140,9 @@ class OnboardingQuestionDetailView(APIView):
 
         scope = _get_project_scope(company, data.get('scopeId'))
         if spec.area_key is None and scope is None:
-            raise ValidationError({'scopeId': ['project scope required for this question']})
+            raise ValidationError(
+                'project scope required for this question', code=PROJECT_SCOPE_REQUIRED
+            )
 
         answer = data.get('answerKo')
         try:
@@ -148,7 +151,9 @@ class OnboardingQuestionDetailView(APIView):
             else:
                 services.skip_question(company, template_key, scope)
         except ImproperlyConfigured as exc:
-            raise ValidationError({'scopeId': [str(exc)]})
+            # 기본 범위 시딩이 빠진 서버 상태다. 사용자가 고칠 수 있는 값이 아니므로
+            # 입력 오류로 돌려주지 않는다. 원인은 로그에만 남는다.
+            raise services.ScopeUnavailable(str(exc)) from exc
 
         items = services.list_questions(company, scope)
         item = next(i for i in items if i['templateKey'] == template_key)

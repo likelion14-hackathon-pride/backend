@@ -4,6 +4,12 @@ from rest_framework import serializers
 
 from accounts.models import Membership
 from companies.timing import STATES
+from config.errors import (
+    CARD_FIELD_REQUIRED,
+    NOT_A_MEMBER,
+    SCOPE_NOT_FOUND,
+    TASK_FIELD_REQUIRED,
+)
 from handbook.models import CompanyScope
 from handbook.serializers import (
     CompanyScopeSerializer,
@@ -250,7 +256,7 @@ class TaskCreateSerializer(serializers.Serializer):
         if not CompanyScope.objects.filter(
             id=value, company=self.context['company']
         ).exists():
-            raise serializers.ValidationError('scope not found')
+            raise serializers.ValidationError('scope not found', code=SCOPE_NOT_FOUND)
 
         return value
 
@@ -267,7 +273,9 @@ class TaskUpdateSerializer(serializers.Serializer):
 
     def validate(self, attrs):
         if not attrs:
-            raise serializers.ValidationError('title, status or dueAt is required')
+            raise serializers.ValidationError(
+                'title, status or dueAt is required', code=TASK_FIELD_REQUIRED
+            )
 
         return attrs
 
@@ -386,7 +394,9 @@ class CardUpdateSerializer(serializers.Serializer):
 
     def validate(self, attrs):
         if not attrs:
-            raise serializers.ValidationError('status or assigneeId is required')
+            raise serializers.ValidationError(
+                'status or assigneeId is required', code=CARD_FIELD_REQUIRED
+            )
 
         return attrs
 
@@ -398,7 +408,7 @@ class CardUpdateSerializer(serializers.Serializer):
             user_id=value, company=self.context['company'], left_at__isnull=True
         ).select_related('user').first()
         if membership is None:
-            raise serializers.ValidationError('not a member of this company')
+            raise serializers.ValidationError('not a member of this company', code=NOT_A_MEMBER)
 
         return membership.user
 

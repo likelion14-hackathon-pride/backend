@@ -2,14 +2,21 @@ from django.core.exceptions import ImproperlyConfigured
 from django.db import transaction
 from django.utils import timezone
 from openai import OpenAIError
-from rest_framework import status
-from rest_framework.exceptions import APIException, ValidationError
+from rest_framework.exceptions import ValidationError
 
 from cards.models import Blank
+from config.errors import (
+    AI_UNAVAILABLE,
+    DRAFT_REQUIRED,
+    NO_ANSWER_TO_PROMOTE,
+    NO_SCOPE_AVAILABLE,
+    QUESTION_TEXT_MISSING,
+    RateLimited,
+    UpstreamError,
+)
 from handbook.gaps import record_gap
 from handbook.models import CompanyScope, HandbookEntry, HandbookEvidence
 from sources.models import Item
-from sources.slack import SlackError
 
 from .answering import (
     PROMPT_VERSION,
@@ -30,18 +37,12 @@ from .models import Citation, Escalation, Message, Thread
 NEEDS_OWNER = {'NO_SOURCE', 'NEEDS_DECISION'}
 
 
-class AnswerUnavailable(APIException):
-    status_code = status.HTTP_503_SERVICE_UNAVAILABLE
-    default_detail = 'answer generation is unavailable'
-
-
-class RateLimited(APIException):
-    status_code = status.HTTP_429_TOO_MANY_REQUESTS
-    default_detail = 'AI usage limit reached, try again shortly'
-
-    def __init__(self, retry_after):
-        self.retry_after = retry_after
-        super().__init__()
+# AI가 답을 만들지 못한 경우. 설정 누락이든 OpenAI 오류든 사용자가 할 수 있는 일은 같다.
+# 원인은 reason 으로 받아 로그에만 남긴다. 그대로 내보내면 서버 설정이 화면에 뜬다.
+class AnswerUnavailable(UpstreamError):
+    def __init__(self, reason=None):
+        self.reason = reason
+        super().__init__(AI_UNAVAILABLE, 'answer generation is unavailable')
 
 
 def language_of(user):
@@ -83,10 +84,10 @@ def draft_from_message(message):
 
 def create_escalation(company, user, question_en, draft_ko, scope=None, origin=None, blank=None):
     if not question_en:
-        raise ValidationError({'questionEn': ['question text not found']})
+        raise ValidationError('question text not found', code=QUESTION_TEXT_MISSING)
     # 초안이 없으면 영어 원문이 그대로 대표에게 나간다. 그럴 바엔 막고 받는다.
     if not draft_ko:
-        raise ValidationError({'draftKo': ['korean draft required']})
+        raise ValidationError('korean draft required', code=DRAFT_REQUIRED)
 
     with transaction.atomic():
         escalation = Escalation.objects.create(
@@ -106,10 +107,8 @@ def create_escalation(company, user, question_en, draft_ko, scope=None, origin=N
 
 # 대표 답장을 회수해 판정한다. 아직 답이 없으면 아무것도 바꾸지 않는다.
 def collect_answer(escalation):
-    try:
-        reply, text = fetch_reply(escalation)
-    except SlackError as exc:
-        raise ValidationError({'slack': [exc.code]})
+    # SlackError 는 DomainError 라서 그대로 두면 봉투까지 올라간다.
+    reply, text = fetch_reply(escalation)
 
     if reply is None:
         return escalation
@@ -187,11 +186,11 @@ def _channel_label(company, external_id):
 def promote_to_entry(escalation, title=None, body_en=None, scope=None):
     company = escalation.company
     if escalation.status != Escalation.Status.ANSWERED or not escalation.answer_ko:
-        raise ValidationError({'status': ['no answer to promote']})
+        raise ValidationError('no answer to promote', code=NO_ANSWER_TO_PROMOTE)
 
     scope = scope or default_scope(escalation)
     if scope is None:
-        raise ValidationError({'scope': ['no scope available']})
+        raise ValidationError('no scope available', code=NO_SCOPE_AVAILABLE)
 
     with transaction.atomic():
         entry = HandbookEntry.objects.create(

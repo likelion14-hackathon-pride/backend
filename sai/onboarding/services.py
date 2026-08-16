@@ -2,6 +2,7 @@ from django.core.exceptions import ImproperlyConfigured
 from django.db import transaction
 from django.utils import timezone
 
+from config.errors import SCOPE_UNAVAILABLE, UpstreamError
 from handbook.models import CompanyScope, HandbookEntry, HandbookEvidence
 
 from . import questions
@@ -9,6 +10,14 @@ from .models import Question
 
 # 대표 확인 답변(질문 자산화)과 같은 자리에 쓰는 출처 이름.
 DAY0_SOURCE = 'Day 0 기본 규칙'
+
+
+# 답을 붙일 회사 전반 범위가 서버에 없다. 기본 범위 시딩이 빠진 상태다.
+# 대표가 입력을 고쳐서 넘길 수 있는 일이 아니라 400 이 아니라 503 으로 낸다.
+class ScopeUnavailable(UpstreamError):
+    def __init__(self, reason=None):
+        self.reason = reason
+        super().__init__(SCOPE_UNAVAILABLE, 'onboarding scopes are not ready')
 
 
 # 답변에서 만든 규칙임을 표시한다. 다시 답하면 같은 항목을 덮어쓴다.

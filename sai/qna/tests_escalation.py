@@ -435,7 +435,9 @@ class EscalationTests(TestCase):
         response = self.client.post(f'{self.base}/{escalation.id}/dismiss')
 
         self.assertEqual(response.status_code, 400)
-        self.assertEqual(response.data['error']['field'], 'status')
+        # 본문 없는 요청이라 화면에 붙일 칸이 없다. 사유는 code 가 나른다.
+        self.assertEqual(response.data['error']['code'], 'already_approved')
+        self.assertIsNone(response.data['error']['field'])
 
     def test_member_cannot_dismiss(self):
         escalation_id = self.create().data['id']
@@ -464,7 +466,8 @@ class EscalationTests(TestCase):
         response = self.client.post(f'{self.base}/{escalation_id}/acknowledge')
 
         self.assertEqual(response.status_code, 400)
-        self.assertEqual(response.data['error']['field'], 'status')
+        self.assertEqual(response.data['error']['code'], 'no_answer_yet')
+        self.assertIsNone(response.data['error']['field'])
 
     def test_acknowledge_twice_keeps_the_first_time(self):
         escalation_id = self.create().data['id']
