@@ -212,6 +212,22 @@ class ConnectionSerializer(serializers.ModelSerializer):
         return latest.last_synced_at if latest else None
 
 
+# GitHub 연결 직후 5단계 화면에서만 사용한다.
+class GitHubConnectionResultSerializer(ConnectionSerializer):
+    webhookUrl = serializers.SerializerMethodField()
+    webhookSecret = serializers.CharField(source='github_webhook_secret', read_only=True)
+
+    class Meta(ConnectionSerializer.Meta):
+        fields = ConnectionSerializer.Meta.fields + ['webhookUrl', 'webhookSecret']
+
+    def get_webhookUrl(self, obj):
+        request = self.context.get('request')
+        if request is None:
+            return '/api/github/events/'
+
+        return request.build_absolute_uri('/api/github/events/')
+
+
 class ConnectionListSerializer(serializers.Serializer):
     items = ConnectionSerializer(many=True)
     nextCursor = serializers.CharField(allow_null=True)
