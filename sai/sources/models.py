@@ -23,6 +23,9 @@ class Connection(models.Model):
     workspace_url = models.CharField(max_length=200, null=True, blank=True)
     bot_token = models.CharField(max_length=200, null=True, blank=True)
     signing_secret = models.CharField(max_length=100, null=True, blank=True)
+    github_app_id = models.CharField(max_length=32, null=True, blank=True)
+    github_private_key = models.TextField(null=True, blank=True)
+    github_webhook_secret = models.CharField(max_length=100, null=True, blank=True)
     # status가 ERROR일 때 원인. 채널 조회 실패 같은 건 연결을 막지 않고 여기에 남긴다.
     error_message = models.CharField(max_length=200, null=True, blank=True)
     disconnected_at = models.DateTimeField(null=True, blank=True)
