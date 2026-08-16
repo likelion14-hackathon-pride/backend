@@ -172,11 +172,15 @@ class HomeView(APIView):
         operation_summary='팀원 홈',
         operation_description=(
             '홈 화면을 한 번에 그리는 데 필요한 값입니다. '
-            'readToday 는 오늘(회사 시각 기준) SAI 가 읽은 메시지와 만든 카드, '
-            '그리고 내가 답을 기다리는 질문 수입니다. '
+            'readToday 는 오늘(회사 시각 기준) 들어온 원문 수와 그중 카드가 된 수, '
+            '그리고 내가 답을 기다리는 질문 수입니다. 앞의 둘은 같은 날짜를 보므로 '
+            'cards 는 언제나 messages 이하입니다. '
             'unread 는 아직 아무도 열어 보지 않은 지시이며 read_at 이 카드마다 하나라 회사 기준입니다. '
-            f'resolution 은 최근 {RESOLUTION_DAYS}일 동안 대표를 부르지 않고 끝난 답변의 비율, '
-            f'handbook.weekly 는 최근 {GROWTH_WEEKS}주의 확정 규칙 누적 수입니다. '
+            f'resolution 은 최근 {RESOLUTION_DAYS}일 동안 SAI가 답해 끝난 질문의 비율입니다. '
+            '분모는 SAI가 답한 것과 답하지 못해 슬랙으로 보낸 것을 더한 값이며, '
+            '근거가 없다고 답했어도 보내지 않았으면 세지 않습니다. '
+            f'handbook.weekly 는 최근 {GROWTH_WEEKS}주에 주별로 새로 확정된 규칙 수입니다(오래된 주부터). '
+            '확정 시각이 없는 옛 항목은 어느 주에도 들어가지 않아 주별 합이 confirmed 보다 작을 수 있습니다. '
             '시차 칩은 /timing 을 따로 부릅니다.'
         ),
         responses={

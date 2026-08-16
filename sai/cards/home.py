@@ -1,7 +1,6 @@
 from datetime import timedelta
 from zoneinfo import ZoneInfo
 
-from django.db.models import Q
 from django.utils import timezone
 
 from handbook.models import HandbookEntry
@@ -20,8 +19,8 @@ RESOLUTION_DAYS = 7
 # 핸드북이 자라는 모양을 보여 줄 주 수.
 GROWTH_WEEKS = 4
 
-# 대표를 부르지 않고 끝난 답변.
-RESOLVED = [Message.Verdict.GROUNDED, Message.Verdict.GROUNDED_BY_CASES]
+# SAI가 실제로 답을 준 판정. 나머지는 답이 비어 있다.
+ANSWERED = [Message.Verdict.GROUNDED, Message.Verdict.GROUNDED_BY_CASES]
 
 
 # '오늘'은 회사가 있는 곳 기준이다. UTC 자정으로 자르면 서울에서 아침 9시에
@@ -34,13 +33,19 @@ def _start_of_day(company, now):
 
 # 오늘 SAI 가 읽고 처리한 양. 회사 전체의 상태다.
 # 기다리는 것만 개인 것이다. 남이 보낸 질문을 내가 기다릴 이유가 없다.
+#
+# 두 숫자는 '오늘 들어온 원문 N건 중 M건이 카드가 됐다'는 한 묶음이라
+# 같은 시계를 봐야 한다. 카드를 만든 시각으로 세면 어제 밀린 것을 오늘 처리했을 때
+# 원문 0건인데 카드 4건이 나온다.
 def _read_today(company, user, since):
     return {
         'messages': RawDocument.objects.filter(
             company=company, occurred_at__gte=since
         ).count(),
         'cards': InstructionCard.objects.filter(
-            company=company, created_at__gte=since, duplicate_of__isnull=True
+            company=company,
+            document__occurred_at__gte=since,
+            duplicate_of__isnull=True,
         ).count(),
         'waiting': Escalation.objects.filter(
             company=company, asked_by=user, status=Escalation.Status.SENT
@@ -72,16 +77,26 @@ def _unread(company):
     }
 
 
-# 물어본 것 중 대표를 부르지 않고 끝난 비율.
-# 카드의 미정 항목을 핸드북으로 먼저 답한 것도 여기 들어간다.
+# 팀원이 물은 것 중 SAI가 답해 끝난 비율.
+#
+# 분모는 SAI가 답한 것 + 답하지 못해 팀원이 슬랙으로 보낸 것이다.
+# 근거가 없다고 답했어도 팀원이 안 보내고 넘어갔으면 대표를 부른 적이 없으니 실패가 아니다.
+# 회사 규칙과 무관한 질문(OUT_OF_SCOPE)은 답도 아니고 대표를 부르지도 않아 양쪽에서 빠진다.
+#
+# 카드의 미정 항목을 SAI가 먼저 답한 것은 여기 잡히지 않는다.
+# 그 경로는 Message 를 남기지 않고, 팀원이 물어서 생긴 것도 아니다.
 def _resolution(company, since):
-    answers = Message.objects.filter(
-        company=company, role=Message.Role.AI, created_at__gte=since
-    )
+    answered = Message.objects.filter(
+        company=company, role=Message.Role.AI,
+        created_at__gte=since, verdict__in=ANSWERED,
+    ).count()
+    escalated = Escalation.objects.filter(
+        company=company, sent_at__gte=since, origin_message__isnull=False
+    ).count()
 
     return {
-        'answered': answers.filter(verdict__in=RESOLVED).count(),
-        'total': answers.count(),
+        'answered': answered,
+        'total': answered + escalated,
         'since': since,
     }
 
@@ -92,11 +107,16 @@ def _handbook(company, now):
     )
     month = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
 
-    # 확정 시각이 없는 항목은 언제부터 있었는지 알 수 없다. 빼면 마지막 칸이
-    # 총계보다 작아져 그래프가 총계와 어긋난다. 처음부터 있었던 것으로 센다.
-    since_always = Q(confirmed_at__isnull=True)
+    # 총계와 이번 달 증가는 따로 나가므로 여기서는 '언제 늘었나'만 본다.
+    # 누적으로 두면 마지막 칸이 confirmed 와 같아 같은 말을 두 번 하게 된다.
+    #
+    # 확정 시각이 없는 옛 항목은 어느 주에도 넣지 않는다. 언제였는지 모르기 때문이다.
+    # 그래서 주별 합이 총계보다 작을 수 있다.
     weekly = [
-        confirmed.filter(Q(confirmed_at__lte=now - timedelta(weeks=index)) | since_always).count()
+        confirmed.filter(
+            confirmed_at__gte=now - timedelta(weeks=index + 1),
+            confirmed_at__lt=now - timedelta(weeks=index),
+        ).count()
         for index in range(GROWTH_WEEKS - 1, -1, -1)
     ]
 
