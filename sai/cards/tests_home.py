@@ -65,6 +65,14 @@ class HomeTests(TestCase):
 
         return message
 
+    def escalated(self, message, sent=True):
+        return Escalation.objects.create(
+            company=self.company, asked_by=self.member, origin_message=message,
+            question_en='?', draft_ko='?',
+            status=Escalation.Status.SENT if sent else Escalation.Status.DRAFT,
+            sent_at=timezone.now() if sent else None,
+        )
+
     def entry(self, title, scope=None, confirmed_at=None):
         return HandbookEntry.objects.create(
             company=self.company, scope=scope or self.eng, title=title, body_ko='본문',
@@ -163,30 +171,54 @@ class HomeTests(TestCase):
 
     # --- 해결률 ---
 
-    def test_resolution_counts_grounded_answers(self):
+    def test_resolution_counts_answers(self):
         self.answer(Message.Verdict.GROUNDED)
         self.answer(Message.Verdict.GROUNDED_BY_CASES)
-        self.answer(Message.Verdict.NO_SOURCE)
 
         resolution = self.get()['resolution']
 
-        self.assertEqual((resolution['answered'], resolution['total']), (2, 3))
+        self.assertEqual((resolution['answered'], resolution['total']), (2, 2))
 
-    # 대표에게 넘어간 것만 실패다.
-    def test_a_decision_needs_the_owner(self):
+    # 슬랙으로 보낸 것만 실패다.
+    def test_a_question_sent_to_the_owner_is_a_failure(self):
+        self.answer(Message.Verdict.GROUNDED)
+        self.escalated(self.answer(Message.Verdict.NO_SOURCE))
+
+        resolution = self.get()['resolution']
+
+        self.assertEqual((resolution['answered'], resolution['total']), (1, 2))
+
+    # 근거가 없다고 답해도 팀원이 안 보내고 넘어갔으면 대표를 부른 적이 없다.
+    def test_an_unsent_question_is_not_a_failure(self):
+        self.answer(Message.Verdict.NO_SOURCE)
         self.answer(Message.Verdict.NEEDS_DECISION)
 
         resolution = self.get()['resolution']
 
-        self.assertEqual((resolution['answered'], resolution['total']), (0, 1))
+        self.assertEqual((resolution['answered'], resolution['total']), (0, 0))
 
-    # 회사 규칙에 대한 질문이 아니었던 것을 실패로 세면 비율이 실제보다 낮아진다.
-    def test_an_out_of_scope_question_is_not_a_failure(self):
+    # 초안만 만들고 안 보낸 것도 마찬가지다.
+    def test_a_draft_that_never_went_out_is_not_a_failure(self):
+        self.escalated(self.answer(Message.Verdict.NO_SOURCE), sent=False)
+
+        self.assertEqual(self.get()['resolution']['total'], 0)
+
+    # 회사 규칙에 대한 질문이 아니었던 것은 답도 아니고 대표를 부르지도 않았다.
+    def test_an_out_of_scope_question_is_counted_nowhere(self):
         self.answer(Message.Verdict.OUT_OF_SCOPE)
 
         resolution = self.get()['resolution']
 
-        self.assertEqual((resolution['answered'], resolution['total']), (1, 1))
+        self.assertEqual((resolution['answered'], resolution['total']), (0, 0))
+
+    # 카드 미정 항목에서 올라온 질문은 팀원이 물어서 생긴 것이 아니다.
+    def test_a_card_blank_question_is_not_counted(self):
+        Escalation.objects.create(
+            company=self.company, asked_by=self.member, question_en='?',
+            draft_ko='?', status=Escalation.Status.SENT, sent_at=timezone.now(),
+        )
+
+        self.assertEqual(self.get()['resolution']['total'], 0)
 
     def test_old_answers_fall_out_of_the_window(self):
         self.answer(Message.Verdict.GROUNDED, when=timezone.now() - timedelta(days=30))
