@@ -9,6 +9,7 @@ from cards.generation import GENERATOR_VERSION, generate_cards
 from handbook.drafting import draft_entries
 from handbook.finalizing import finalize_entries
 from handbook.models import HandbookEntry
+from handbook.queries import live_entries
 
 from .chunking import sync_chunks
 from .classifier import CLASSIFIER_VERSION, classify_documents
@@ -21,8 +22,7 @@ from .slack import SlackClient, SlackError
 # 그대로 두면 외국인 직원은 영어를 못 읽고 Ask SAI는 찾지 못한다.
 def unfinished_entries(company):
     return list(
-        HandbookEntry.objects.filter(
-            company=company,
+        live_entries(company).filter(
             status=HandbookEntry.Status.CONFIRMED,
             embedded_at__isnull=True,
         )
@@ -46,8 +46,7 @@ def has_pending_work(company):
     if documents.exclude(classifier_version=CLASSIFIER_VERSION).exists():
         return True
 
-    if HandbookEntry.objects.filter(
-        company=company,
+    if live_entries(company).filter(
         status=HandbookEntry.Status.CONFIRMED,
         embedded_at__isnull=True,
     ).exists():

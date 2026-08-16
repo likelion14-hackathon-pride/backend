@@ -5,6 +5,7 @@ from django.db.models import Count
 from django.utils import timezone
 
 from handbook.models import HandbookEntry
+from handbook.queries import live_entries
 from qna.models import Citation, Escalation, Message
 
 
@@ -179,10 +180,7 @@ def _owner_time_saved(company, current_week):
 
 
 def _handbook_summary(company, now, week_start, week_end):
-    entries = HandbookEntry.objects.filter(
-        company=company,
-        status=HandbookEntry.Status.CONFIRMED,
-    )
+    entries = live_entries(company).filter(status=HandbookEntry.Status.CONFIRMED)
     monthly_trend = []
     first_month = _month_start(now, -5)
     for offset in range(6):

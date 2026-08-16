@@ -1,6 +1,7 @@
 from django.db.models import Count, Max, Q
 
 from handbook.models import HandbookEntry
+from handbook.queries import live_entries
 
 from .models import Connection, Item, RawDocument
 
@@ -62,7 +63,7 @@ def connections_for(company):
 # 연결마다 세면 소스 수만큼 쿼리가 늘어나므로 한 번에 세어 종류별로 나눈다.
 def extracted_counts(company):
     rows = (
-        HandbookEntry.objects.filter(company=company)
+        live_entries(company)
         .exclude(status=HandbookEntry.Status.ARCHIVED)
         .values('origin')
         .annotate(total=Count('id'))

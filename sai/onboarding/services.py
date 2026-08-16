@@ -65,6 +65,9 @@ def build_entry(company, spec, answer, scope):
             'origin': HandbookEntry.Origin.ONBOARDING,
             'reviewed_at': timezone.now(),
             'confirmed_at': timezone.now(),
+            # 지웠던 항목이라도 대표가 같은 질문에 다시 답하면 되살린다.
+            # 방금 답했는데 핸드북에 안 보이면 답이 사라진 것처럼 보이기 때문.
+            'deleted_at': None,
             # 문구가 바뀌었을 수 있으니 번역과 임베딩은 다시 만든다.
             'translated_at': timezone.now() if body_en else None,
             'embedding_ko': None,

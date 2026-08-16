@@ -76,6 +76,11 @@ class HandbookEntry(models.Model):
     # 이 값이 있어야 '아직 안 본 것'과 '보고 미뤄둔 것'이 구분된다.
     reviewed_at = models.DateTimeField(null=True, blank=True)
     confirmed_at = models.DateTimeField(null=True, blank=True)
+    # 대표가 핸드북에서 지운 시각. 행 자체는 남긴다. 두 가지 이유에서다.
+    # 하나는 초안 재생성이 dedupe_key로 기존 항목을 찾는데(drafting._build_entry)
+    # 행이 사라지면 원문은 그대로라 같은 규칙이 다시 만들어지기 때문이고,
+    # 다른 하나는 지난 답변의 인용(qna.Citation)이 가리킬 곳을 잃기 때문이다.
+    deleted_at = models.DateTimeField(null=True, blank=True)
     embedding_ko = VectorField(dimensions=1536, null=True, blank=True)
     embedding_en = VectorField(dimensions=1536, null=True, blank=True)
     embedding_model = models.CharField(max_length=40, null=True, blank=True)
