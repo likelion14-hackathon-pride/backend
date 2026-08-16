@@ -3,9 +3,9 @@ import hashlib
 from django.db import transaction
 from django.utils import timezone
 
-from .file_extraction import extract_file_text
-from .local_files import download_file
-from .models import RawDocument
+from .file_extraction import FileExtractionError, extract_file_text
+from .local_files import LocalFileStorageError, download_file
+from .models import IngestionJob, Item, RawDocument
 
 
 def _content_hash(text):
@@ -54,7 +54,46 @@ def _save_document(item, text):
 
 
 def ingest_local_file(item):
+    if not item.storage_key or item.byte_size is None:
+        raise LocalFileStorageError('file_metadata_missing')
+
     data = download_file(item.storage_key, item.byte_size)
     text = extract_file_text(item.label, data)
 
     return _save_document(item, text)
+
+
+def run_local_ingestion(job, connection):
+    from .ingestion import PROGRESS_COLLECTED, _set_progress, process_documents
+
+    job.status = IngestionJob.Status.RUNNING
+    job.started_at = job.started_at or timezone.now()
+    job.save(update_fields=['status', 'started_at'])
+
+    items = list(
+        Item.objects.filter(
+            connection=connection,
+            removed_at__isnull=True,
+            id__in=job.item_ids or [],
+        ).order_by('id')
+    )
+    errors = []
+    if not items:
+        return process_documents(
+            job,
+            [{'scope': 'local', 'code': 'no_file_registered'}],
+            collection_failed=True,
+        )
+
+    if job.kind == IngestionJob.Kind.COLLECT:
+        for index, item in enumerate(items, start=1):
+            try:
+                ingest_local_file(item)
+            except (LocalFileStorageError, FileExtractionError) as exc:
+                errors.append({'itemId': item.id, 'label': item.label, 'code': exc.code})
+
+            _set_progress(job, int(PROGRESS_COLLECTED * index / len(items)))
+
+    collection_failed = bool(errors) and len(errors) == len(items)
+
+    return process_documents(job, errors, collection_failed)
