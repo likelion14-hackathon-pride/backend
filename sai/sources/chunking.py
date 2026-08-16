@@ -31,7 +31,11 @@ def _language(text):
 def build_chunks(company):
     documents = list(
         RawDocument.objects.filter(
-            company=company, sync_state=RawDocument.SyncState.CURRENT
+            company=company,
+            sync_state__in=[
+                RawDocument.SyncState.CURRENT,
+                RawDocument.SyncState.CHANGED,
+            ],
         ).select_related('item__connection', 'item__scope')
     )
     if not documents:

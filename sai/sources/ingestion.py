@@ -33,8 +33,15 @@ def unfinished_entries(company):
 # 다르면 할 일이 없는데 작업을 돌리거나, 남았는데 건너뛴다.
 def has_pending_work(company):
     documents = RawDocument.objects.filter(
-        company=company, sync_state=RawDocument.SyncState.CURRENT
+        company=company,
+        sync_state__in=[
+            RawDocument.SyncState.CURRENT,
+            RawDocument.SyncState.CHANGED,
+        ],
     )
+
+    if documents.filter(sync_state=RawDocument.SyncState.CHANGED).exists():
+        return True
 
     if documents.exclude(classifier_version=CLASSIFIER_VERSION).exists():
         return True
@@ -272,6 +279,12 @@ def process_documents(job, errors=None, collection_failed=False):
                 errors += card_errors
             except ImproperlyConfigured:
                 errors.append({'scope': 'draft', 'code': 'openai_not_configured'})
+
+    if not errors and not collection_failed:
+        RawDocument.objects.filter(
+            company=job.company,
+            sync_state=RawDocument.SyncState.CHANGED,
+        ).update(sync_state=RawDocument.SyncState.CURRENT)
 
     return _finish(job, errors, collection_failed)
 

@@ -203,7 +203,10 @@ def draft_entries(company):
         RawDocument.objects.filter(
             company=company,
             classified_as=RawDocument.ClassifiedAs.INSTRUCTION,
-            sync_state=RawDocument.SyncState.CURRENT,
+            sync_state__in=[
+                RawDocument.SyncState.CURRENT,
+                RawDocument.SyncState.CHANGED,
+            ],
         )
         .select_related('item__connection', 'item__scope', 'author_identity')
         # 초안이 인덱스로 원문을 가리킨다. 동시각 문서가 있으면 근거가 어긋난다.

@@ -10,7 +10,7 @@ from .text import normalize_document_text
 
 # 프롬프트를 고치면 이 값을 올린다. RawDocument.classifier_version에 기록되므로
 # 나중에 "옛 프롬프트로 분류된 것만 다시 돌리기"가 가능하다.
-CLASSIFIER_VERSION = 'clf-v3'
+CLASSIFIER_VERSION = 'clf-v4'
 
 # 한 번의 호출에 넣는 메시지 수. 메시지마다 호출하면 비용과 시간이 수십 배가 된다.
 BATCH_SIZE = 25
@@ -48,8 +48,11 @@ How to decide
 - Commitment markers push toward INSTRUCTION. Korean: '~하겠습니다', '~로 합시다', '~하지 마세요',
   '~로 확정'. English: "let's", "from now on", "going forward", "please make sure", "never".
 - For thread replies, judge within the context given in the parent line.
-- A README can contain recurring development or collaboration rules. An Issue or Pull Request about
-  one specific task is usually CONTEXT unless it clearly establishes a rule for future work.
+- A README can contain recurring development or collaboration rules.
+- A GitHub Issue with a concrete deliverable or deadline is CONTEXT, not INSTRUCTION. It is one
+  finite task even when the body uses a request form such as "please add" or "~해주세요".
+- An Issue, Pull Request, or comment is INSTRUCTION only when it clearly establishes a rule that
+  will continue to apply to future work.
 - Do not over-assign INSTRUCTION. A wrong rule is more harmful than a missed one.
 - Messages may be in Korean or English. Apply the same criteria to both.
 
@@ -132,7 +135,13 @@ def _classify_batch(client, documents, channels, users, parents):
 # (분류 건수, 배치 오류 목록) 반환.
 def classify_documents(company_id, documents=None):
     if documents is None:
-        documents = RawDocument.objects.filter(company_id=company_id)
+        documents = RawDocument.objects.filter(
+            company_id=company_id,
+            sync_state__in=[
+                RawDocument.SyncState.CURRENT,
+                RawDocument.SyncState.CHANGED,
+            ],
+        )
 
     # 현재 프롬프트 버전으로 이미 분류된 것만 건너뛴다.
     # 미분류(version=None)와 옛 버전으로 분류된 것은 모두 다시 돌린다.
