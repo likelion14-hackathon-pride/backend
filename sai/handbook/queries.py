@@ -25,9 +25,15 @@ def filter_by_review_status(entries, review_status):
     return reviewable.filter(reviewed_at__isnull=True)
 
 
+# 대표가 지운 항목을 뺀 것. 목록·상세·답변 검색·집계가 모두 이 기준을 쓴다.
+# 한 곳이라도 빠뜨리면 지운 규칙이 그 화면에서만 살아 있는 것처럼 보인다.
+def live_entries(company):
+    return HandbookEntry.objects.filter(company=company, deleted_at__isnull=True)
+
+
 def entries_for(company):
     return (
-        HandbookEntry.objects.filter(company=company)
+        live_entries(company)
         .select_related('scope')
         .prefetch_related(SOURCE_PREFETCH)
     )
@@ -39,6 +45,9 @@ def scopes_with_counts(company):
     return CompanyScope.objects.filter(company=company).annotate(
         entry_count=Count(
             'handbook_entries',
-            filter=Q(handbook_entries__status=HandbookEntry.Status.CONFIRMED),
+            filter=Q(
+                handbook_entries__status=HandbookEntry.Status.CONFIRMED,
+                handbook_entries__deleted_at__isnull=True,
+            ),
         )
     )

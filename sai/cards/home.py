@@ -4,7 +4,7 @@ from zoneinfo import ZoneInfo
 from django.utils import timezone
 
 from handbook.models import HandbookEntry
-from handbook.queries import scopes_with_counts
+from handbook.queries import live_entries, scopes_with_counts
 from qna.models import Escalation, Message
 from sources.models import RawDocument
 
@@ -102,9 +102,7 @@ def _resolution(company, since):
 
 
 def _handbook(company, now):
-    confirmed = HandbookEntry.objects.filter(
-        company=company, status=HandbookEntry.Status.CONFIRMED
-    )
+    confirmed = live_entries(company).filter(status=HandbookEntry.Status.CONFIRMED)
     month = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
 
     # 총계와 이번 달 증가는 따로 나가므로 여기서는 '언제 늘었나'만 본다.

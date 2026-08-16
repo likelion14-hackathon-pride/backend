@@ -18,7 +18,12 @@ from config.pagination import (
 
 from .finalizing import finalize_entries
 from .models import CompanyScope, HandbookEntry, HandbookEvidence
-from .queries import entries_for, filter_by_review_status, scopes_with_counts
+from .queries import (
+    entries_for,
+    filter_by_review_status,
+    live_entries,
+    scopes_with_counts,
+)
 from .serializers import (
     CompanyScopeCreateSerializer,
     CompanyScopeListSerializer,
@@ -121,11 +126,7 @@ class HandbookEntryDetailView(APIView):
     )
     def get(self, request, company_id, entry_id):
         company = get_member_company(request.user, company_id)
-        entry = get_object_or_404(
-            HandbookEntry.objects.select_related('scope'),
-            id=entry_id,
-            company=company,
-        )
+        entry = get_object_or_404(entries_for(company), id=entry_id)
         serializer = HandbookEntrySerializer(entry)
 
         return Response(serializer.data, status=status.HTTP_200_OK)
@@ -144,17 +145,41 @@ class HandbookEntryDetailView(APIView):
     )
     def patch(self, request, company_id, entry_id):
         company = get_owner_company(request.user, company_id)
-        entry = get_object_or_404(
-            HandbookEntry.objects.select_related('scope'),
-            id=entry_id,
-            company=company,
-        )
+        entry = get_object_or_404(entries_for(company), id=entry_id)
         serializer = HandbookEntryUpdateSerializer(entry, data=request.data, partial=True)
         serializer.is_valid(raise_exception=True)
         entry = serializer.save()
         response_serializer = HandbookEntrySerializer(entry)
 
         return Response(response_serializer.data, status=status.HTTP_200_OK)
+
+    @swagger_auto_schema(
+        operation_summary='핸드북 항목 삭제',
+        operation_description=(
+            '핸드북에 올라간 확정 항목을 지웁니다. 검토 전 초안은 거절(REJECT)로 내리므로 '
+            '여기서는 지울 수 없습니다. '
+            '지운 항목은 목록과 답변 검색에서 빠지며, 같은 규칙이 원문에서 다시 만들어지지 않습니다.'
+        ),
+        responses={
+            204: '삭제됨',
+            400: '잘못된 요청 (확정되지 않은 항목)',
+            401: '인증되지 않음',
+            403: 'Owner 권한 없음',
+            404: '회사 또는 핸드북 항목을 찾을 수 없음',
+        },
+        tags=['Handbook'],
+    )
+    def delete(self, request, company_id, entry_id):
+        company = get_owner_company(request.user, company_id)
+        entry = get_object_or_404(live_entries(company), id=entry_id)
+
+        if entry.status != HandbookEntry.Status.CONFIRMED:
+            raise ValidationError({'status': ['only a confirmed entry can be deleted']})
+
+        entry.deleted_at = timezone.now()
+        entry.save(update_fields=['deleted_at'])
+
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 class HandbookEntryEvidenceView(APIView):
@@ -174,7 +199,7 @@ class HandbookEntryEvidenceView(APIView):
     )
     def get(self, request, company_id, entry_id):
         company = get_member_company(request.user, company_id)
-        entry = get_object_or_404(HandbookEntry, id=entry_id, company=company)
+        entry = get_object_or_404(live_entries(company), id=entry_id)
         evidences = HandbookEvidence.objects.filter(entry=entry).order_by('occurred_at', 'id')
 
         return page_response(HandbookEvidenceSerializer, evidences)
@@ -219,9 +244,7 @@ class HandbookEntryReviewView(APIView):
     )
     def post(self, request, company_id, entry_id):
         company = get_owner_company(request.user, company_id)
-        entry = get_object_or_404(
-            HandbookEntry.objects.select_related('scope'), id=entry_id, company=company
-        )
+        entry = get_object_or_404(entries_for(company), id=entry_id)
         serializer = HandbookReviewSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         decision = serializer.validated_data['decision']
@@ -264,7 +287,7 @@ class HandbookEntryBulkReviewView(APIView):
 
         entries = {
             entry.id: entry
-            for entry in HandbookEntry.objects.filter(id__in=requested_ids, company=company)
+            for entry in live_entries(company).filter(id__in=requested_ids)
         }
 
         approved = []

@@ -11,6 +11,7 @@ from rest_framework.views import APIView
 from companies.access import get_owner_company
 from handbook.finalizing import finalize_entries
 from handbook.models import CompanyScope, HandbookEntry
+from handbook.queries import live_entries
 from policy.models import RiskKeyword
 from sources.models import Connection
 
@@ -182,8 +183,7 @@ class OnboardingCompleteView(APIView):
 
         # 실패해도 온보딩은 끝난 것으로 둔다. 임베딩이 비어 있으면 다음 실행이 이어서 채운다.
         finalize_entries(list(
-            HandbookEntry.objects.filter(
-                company=company,
+            live_entries(company).filter(
                 origin=HandbookEntry.Origin.ONBOARDING,
                 status=HandbookEntry.Status.CONFIRMED,
                 embedded_at__isnull=True,
@@ -199,8 +199,7 @@ class OnboardingCompleteView(APIView):
                         company=company,
                         status=Connection.Status.CONNECTED,
                     ).count(),
-                    'handbookEntryCount': HandbookEntry.objects.filter(
-                        company=company,
+                    'handbookEntryCount': live_entries(company).filter(
                         status=HandbookEntry.Status.CONFIRMED,
                     ).count(),
                     'riskKeywordCount': RiskKeyword.objects.filter(company=company).count(),
