@@ -228,7 +228,7 @@ class IngestionJobListSerializer(serializers.Serializer):
 # 수집 작업 시작 요청. provider를 생략하면 기존과 같이 Slack을 수집한다.
 class IngestionJobCreateSerializer(serializers.Serializer):
     provider = serializers.ChoiceField(
-        choices=[Connection.Kind.SLACK, Connection.Kind.GITHUB],
+        choices=[Connection.Kind.SLACK, Connection.Kind.GITHUB, Connection.Kind.LOCAL],
         required=False,
         default=Connection.Kind.SLACK,
     )
@@ -237,7 +237,8 @@ class IngestionJobCreateSerializer(serializers.Serializer):
         required=False,
         allow_empty=False,
         help_text=(
-            '수집할 채널 또는 레포 ID 목록. 생략하면 해당 소스에 등록된 전체 Item이 대상입니다.'
+            '수집할 채널, 레포 또는 로컬 파일 ID 목록. '
+            '생략하면 해당 소스에 등록된 전체 Item이 대상입니다.'
         ),
     )
 
