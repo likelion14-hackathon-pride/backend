@@ -179,32 +179,53 @@ class SourceConnectionListCreateView(APIView):
         operation_summary='소스 연결',
         operation_description=(
             'provider가 SLACK이면 봇 토큰과 시그닝 시크릿으로 워크스페이스를 연결합니다. '
-            'provider가 GITHUB이면 서버에 설정된 GitHub App 설치 정보를 검증해 연결합니다. '
-            'GitHub App 개인키는 요청으로 받거나 응답에 포함하지 않습니다.'
+            'provider가 GITHUB이면 App ID, Installation ID, Private Key 파일을 '
+            '검증해 연결하고 Webhook URL과 Secret을 반환합니다.'
         ),
-        request_body=openapi.Schema(
-            type=openapi.TYPE_OBJECT,
-            required=['provider'],
-            properties={
-                'provider': openapi.Schema(
-                    type=openapi.TYPE_STRING,
-                    enum=[Connection.Kind.SLACK, Connection.Kind.GITHUB],
-                    description='연동할 소스 종류',
-                ),
-                'botToken': openapi.Schema(
-                    type=openapi.TYPE_STRING,
-                    description='SLACK 연결일 때 사용하는 Bot User OAuth Token',
-                ),
-                'signingSecret': openapi.Schema(
-                    type=openapi.TYPE_STRING,
-                    description='SLACK 연결일 때 사용하는 Signing Secret',
-                ),
-            },
-            example={'provider': 'GITHUB'},
-        ),
+        consumes=['multipart/form-data'],
+        manual_parameters=[
+            openapi.Parameter(
+                'provider',
+                openapi.IN_FORM,
+                type=openapi.TYPE_STRING,
+                enum=[Connection.Kind.SLACK, Connection.Kind.GITHUB],
+                required=True,
+                description='연동할 소스 종류',
+            ),
+            openapi.Parameter(
+                'botToken',
+                openapi.IN_FORM,
+                type=openapi.TYPE_STRING,
+                description='SLACK 연결일 때 사용하는 Bot User OAuth Token',
+            ),
+            openapi.Parameter(
+                'signingSecret',
+                openapi.IN_FORM,
+                type=openapi.TYPE_STRING,
+                description='SLACK 연결일 때 사용하는 Signing Secret',
+            ),
+            openapi.Parameter(
+                'appId',
+                openapi.IN_FORM,
+                type=openapi.TYPE_STRING,
+                description='GITHUB 연결일 때 사용하는 GitHub App ID',
+            ),
+            openapi.Parameter(
+                'installationId',
+                openapi.IN_FORM,
+                type=openapi.TYPE_STRING,
+                description='GITHUB 연결일 때 사용하는 Installation ID',
+            ),
+            openapi.Parameter(
+                'privateKey',
+                openapi.IN_FORM,
+                type=openapi.TYPE_FILE,
+                description='GITHUB App에서 발급한 Private Key PEM 파일',
+            ),
+        ],
         responses={
-            200: ConnectionSerializer(),
-            201: ConnectionSerializer(),
+            200: GitHubConnectionResultSerializer(),
+            201: GitHubConnectionResultSerializer(),
             400: '잘못된 요청 (소스 인증 실패 / 이미 다른 회사에 연결된 소스)',
             401: '인증되지 않음',
             403: 'Owner 권한 없음',
