@@ -114,6 +114,69 @@ class BoardTests(TestCase):
 
         self.assertEqual(self.columns()[card.id], 'DONE')
 
+    # --- 열 이동 ---
+
+    def move(self, card, target):
+        return self.client.patch(
+            f'{self.base}/{card.id}', {'status': target}, format='json'
+        )
+
+    def test_ready_can_be_taken_on(self):
+        card = self.card()
+
+        self.assertEqual(self.move(card, 'IN_PROGRESS').data['column'], 'IN_PROGRESS')
+
+    def test_in_progress_can_be_finished(self):
+        card = self.card(status=InstructionCard.Status.IN_PROGRESS)
+
+        self.assertEqual(self.move(card, 'DONE').data['column'], 'DONE')
+
+    # 답을 받고 나면 바로 끝낼 수 있어야 한다.
+    def test_answered_can_be_finished(self):
+        card = self.card(status=InstructionCard.Status.IN_PROGRESS)
+        self.question(card, Escalation.Status.ANSWERED)
+
+        self.assertEqual(self.move(card, 'DONE').data['column'], 'DONE')
+
+    # 손도 안 댄 일을 끝났다고 할 수는 없다.
+    def test_ready_cannot_jump_to_done(self):
+        card = self.card()
+
+        response = self.move(card, 'DONE')
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.data['error']['field'], 'status')
+
+    # 답을 기다리는 중에는 끝났다고 할 수 없다.
+    def test_waiting_cannot_be_finished(self):
+        card = self.card(status=InstructionCard.Status.IN_PROGRESS)
+        self.question(card, Escalation.Status.SENT)
+
+        self.assertEqual(self.move(card, 'DONE').status_code, 400)
+
+    def test_done_can_be_reopened(self):
+        card = self.card(status=InstructionCard.Status.DONE)
+
+        self.assertEqual(self.move(card, 'IN_PROGRESS').data['column'], 'IN_PROGRESS')
+
+    # 한 번 잡은 일을 안 잡은 것으로 되돌릴 수는 없다.
+    def test_nothing_goes_back_to_ready(self):
+        for state in (InstructionCard.Status.IN_PROGRESS, InstructionCard.Status.DONE):
+            card = self.card(ref=f'r.{state}', status=state)
+
+            self.assertEqual(self.move(card, 'READY').status_code, 400)
+
+    # 상태를 안 보내면 전이 규칙과 무관하다.
+    def test_assignee_only_patch_is_not_a_move(self):
+        card = self.card()
+
+        response = self.client.patch(
+            f'{self.base}/{card.id}', {'assigneeId': self.member.id}, format='json'
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data['column'], 'READY')
+
     def test_question_counts(self):
         card = self.card(status=InstructionCard.Status.IN_PROGRESS)
         self.question(card, Escalation.Status.SENT)

@@ -605,6 +605,9 @@ class CardApiTests(TestCase):
         self.assertEqual(response.data['originalText'], '결제 로그 봐주세요')
 
     def test_status_update(self):
+        self.client.patch(
+            f'{self.base}/{self.card.id}', {'status': 'IN_PROGRESS'}, format='json'
+        )
         response = self.client.patch(
             f'{self.base}/{self.card.id}', {'status': 'DONE'}, format='json'
         )

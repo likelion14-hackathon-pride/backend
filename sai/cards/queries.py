@@ -12,8 +12,8 @@ _ANSWERED = Q(
 )
 
 
-# 보드 열. DONE 이 가장 세다. 어느 열에서든 끌어다 놓을 수 있어야 하기 때문.
-# 그다음은 질문 상태가 정한다. 사람이 옮기는 것은 READY / IN_PROGRESS / DONE 뿐이다.
+# 보드 열. DONE 이 가장 세다. 질문이 열린 채로 끝낸 카드도 DONE 에 있어야 하기 때문.
+# 그다음은 질문 상태가 정한다. 사람이 옮기는 것은 IN_PROGRESS / DONE 뿐이다.
 _COLUMN = Case(
     When(status=InstructionCard.Status.DONE, then=Value(InstructionCard.Column.DONE)),
     When(open_question_count__gt=0, then=Value(InstructionCard.Column.WAITING)),
