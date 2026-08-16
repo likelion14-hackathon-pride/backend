@@ -20,7 +20,8 @@ DRAFTER_VERSION = 'draft-v1'
 # 한 번에 모델에 넣는 원문 수. 한 범위 안의 규칙끼리 묶으려면 함께 봐야 한다.
 BATCH_SIZE = 40
 
-SYSTEM_PROMPT = """You turn Slack messages and GitHub repository documents into company handbook rules.
+SYSTEM_PROMPT = """You turn Slack messages, GitHub repository documents, and uploaded local files
+into company handbook rules.
 
 The messages given to you were already classified as containing rules. The readers are foreign
 employees who need to know how this company works.
