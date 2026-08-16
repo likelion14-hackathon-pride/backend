@@ -5,7 +5,7 @@ from django.conf import settings
 from django.shortcuts import get_object_or_404
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_POST
-from django.http import JsonResponse, HttpResponseForbidden
+from django.http import JsonResponse, HttpResponseBadRequest, HttpResponseForbidden
 from drf_yasg import openapi
 from drf_yasg.utils import swagger_auto_schema
 from rest_framework import status
@@ -58,6 +58,7 @@ from .services import (
     remove_repository,
 )
 from .github import GitHubError
+from .github_webhook import verify_github_signature
 from .slack import SlackError
 from .worker import drain
 from .webhook import (
@@ -68,6 +69,27 @@ from .webhook import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+# GitHub 웹훅은 로그인 없이 호출되므로 서명이 맞는 요청만 받는다.
+# 실제 수집과 AI 처리는 워커가 담당하고 여기서는 빠르게 응답한다.
+@csrf_exempt
+@require_POST
+def github_events(request):
+    signature = request.headers.get('X-Hub-Signature-256', '')
+    if not verify_github_signature(settings.GITHUB_WEBHOOK_SECRET, signature, request.body):
+        return HttpResponseForbidden()
+
+    try:
+        data = json.loads(request.body)
+    except json.JSONDecodeError:
+        return HttpResponseBadRequest()
+
+    return JsonResponse({
+        'ok': True,
+        'event': request.headers.get('X-GitHub-Event', ''),
+        'deliveryId': request.headers.get('X-GitHub-Delivery', ''),
+    })
 
 
 # 슬랙 이벤트 수신 엔드포인트.
