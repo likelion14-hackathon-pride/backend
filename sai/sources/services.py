@@ -118,11 +118,12 @@ def remove_channel(item):
     return item
 
 
-def _github_client():
+# 기존 연결은 서버 설정을 사용하고, 새 연결은 회사별 값을 사용한다.
+def github_client(connection):
     return GitHubClient(
-        settings.GITHUB_APP_ID,
-        settings.GITHUB_PRIVATE_KEY,
-        settings.GITHUB_INSTALLATION_ID,
+        connection.github_app_id or settings.GITHUB_APP_ID,
+        connection.github_private_key or settings.GITHUB_PRIVATE_KEY,
+        connection.external_workspace_id or settings.GITHUB_INSTALLATION_ID,
     )
 
 
@@ -230,7 +231,7 @@ def _repository_label(repository):
 # 아직 수집 대상으로 등록되지 않은 GitHub App 접근 가능 레포
 def list_available_repositories(connection):
     registered = _registered_ids(connection)
-    repositories = _github_client().repositories()
+    repositories = github_client(connection).repositories()
 
     return [
         {
@@ -245,7 +246,7 @@ def list_available_repositories(connection):
 
 # 레포를 수집 대상으로 추가한다. App 설치 범위 밖의 레포는 등록할 수 없다.
 def add_repository(connection, external_id):
-    repositories = _github_client().repositories()
+    repositories = github_client(connection).repositories()
     repository = next(
         (repository for repository in repositories if str(repository['id']) == external_id),
         None,

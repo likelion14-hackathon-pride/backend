@@ -1,12 +1,12 @@
 import hashlib
 from datetime import datetime
 
-from django.conf import settings
 from django.db import transaction
 from django.utils import timezone
 
-from .github import GitHubClient, GitHubError
+from .github import GitHubError
 from .models import Identity, IngestionJob, Item, RawDocument
+from .services import github_client
 
 
 INTERNAL_ASSOCIATIONS = {'OWNER', 'MEMBER', 'COLLABORATOR'}
@@ -244,11 +244,7 @@ def run_github_ingestion(job, connection):
 
     # PROCESS는 웹훅 등으로 이미 저장된 GitHub 원문만 AI 처리한다.
     if job.kind == IngestionJob.Kind.COLLECT:
-        client = GitHubClient(
-            settings.GITHUB_APP_ID,
-            settings.GITHUB_PRIVATE_KEY,
-            settings.GITHUB_INSTALLATION_ID,
-        )
+        client = github_client(connection)
         for index, item in enumerate(items, start=1):
             try:
                 ingest_repository(item, client)
