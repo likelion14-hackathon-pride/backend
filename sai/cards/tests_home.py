@@ -1,4 +1,5 @@
 from datetime import timedelta
+from unittest.mock import patch
 
 from django.test import TestCase
 from django.utils import timezone
@@ -266,6 +267,17 @@ class HomeTests(TestCase):
             self.entry('이번 주 규칙')
 
         self.assertEqual(self.get()['handbook']['weekly'], [0, 0, 0, 3])
+
+    # 확정한 시각과 화면을 여는 시각이 같은 값일 수 있다. 시계가 밀리초 단위로
+    # 똑딱거리기 때문이다. 이때도 방금 확정한 규칙은 가장 최근 주에 들어가야 한다.
+    def test_a_rule_confirmed_at_the_very_moment_is_counted(self):
+        moment = timezone.now()
+        self.entry('방금 확정한 규칙', confirmed_at=moment)
+
+        with patch('cards.home.timezone.now', return_value=moment):
+            weekly = self.get()['handbook']['weekly']
+
+        self.assertEqual(weekly, [0, 0, 0, 1])
 
     # 언제 확정됐는지 모르는 항목은 어느 주에도 넣지 않는다. 총계에는 들어간다.
     def test_an_entry_without_a_confirmed_time_is_in_no_week(self):
