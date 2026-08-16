@@ -123,10 +123,10 @@ class UserSerializer(serializers.ModelSerializer):
         fields = ['id', 'email', 'name', 'locale', 'location', 'role', 'timezone']
 
 
-# 이름·근무 위치·담당 역할. 가입 직후 초기 설정 화면과 설정 모달이 같은 값을 쓴다.
+# 근무 위치와 담당 역할. 가입 직후 초기 설정 화면과 설정 모달이 같은 값을 쓴다.
+# 이름은 가입 첫 화면에서 이미 받으므로 여기서 다시 받지 않는다.
 # 타임존을 직접 받지 않는다. 위치가 타임존을 정하므로 두 갈래로 받으면 어긋난다.
 class ProfileUpdateSerializer(serializers.Serializer):
-    name = serializers.CharField(source='display_name', max_length=60, required=False)
     location = serializers.ChoiceField(
         source='work_location', choices=WorkLocation.choices, required=False
     )
@@ -139,9 +139,7 @@ class ProfileUpdateSerializer(serializers.Serializer):
 
     def validate(self, attrs):
         if not attrs:
-            raise serializers.ValidationError(
-                'name, location, role or locale is required'
-            )
+            raise serializers.ValidationError('location, role or locale is required')
 
         return attrs
 

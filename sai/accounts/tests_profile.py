@@ -35,14 +35,15 @@ class ProfileTests(TestCase):
 
     # --- 초기 설정 ---
 
-    def test_setup_saves_all_three(self):
-        response = self.patch({'name': 'Minh Nguyen', 'location': 'HANOI', 'role': 'BACKEND'})
+    def test_setup_saves_location_and_role(self):
+        response = self.patch({'location': 'HANOI', 'role': 'BACKEND'})
 
         self.assertEqual(response.status_code, 200)
         user = response.data['user']
-        self.assertEqual(user['name'], 'Minh Nguyen')
         self.assertEqual(user['location'], 'HANOI')
         self.assertEqual(user['role'], 'BACKEND')
+        # 이름은 가입 때 받은 값이 그대로 남는다.
+        self.assertEqual(user['name'], 'Minh')
 
     # 위치가 시각을 정한다. 이 값이 시차 화면의 '내 시각'이 된다.
     def test_location_sets_the_timezone(self):
@@ -68,14 +69,13 @@ class ProfileTests(TestCase):
 
     # --- 부분 수정 ---
 
-    def test_role_alone_leaves_the_rest(self):
-        self.patch({'name': 'Minh Nguyen', 'location': 'HANOI', 'role': 'BACKEND'})
+    def test_role_alone_leaves_the_location(self):
+        self.patch({'location': 'HANOI', 'role': 'BACKEND'})
 
         user = self.patch({'role': 'QA'}).data['user']
 
         self.assertEqual(user['role'], 'QA')
         self.assertEqual(user['location'], 'HANOI')
-        self.assertEqual(user['name'], 'Minh Nguyen')
 
     def test_locale_can_be_changed(self):
         self.assertEqual(self.patch({'locale': 'ko'}).data['user']['locale'], 'ko')
@@ -99,8 +99,13 @@ class ProfileTests(TestCase):
     def test_unknown_role_is_rejected(self):
         self.assertEqual(self.patch({'role': 'DEVOPS'}).status_code, 400)
 
-    def test_blank_name_is_rejected(self):
-        self.assertEqual(self.patch({'name': '   '}).status_code, 400)
+    # 이름은 가입 첫 화면에서 받는다. 여기로는 안 들어온다.
+    def test_name_cannot_be_set_here(self):
+        response = self.patch({'name': 'Someone Else'})
+
+        self.assertEqual(response.status_code, 400)
+        self.user.refresh_from_db()
+        self.assertEqual(self.user.display_name, 'Minh')
 
     def test_unknown_locale_is_rejected(self):
         self.assertEqual(self.patch({'locale': 'fr'}).status_code, 400)
