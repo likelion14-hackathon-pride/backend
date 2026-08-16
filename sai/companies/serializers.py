@@ -5,6 +5,92 @@ from config.fields import TimeZoneField
 from .models import Company
 
 
+class WeeklyQuestionsSerializer(serializers.Serializer):
+    totalCount = serializers.IntegerField()
+    saiAnsweredCount = serializers.IntegerField()
+    ownerRequiredCount = serializers.IntegerField()
+
+
+class ResolutionSerializer(serializers.Serializer):
+    saiCount = serializers.IntegerField()
+    ownerCount = serializers.IntegerField()
+    saiRate = serializers.FloatField()
+    ownerRate = serializers.FloatField()
+
+
+class ReusedEntrySerializer(serializers.Serializer):
+    entryId = serializers.IntegerField()
+    title = serializers.CharField()
+    reuseCount = serializers.IntegerField()
+
+
+class AnswerReuseSerializer(serializers.Serializer):
+    averageCount = serializers.FloatField()
+    totalCount = serializers.IntegerField()
+    topEntries = ReusedEntrySerializer(many=True)
+
+
+class WeeklySavedTimeSerializer(serializers.Serializer):
+    weekStart = serializers.DateField()
+    minutes = serializers.IntegerField()
+
+
+class OwnerTimeSavedSerializer(serializers.Serializer):
+    minutes = serializers.IntegerField()
+    changeMinutes = serializers.IntegerField()
+    minutesPerAnswer = serializers.IntegerField()
+    weeklyTrend = WeeklySavedTimeSerializer(many=True)
+
+
+class MonthlyHandbookCountSerializer(serializers.Serializer):
+    month = serializers.CharField()
+    count = serializers.IntegerField()
+
+
+class DashboardHandbookSerializer(serializers.Serializer):
+    totalCount = serializers.IntegerField()
+    thisWeekCount = serializers.IntegerField()
+    lastConfirmedAt = serializers.DateTimeField(allow_null=True)
+    monthlyTrend = MonthlyHandbookCountSerializer(many=True)
+
+
+class RecentAnswerSerializer(serializers.Serializer):
+    question = serializers.CharField()
+    answer = serializers.CharField()
+    resolutionType = serializers.ChoiceField(choices=['SAI', 'OWNER'])
+    sourceLabels = serializers.ListField(child=serializers.CharField())
+    resolvedAt = serializers.DateTimeField()
+
+
+class RecentAnswerListSerializer(serializers.Serializer):
+    todayCount = serializers.IntegerField()
+    items = RecentAnswerSerializer(many=True)
+
+
+class WaitingQuestionSerializer(serializers.Serializer):
+    id = serializers.IntegerField()
+    question = serializers.CharField()
+    askedByName = serializers.CharField()
+    scopeName = serializers.CharField(allow_null=True)
+    status = serializers.CharField()
+    createdAt = serializers.DateTimeField()
+
+
+class WaitingQuestionListSerializer(serializers.Serializer):
+    totalCount = serializers.IntegerField()
+    items = WaitingQuestionSerializer(many=True)
+
+
+class OwnerDashboardSerializer(serializers.Serializer):
+    weeklyQuestions = WeeklyQuestionsSerializer()
+    resolution = ResolutionSerializer()
+    answerReuse = AnswerReuseSerializer()
+    ownerTimeSaved = OwnerTimeSavedSerializer()
+    handbook = DashboardHandbookSerializer()
+    recentAnswers = RecentAnswerListSerializer()
+    waitingQuestions = WaitingQuestionListSerializer()
+
+
 class CompanySettingsSerializer(serializers.ModelSerializer):
     timezone = TimeZoneField()
     workingHoursEnabled = serializers.BooleanField(source='working_hours_enabled')

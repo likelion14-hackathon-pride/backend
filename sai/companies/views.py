@@ -11,7 +11,12 @@ from accounts.serializers import CompanySerializer, MembershipListSerializer, Me
 from config.pagination import CURSOR_PARAMETER, LIMIT_PARAMETER, paged_response
 
 from .access import get_member_company, get_owner_company
-from .serializers import CompanySettingsSerializer, ProfileOptionsSerializer
+from .dashboard import dashboard_data
+from .serializers import (
+    CompanySettingsSerializer,
+    OwnerDashboardSerializer,
+    ProfileOptionsSerializer,
+)
 from .timing import WorkingHours, local_window, overlap_hours
 
 
@@ -32,6 +37,33 @@ class CompanyDetailView(APIView):
         company = get_member_company(request.user, company_id)
 
         return Response(CompanySerializer(company).data, status=status.HTTP_200_OK)
+
+
+class OwnerDashboardView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    @swagger_auto_schema(
+        operation_summary='대표 대시보드 조회',
+        operation_description=(
+            '실제 Ask SAI 질문, 핸드북 인용, 대표 확인 질문과 확정 핸드북을 집계합니다. '
+            '대표 시간 절약은 SAI 해결 1건당 5분으로 추정하며, '
+            '대표 대기 질문은 전체 개수와 최신 4개를 반환합니다.'
+        ),
+        responses={
+            200: OwnerDashboardSerializer(),
+            401: '인증되지 않음',
+            403: 'Owner 권한 없음',
+            404: '회사를 찾을 수 없음',
+        },
+        tags=['Dashboard'],
+    )
+    def get(self, request, company_id):
+        company = get_owner_company(request.user, company_id)
+
+        return Response(
+            OwnerDashboardSerializer(dashboard_data(company)).data,
+            status=status.HTTP_200_OK,
+        )
 
 
 class CompanyMemberListView(APIView):
