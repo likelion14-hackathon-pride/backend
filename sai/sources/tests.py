@@ -755,7 +755,7 @@ class IngestionTests(TestCase):
 
         self.assertEqual(response.status_code, 400)
         self.assertEqual(response.data['error']['field'], 'itemIds')
-        self.assertEqual(response.data['error']['message'], 'no channel registered')
+        self.assertEqual(response.data['error']['message'], 'no item registered')
         self.assertEqual(RawDocument.objects.count(), 0)
 
     # Swagger 기본 예시 [0] 을 그대로 보내는 일이 흔하다. 원인이 구분되어야 한다.
@@ -764,7 +764,7 @@ class IngestionTests(TestCase):
 
         self.assertEqual(response.status_code, 400)
         self.assertEqual(response.data['error']['field'], 'itemIds')
-        self.assertEqual(response.data['error']['message'], 'no matching channel')
+        self.assertEqual(response.data['error']['message'], 'no matching item')
 
     def test_empty_item_ids_rejected(self):
         response = self.ingest(payload={'itemIds': []})

@@ -22,7 +22,13 @@ from .serializers import (
     CardSerializer,
     CardUpdateSerializer,
 )
-from .services import card_context, mark_read, original_text, related_rules
+from .services import (
+    card_context,
+    check_move,
+    mark_read,
+    original_text,
+    related_rules,
+)
 
 COLUMN_PARAMETER = enum_parameter(
     'column', InstructionCard.Column,
@@ -132,11 +138,16 @@ class CardDetailView(APIView):
     )
     def patch(self, request, company_id, card_id):
         company = get_member_company(request.user, company_id)
-        card = get_object_or_404(InstructionCard, id=card_id, company=company)
+        card = get_object_or_404(cards_for(company), id=card_id)
         serializer = CardUpdateSerializer(
             card, data=request.data, context={'company': company}
         )
         serializer.is_valid(raise_exception=True)
+
+        target = serializer.validated_data.get('status')
+        if target:
+            check_move(card.column, target)
+
         serializer.save()
 
         # 상태가 바뀌면 열도 바뀐다. 계산된 값을 다시 받으려면 새로 읽어야 한다.

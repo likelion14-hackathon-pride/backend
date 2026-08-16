@@ -1,9 +1,31 @@
 from django.utils import timezone
+from rest_framework.exceptions import ValidationError
 
 from handbook.retrieval import search_rules
 from handbook.services import scopes_in_view
 
 from .generation import MAX_RULES, RULE_MAX_DISTANCE
+from .models import InstructionCard
+
+# 어느 열에서 어느 상태로 옮길 수 있는가.
+# READY 로는 아무도 돌아가지 못한다. 한 번 잡은 일을 안 잡은 것으로 되돌릴 수 없다.
+# DONE 은 실제로 손을 댄 뒤에만 찍는다. 답을 기다리는 중(WAITING)에는 끝났다고 할 수 없다.
+ALLOWED_MOVES = {
+    InstructionCard.Column.READY: {InstructionCard.Status.IN_PROGRESS},
+    InstructionCard.Column.IN_PROGRESS: {
+        InstructionCard.Status.IN_PROGRESS, InstructionCard.Status.DONE,
+    },
+    InstructionCard.Column.WAITING: {InstructionCard.Status.IN_PROGRESS},
+    InstructionCard.Column.ANSWERED: {
+        InstructionCard.Status.IN_PROGRESS, InstructionCard.Status.DONE,
+    },
+    InstructionCard.Column.DONE: {InstructionCard.Status.IN_PROGRESS},
+}
+
+
+def check_move(column, target):
+    if target not in ALLOWED_MOVES.get(column, set()):
+        raise ValidationError({'status': [f'cannot move to {target} from {column}']})
 
 
 def original_text(card):
