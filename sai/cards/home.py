@@ -1,7 +1,6 @@
 from datetime import timedelta
 from zoneinfo import ZoneInfo
 
-from django.db.models import Q
 from django.utils import timezone
 
 from handbook.models import HandbookEntry
@@ -108,11 +107,16 @@ def _handbook(company, now):
     )
     month = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
 
-    # 확정 시각이 없는 항목은 언제부터 있었는지 알 수 없다. 빼면 마지막 칸이
-    # 총계보다 작아져 그래프가 총계와 어긋난다. 처음부터 있었던 것으로 센다.
-    since_always = Q(confirmed_at__isnull=True)
+    # 총계와 이번 달 증가는 따로 나가므로 여기서는 '언제 늘었나'만 본다.
+    # 누적으로 두면 마지막 칸이 confirmed 와 같아 같은 말을 두 번 하게 된다.
+    #
+    # 확정 시각이 없는 옛 항목은 어느 주에도 넣지 않는다. 언제였는지 모르기 때문이다.
+    # 그래서 주별 합이 총계보다 작을 수 있다.
     weekly = [
-        confirmed.filter(Q(confirmed_at__lte=now - timedelta(weeks=index)) | since_always).count()
+        confirmed.filter(
+            confirmed_at__gte=now - timedelta(weeks=index + 1),
+            confirmed_at__lt=now - timedelta(weeks=index),
+        ).count()
         for index in range(GROWTH_WEEKS - 1, -1, -1)
     ]
 

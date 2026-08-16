@@ -254,18 +254,21 @@ class HomeTests(TestCase):
         self.assertEqual(counts['Product / Engineering'], 1)
         self.assertEqual(counts['payment-api'], 1)
 
-    # 누적이라 우상향한다. 마지막 값이 현재 총계와 같아야 한다.
-    def test_weekly_growth_is_cumulative(self):
-        self.entry('오래된 규칙', confirmed_at=timezone.now() - timedelta(weeks=3))
+    # 총계와 이번 달 증가는 따로 나간다. 차트는 어느 주에 늘었는지를 맡는다.
+    def test_weekly_shows_when_rules_were_added(self):
+        self.entry('오래된 규칙', confirmed_at=timezone.now() - timedelta(weeks=3, days=1))
         self.entry('최근 규칙')
 
-        handbook = self.get()['handbook']
+        self.assertEqual(self.get()['handbook']['weekly'], [1, 0, 0, 1])
 
-        self.assertEqual(handbook['weekly'][-1], handbook['confirmed'])
-        self.assertLess(handbook['weekly'][0], handbook['weekly'][-1])
+    def test_weekly_counts_each_week_separately(self):
+        for _ in range(3):
+            self.entry('이번 주 규칙')
 
-    # 확정 시각이 없는 옛 항목이 빠지면 그래프 끝이 총계보다 낮아진다.
-    def test_entries_without_a_confirmed_time_still_count(self):
+        self.assertEqual(self.get()['handbook']['weekly'], [0, 0, 0, 3])
+
+    # 언제 확정됐는지 모르는 항목은 어느 주에도 넣지 않는다. 총계에는 들어간다.
+    def test_an_entry_without_a_confirmed_time_is_in_no_week(self):
         HandbookEntry.objects.create(
             company=self.company, scope=self.eng, title='시각 없는 규칙', body_ko='본문',
             status=HandbookEntry.Status.CONFIRMED, origin=HandbookEntry.Origin.SLACK,
@@ -274,7 +277,16 @@ class HomeTests(TestCase):
         handbook = self.get()['handbook']
 
         self.assertEqual(handbook['confirmed'], 1)
-        self.assertEqual(handbook['weekly'], [1] * len(handbook['weekly']))
+        self.assertEqual(handbook['weekly'], [0, 0, 0, 0])
+
+    # 4주보다 오래된 것은 차트 밖이다.
+    def test_rules_older_than_the_window_are_not_shown(self):
+        self.entry('아주 오래된 규칙', confirmed_at=timezone.now() - timedelta(weeks=10))
+
+        handbook = self.get()['handbook']
+
+        self.assertEqual(handbook['confirmed'], 1)
+        self.assertEqual(sum(handbook['weekly']), 0)
 
     # --- 할 일 ---
 
