@@ -80,6 +80,8 @@ class Escalation(models.Model):
     answer_needs_review = models.BooleanField(default=False)
     answer_ko = models.TextField(null=True, blank=True)
     answer_en = models.TextField(null=True, blank=True)
+    # 대표가 승인하기 전에 어떤 규칙으로 저장될지 보여 주려면 제목이 미리 있어야 한다.
+    proposed_title = models.CharField(max_length=200, null=True, blank=True)
     proposed_entry = models.ForeignKey('handbook.HandbookEntry', on_delete=models.SET_NULL, null=True, blank=True, related_name='proposed_escalations')
     created_at = models.DateTimeField(auto_now_add=True)
 

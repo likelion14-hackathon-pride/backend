@@ -19,10 +19,12 @@ SENT_TS = '1786800000.000100'
 
 def judgement(is_answer=True, needs_review=False, reason='명확히 답했습니다.',
               answer_ko='연차는 사전 승인 없이 쓰고 캘린더에 등록만 합니다.',
-              answer_en='Take leave without prior approval; just add it to the calendar.'):
+              answer_en='Take leave without prior approval; just add it to the calendar.',
+              title_ko='연차 사용 절차'):
     return AnswerJudgement(
         is_answer=is_answer, needs_review=needs_review, reason=reason,
         answer_ko=answer_ko if is_answer else '', answer_en=answer_en if is_answer else '',
+        title_ko=title_ko if is_answer else '',
     )
 
 

@@ -153,6 +153,7 @@ class BlankEscalationTests(TestCase):
             needs_review=False,
             answer_ko='운영 환경 로그를 보시면 됩니다.' if is_answer else '',
             answer_en='Check the production logs.' if is_answer else '',
+            title_ko='결제 로그 확인 위치' if is_answer else '',
         )
         with patch('qna.services.fetch_reply', return_value=(object(), '운영이요')), \
              patch('qna.services.judge_reply', return_value=judgement):

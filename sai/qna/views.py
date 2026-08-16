@@ -28,7 +28,9 @@ from .serializers import (
     MAX_ADDITIONS,
     AskInputSerializer,
     AskResultSerializer,
+    EscalationApproveSerializer,
     EscalationCreateSerializer,
+    EscalationDetailSerializer,
     EscalationDraftUpdateSerializer,
     EscalationListSerializer,
     EscalationSendSerializer,
@@ -45,6 +47,7 @@ from .services import (
     korean_additions,
     open_thread,
     promote_to_entry,
+    proposal_for,
 )
 
 STATUS_PARAMETER = enum_parameter('status', Escalation.Status)
@@ -179,14 +182,24 @@ class EscalationDetailView(APIView):
 
     @swagger_auto_schema(
         operation_summary='대표 확인 질문 상세',
-        responses={200: EscalationSerializer(), 401: '인증되지 않음', 403: '회사 접근 권한 없음', 404: '없음'},
+        operation_description=(
+            '답이 온 질문에는 proposal 이 함께 나옵니다. 승인하면 어떤 규칙이 어느 계층에 '
+            '저장될지 미리 보여 주는 값이며, 고쳐서 승인하려면 approve 에 그대로 담아 보냅니다.'
+        ),
+        responses={
+            200: EscalationDetailSerializer(), 401: '인증되지 않음',
+            403: '회사 접근 권한 없음', 404: '없음',
+        },
         tags=['Question'],
     )
     def get(self, request, company_id, escalation_id):
         company = get_member_company(request.user, company_id)
         escalation = get_object_or_404(escalations_for(company, request.user), id=escalation_id)
+        escalation.proposal = proposal_for(escalation)
 
-        return Response(EscalationSerializer(escalation).data, status=status.HTTP_200_OK)
+        return Response(
+            EscalationDetailSerializer(escalation).data, status=status.HTTP_200_OK
+        )
 
     @swagger_auto_schema(
         operation_summary='발송 전 초안 수정',
@@ -373,9 +386,10 @@ class EscalationApproveView(APIView):
         operation_summary='답변을 핸드북 규칙으로 승격',
         operation_description=(
             '대표 답변을 핸드북 초안으로 만듭니다. 다음 사람이 같은 질문을 하면 Ask SAI가 바로 답할 수 있게 됩니다. '
-            '만들어진 항목은 DRAFT이며 확정은 별도로 해야 합니다.'
+            '상세의 proposal 을 그대로 저장하며, 미리보기에서 고친 title / ruleEn / scopeId 를 보내면 '
+            '그 값으로 저장합니다. 만들어진 항목은 DRAFT이며 확정은 별도로 해야 합니다.'
         ),
-        request_body=no_body,
+        request_body=EscalationApproveSerializer,
         responses={
             201: EscalationSerializer(), 400: '아직 답변이 없음',
             401: '인증되지 않음', 403: 'Owner 권한 없음', 404: '질문 없음',
@@ -384,8 +398,16 @@ class EscalationApproveView(APIView):
     )
     def post(self, request, company_id, escalation_id):
         company = get_owner_company(request.user, company_id)
+        serializer = EscalationApproveSerializer(
+            data=request.data, context={'company': company}
+        )
+        serializer.is_valid(raise_exception=True)
+        edits = serializer.validated_data
         escalation = promote_to_entry(
-            get_object_or_404(Escalation, id=escalation_id, company=company)
+            get_object_or_404(Escalation, id=escalation_id, company=company),
+            title=edits.get('title'),
+            body_en=edits.get('ruleEn'),
+            scope=edits.get('scope'),
         )
 
         return Response(EscalationSerializer(escalation).data, status=status.HTTP_201_CREATED)
