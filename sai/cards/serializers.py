@@ -1,10 +1,13 @@
+from django.utils import timezone
 from rest_framework import serializers
 
 from accounts.models import Membership
 from companies.timing import STATES
+from handbook.models import CompanyScope
+from handbook.serializers import CompanyScopeSerializer
 from qna.serializers import RiskWarningSerializer
 
-from .models import Blank, InstructionCard, Step, ToneEvidence
+from .models import Blank, InstructionCard, Step, Task, ToneEvidence
 from .timing import BASES
 
 
@@ -188,6 +191,127 @@ class CardListSerializer(serializers.Serializer):
 
 class CardAskSerializer(serializers.Serializer):
     question = serializers.CharField(max_length=2000, trim_whitespace=True)
+
+
+class TaskSerializer(serializers.ModelSerializer):
+    cardId = serializers.IntegerField(source='card_id', read_only=True)
+    scopeId = serializers.IntegerField(source='scope_id', read_only=True)
+    scopeName = serializers.CharField(source='scope.name', read_only=True, default=None)
+    dueAt = serializers.DateTimeField(source='due_at', read_only=True)
+    doneAt = serializers.DateTimeField(source='done_at', read_only=True)
+    done = serializers.SerializerMethodField()
+    # 카드에서 담긴 것인지 직접 적은 것인지. 화면이 'from 김대표' 와 'self-created' 를 가른다.
+    origin = serializers.SerializerMethodField()
+    requestedBy = serializers.CharField(
+        source='card.document.author_identity.external_handle', read_only=True, default=None
+    )
+    sourceLabel = serializers.CharField(
+        source='card.document.item.label', read_only=True, default=None
+    )
+
+    class Meta:
+        model = Task
+        fields = [
+            'id', 'title', 'status', 'done', 'doneAt', 'dueAt',
+            'cardId', 'scopeId', 'scopeName', 'origin', 'requestedBy', 'sourceLabel',
+        ]
+
+    def get_done(self, obj):
+        return obj.status == Task.Status.DONE
+
+    def get_origin(self, obj):
+        return 'CARD' if obj.card_id else 'SELF'
+
+
+class TaskListSerializer(serializers.Serializer):
+    items = TaskSerializer(many=True)
+
+
+class TaskCreateSerializer(serializers.Serializer):
+    title = serializers.CharField(max_length=200, trim_whitespace=True)
+    dueAt = serializers.DateTimeField(source='due_at', required=False, allow_null=True)
+    scopeId = serializers.IntegerField(source='scope_id', required=False, allow_null=True)
+
+    def validate_scopeId(self, value):
+        if value is None:
+            return None
+
+        if not CompanyScope.objects.filter(
+            id=value, company=self.context['company']
+        ).exists():
+            raise serializers.ValidationError('scope not found')
+
+        return value
+
+    def create(self, validated_data):
+        return Task.objects.create(
+            company=self.context['company'], user=self.context['user'], **validated_data
+        )
+
+
+class TaskUpdateSerializer(serializers.Serializer):
+    title = serializers.CharField(max_length=200, trim_whitespace=True, required=False)
+    status = serializers.ChoiceField(choices=Task.Status.choices, required=False)
+    dueAt = serializers.DateTimeField(source='due_at', required=False, allow_null=True)
+
+    def validate(self, attrs):
+        if not attrs:
+            raise serializers.ValidationError('title, status or dueAt is required')
+
+        return attrs
+
+    def update(self, instance, validated_data):
+        for field, value in validated_data.items():
+            setattr(instance, field, value)
+        # 체크하면 끝낸 시각을 남긴다. 이 값으로 하루 뒤에 지운다.
+        if 'status' in validated_data:
+            instance.done_at = (
+                timezone.now() if instance.status == Task.Status.DONE else None
+            )
+            validated_data['done_at'] = instance.done_at
+        instance.save(update_fields=list(validated_data))
+
+        return instance
+
+
+class ReadTodaySerializer(serializers.Serializer):
+    messages = serializers.IntegerField()
+    cards = serializers.IntegerField()
+    waiting = serializers.IntegerField()
+
+
+class UnreadInstructionSerializer(serializers.Serializer):
+    cardId = serializers.IntegerField()
+    purpose = serializers.CharField()
+    text = serializers.CharField(allow_null=True)
+    requestedBy = serializers.CharField(allow_null=True)
+    occurredAt = serializers.DateTimeField(allow_null=True)
+
+
+class UnreadSerializer(serializers.Serializer):
+    count = serializers.IntegerField()
+    latest = UnreadInstructionSerializer(allow_null=True)
+
+
+class ResolutionSerializer(serializers.Serializer):
+    answered = serializers.IntegerField()
+    total = serializers.IntegerField()
+    since = serializers.DateTimeField()
+
+
+class HandbookGrowthSerializer(serializers.Serializer):
+    confirmed = serializers.IntegerField()
+    addedThisMonth = serializers.IntegerField()
+    weekly = serializers.ListField(child=serializers.IntegerField())
+    scopes = CompanyScopeSerializer(many=True)
+
+
+class HomeSerializer(serializers.Serializer):
+    readToday = ReadTodaySerializer()
+    unread = UnreadSerializer()
+    todos = TaskSerializer(many=True)
+    resolution = ResolutionSerializer()
+    handbook = HandbookGrowthSerializer()
 
 
 class PersonTimingSerializer(serializers.Serializer):
