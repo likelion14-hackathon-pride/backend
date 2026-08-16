@@ -708,14 +708,14 @@ INGESTION_JOB_REQUEST_BODY = openapi.Schema(
     properties={
         'provider': openapi.Schema(
             type=openapi.TYPE_STRING,
-            enum=[Connection.Kind.SLACK, Connection.Kind.GITHUB],
+            enum=[Connection.Kind.SLACK, Connection.Kind.GITHUB, Connection.Kind.LOCAL],
             description='수집할 소스 종류. 생략하면 SLACK입니다.',
         ),
         'itemIds': openapi.Schema(
             type=openapi.TYPE_ARRAY,
             items=openapi.Items(type=openapi.TYPE_INTEGER),
             description=(
-                '수집할 채널 또는 레포 Item ID 목록. '
+                '수집할 채널, 레포 또는 로컬 파일 Item ID 목록. '
                 '생략하면 선택한 소스에 등록된 전체 Item이 대상입니다.'
             ),
         ),
@@ -752,10 +752,11 @@ class IngestionJobListCreateView(APIView):
         return paged_response(IngestionJobSerializer, jobs, request)
 
     @swagger_auto_schema(
-        operation_summary='외부 소스 수집 및 AI 처리 시작',
+        operation_summary='소스 수집 및 AI 처리 시작',
         operation_description=(
             'provider가 SLACK이면 채널 메시지와 스레드 답글을 가져옵니다. '
             'GITHUB이면 레포의 README, Issue, PR 및 댓글을 가져옵니다. '
+            'LOCAL이면 S3에 업로드된 문서에서 텍스트를 추출합니다. '
             'provider를 생략하면 SLACK이며, itemIds를 생략하면 해당 소스의 전체 Item이 대상입니다. '
             '이미 가져온 원문은 중복 저장하지 않고 변경·삭제 상태를 반영합니다. '
             '수집한 내용은 AI가 규칙·작업·일반 맥락으로 분류하고, '
