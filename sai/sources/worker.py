@@ -5,6 +5,8 @@ from datetime import timedelta
 from django.db import transaction
 from django.utils import timezone
 
+from cards.todos import purge_done
+
 from .github_ingestion import run_github_ingestion
 from .ingestion import run_ingestion
 from .local_ingestion import run_local_ingestion
@@ -142,6 +144,7 @@ def work_forever(idle_seconds=IDLE_SECONDS, stop_after_idle=None):
         now = timezone.now()
         if now >= next_schedule:
             reap_stale_jobs(now)
+            purge_done(now)
             for job in enqueue_due_jobs(now):
                 logger.info('주기 작업을 큐에 넣었습니다 job=%s kind=%s', job.id, job.kind)
             next_schedule = now + SCHEDULE_EVERY
