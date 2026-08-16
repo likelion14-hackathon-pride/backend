@@ -10,6 +10,7 @@ from .views import (
     SourceConnectionDetailView,
     SourceConnectionListCreateView,
     SourceFileListCreateView,
+    SourceFileDetailView,
     SourceRepositoryDetailView,
     SourceRepositoryListView,
 )
@@ -19,6 +20,7 @@ urlpatterns = [
     path('<int:company_id>/source-connections', SourceConnectionListCreateView.as_view()),
     path('<int:company_id>/source-connections/<int:connection_id>', SourceConnectionDetailView.as_view()),
     path('<int:company_id>/source-files', SourceFileListCreateView.as_view()),
+    path('<int:company_id>/source-files/<int:item_id>', SourceFileDetailView.as_view()),
     path('<int:company_id>/source-connections/<int:connection_id>/channels', SourceChannelListView.as_view()),
     path('<int:company_id>/source-connections/<int:connection_id>/channels/available', SourceAvailableChannelListView.as_view()),
     path('<int:company_id>/source-connections/<int:connection_id>/channels/<int:item_id>', SourceChannelDetailView.as_view()),
