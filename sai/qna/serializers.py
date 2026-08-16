@@ -168,6 +168,39 @@ class EscalationListSerializer(serializers.Serializer):
     nextCursor = serializers.CharField(allow_null=True)
 
 
+class ProposalSerializer(serializers.Serializer):
+    title = serializers.CharField()
+    bodyKo = serializers.CharField()
+    bodyEn = serializers.CharField(allow_null=True)
+    scopeId = serializers.IntegerField(allow_null=True)
+    scopeName = serializers.CharField(allow_null=True)
+    scopeKind = serializers.CharField(allow_null=True)
+    sourceLabel = serializers.CharField(allow_null=True)
+    answeredAt = serializers.DateTimeField(allow_null=True)
+
+
+class EscalationDetailSerializer(EscalationSerializer):
+    proposal = ProposalSerializer(allow_null=True, read_only=True)
+
+    class Meta(EscalationSerializer.Meta):
+        fields = EscalationSerializer.Meta.fields + ['proposal']
+
+
+# 미리보기에서 고친 값만 보낸다. 안 보내면 제안 그대로 저장된다.
+class EscalationApproveSerializer(serializers.Serializer):
+    title = serializers.CharField(max_length=200, required=False, trim_whitespace=True)
+    ruleEn = serializers.CharField(max_length=2000, required=False, trim_whitespace=True)
+    scopeId = serializers.PrimaryKeyRelatedField(
+        source='scope', queryset=CompanyScope.objects.all(), required=False
+    )
+
+    def validate_scopeId(self, value):
+        if value.company_id != self.context['company'].id:
+            raise serializers.ValidationError('scope not found')
+
+        return value
+
+
 # 출처는 세 가지다. Ask SAI 답변(messageId), 지시 카드의 미정 항목(blankId), 직접 입력.
 class EscalationCreateSerializer(serializers.Serializer):
     messageId = serializers.IntegerField(required=False)

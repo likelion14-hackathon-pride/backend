@@ -8,6 +8,7 @@ from rest_framework.exceptions import APIException, ValidationError
 from cards.models import Blank
 from handbook.gaps import record_gap
 from handbook.models import CompanyScope, HandbookEntry, HandbookEvidence
+from sources.models import Item
 from sources.slack import SlackError
 
 from .answering import (
@@ -20,6 +21,7 @@ from .escalation import (
     draft_from_blank,
     fetch_reply,
     judge_reply,
+    parse_thread_ref,
     translate_additions,
 )
 from .models import Citation, Escalation, Message, Thread
@@ -123,6 +125,7 @@ def collect_answer(escalation):
     if judgement.is_answer:
         escalation.answer_ko = judgement.answer_ko
         escalation.answer_en = judgement.answer_en
+        escalation.proposed_title = (judgement.title_ko or '')[:200] or None
         escalation.answered_at = timezone.now()
         escalation.status = Escalation.Status.ANSWERED
     escalation.save()
@@ -139,16 +142,54 @@ def collect_answer(escalation):
     return escalation
 
 
+def default_scope(escalation):
+    return escalation.scope or CompanyScope.objects.filter(
+        company=escalation.company, kind=CompanyScope.Kind.COMPANY,
+        area_key=CompanyScope.AreaKey.COMPANY,
+    ).first()
+
+
+def _proposed_title(escalation):
+    return escalation.proposed_title or (escalation.question_en or '')[:200]
+
+
+# 승인 버튼을 누르기 전에 어떤 규칙이 어디에 저장될지 보여 준다.
+# 답이 오기 전에는 제안할 것이 없다.
+def proposal_for(escalation):
+    if escalation.status != Escalation.Status.ANSWERED or not escalation.answer_ko:
+        return None
+
+    scope = default_scope(escalation)
+    channel, _ = parse_thread_ref(escalation.slack_thread_ref)
+
+    return {
+        'title': _proposed_title(escalation),
+        'bodyKo': escalation.answer_ko,
+        'bodyEn': escalation.answer_en or None,
+        'scopeId': scope.id if scope else None,
+        'scopeName': scope.name if scope else None,
+        'scopeKind': scope.kind if scope else None,
+        'sourceLabel': _channel_label(escalation.company, channel),
+        'answeredAt': escalation.answered_at,
+    }
+
+
+def _channel_label(company, external_id):
+    if not external_id:
+        return None
+    item = Item.objects.filter(company=company, external_id=external_id).first()
+
+    return item.label if item else None
+
+
 # 대표 답변을 핸드북 초안으로 만든다. 확정은 별도 검토에서 한다.
-def promote_to_entry(escalation):
+# 미리보기에서 고친 제목·영문·계층이 오면 그것으로 저장한다.
+def promote_to_entry(escalation, title=None, body_en=None, scope=None):
     company = escalation.company
     if escalation.status != Escalation.Status.ANSWERED or not escalation.answer_ko:
         raise ValidationError({'status': ['no answer to promote']})
 
-    scope = escalation.scope or CompanyScope.objects.filter(
-        company=company, kind=CompanyScope.Kind.COMPANY,
-        area_key=CompanyScope.AreaKey.COMPANY,
-    ).first()
+    scope = scope or default_scope(escalation)
     if scope is None:
         raise ValidationError({'scope': ['no scope available']})
 
@@ -156,9 +197,9 @@ def promote_to_entry(escalation):
         entry = HandbookEntry.objects.create(
             company=company,
             scope=scope,
-            title=escalation.question_en[:200],
+            title=(title or _proposed_title(escalation))[:200],
             body_ko=escalation.answer_ko,
-            body_en=escalation.answer_en or None,
+            body_en=body_en or escalation.answer_en or None,
             original_lang='ko',
             status=HandbookEntry.Status.DRAFT,
             origin=HandbookEntry.Origin.ESCALATION,
