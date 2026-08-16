@@ -164,6 +164,11 @@ class LocalFileSerializer(serializers.ModelSerializer):
         return 'PENDING_UPLOAD'
 
 
+class LocalFileListSerializer(serializers.Serializer):
+    items = LocalFileSerializer(many=True)
+    nextCursor = serializers.CharField(allow_null=True)
+
+
 class LocalFileUploadResultSerializer(serializers.Serializer):
     sourceFile = LocalFileSerializer(read_only=True)
     uploadTarget = serializers.URLField(read_only=True)

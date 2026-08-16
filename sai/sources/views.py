@@ -40,6 +40,7 @@ from .serializers import (
     IngestionJobSerializer,
     GitHubConnectionCreateSerializer,
     GitHubConnectionResultSerializer,
+    LocalFileListSerializer,
     LocalFileUploadCreateSerializer,
     LocalFileUploadResultSerializer,
     RepositoryAddSerializer,
@@ -311,6 +312,29 @@ class SourceConnectionDetailView(APIView):
 
 class SourceFileListCreateView(APIView):
     permission_classes = [IsAuthenticated]
+
+    @swagger_auto_schema(
+        operation_summary='로컬 파일 목록 조회',
+        manual_parameters=[CURSOR_PARAMETER, LIMIT_PARAMETER],
+        responses={
+            200: LocalFileListSerializer(),
+            400: '잘못된 페이지 요청',
+            401: '인증되지 않음',
+            403: 'Owner 권한 없음',
+            404: '회사를 찾을 수 없음',
+        },
+        tags=['Source'],
+    )
+    def get(self, request, company_id):
+        company = get_owner_company(request.user, company_id)
+        files = Item.objects.filter(
+            company=company,
+            connection__kind=Connection.Kind.LOCAL,
+            connection__disconnected_at__isnull=True,
+            removed_at__isnull=True,
+        )
+
+        return paged_response(LocalFileSerializer, files, request)
 
     @swagger_auto_schema(
         operation_summary='로컬 파일 업로드 메타 생성',
