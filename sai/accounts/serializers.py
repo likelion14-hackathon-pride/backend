@@ -6,6 +6,7 @@ from rest_framework import serializers
 
 from companies.models import Company
 from companies.utils import generate_company_code
+from config.fields import TimeZoneField
 from handbook.services import seed_default_scopes
 
 from .models import Membership
@@ -118,6 +119,28 @@ class UserSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
         fields = ['id', 'email', 'name', 'locale', 'timezone']
+
+
+# 회사 타임존은 대표가 정하지만 읽는 사람은 다른 나라에 있다.
+# 본인이 고칠 수 없으면 시차 화면의 '내 시각'이 영영 회사 시각과 같다.
+class ProfileUpdateSerializer(serializers.Serializer):
+    locale = serializers.ChoiceField(
+        source='ui_language', choices=['ko', 'en'], required=False
+    )
+    timezone = TimeZoneField(required=False)
+
+    def validate(self, attrs):
+        if not attrs:
+            raise serializers.ValidationError('locale or timezone is required')
+
+        return attrs
+
+    def update(self, instance, validated_data):
+        for field, value in validated_data.items():
+            setattr(instance, field, value)
+        instance.save(update_fields=list(validated_data))
+
+        return instance
 
 
 class CompanySerializer(serializers.ModelSerializer):

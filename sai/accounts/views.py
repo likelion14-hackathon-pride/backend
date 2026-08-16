@@ -1,4 +1,5 @@
 from rest_framework import status
+from rest_framework.exceptions import NotFound
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -16,6 +17,7 @@ from .serializers import (
     MembershipSerializer,
     MemberSignupSerializer,
     OwnerSignupSerializer,
+    ProfileUpdateSerializer,
     UserSerializer,
 )
 
@@ -217,6 +219,24 @@ class LogoutView(APIView):
 class MeView(APIView):
     permission_classes = [IsAuthenticated]
 
+    def _me(self, user):
+        membership = (
+            Membership.objects.select_related('company')
+            .filter(user=user, left_at__isnull=True)
+            .first()
+        )
+        if membership is None:
+            raise NotFound('membership not found')
+
+        return Response(
+            {
+                'user': UserSerializer(user).data,
+                'membership': MembershipSerializer(membership).data,
+                'company': CompanySerializer(membership.company).data,
+            },
+            status=status.HTTP_200_OK,
+        )
+
     @swagger_auto_schema(
         operation_summary='내 정보 조회',
         responses={
@@ -227,20 +247,26 @@ class MeView(APIView):
         tags=['User'],
     )
     def get(self, request):
-        membership = (
-            Membership.objects.select_related('company')
-            .filter(user=request.user, left_at__isnull=True)
-            .first()
-        )
+        return self._me(request.user)
 
-        if membership is None:
-            return Response({'detail': 'membership not found'}, status=status.HTTP_404_NOT_FOUND)
+    @swagger_auto_schema(
+        operation_summary='내 정보 수정',
+        operation_description=(
+            'locale 과 timezone 을 각각 또는 함께 보낼 수 있습니다. '
+            'timezone 은 IANA 이름(Asia/Ho_Chi_Minh)이며 시차 화면의 내 시각을 정합니다.'
+        ),
+        request_body=ProfileUpdateSerializer,
+        responses={
+            200: MeSerializer(),
+            400: '잘못된 요청',
+            401: '인증되지 않음',
+            404: '소속 정보를 찾을 수 없음',
+        },
+        tags=['User'],
+    )
+    def patch(self, request):
+        serializer = ProfileUpdateSerializer(request.user, data=request.data)
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
 
-        return Response(
-            {
-                'user': UserSerializer(request.user).data,
-                'membership': MembershipSerializer(membership).data,
-                'company': CompanySerializer(membership.company).data,
-            },
-            status=status.HTTP_200_OK,
-        )
+        return self._me(request.user)
