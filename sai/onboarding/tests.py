@@ -1,6 +1,7 @@
 from unittest.mock import patch
 
 from django.test import TestCase
+from django.utils import timezone
 from rest_framework.test import APIClient
 
 from accounts.models import Membership, User
@@ -191,6 +192,20 @@ class OnboardingQuestionTests(TestCase):
 
         self.assertFalse(HandbookEntry.objects.filter(company=self.company).exists())
         self.assertIsNone(Question.objects.get().created_entry)
+
+    # 만든 규칙을 핸드북에서 지우면 목록의 entryId 도 비어야 한다.
+    # 남겨 두면 화면이 그 id 로 규칙을 열다 404 를 받는다.
+    def test_a_deleted_rule_is_not_reported_as_the_created_entry(self):
+        self.answer('fq16', questions.find('fq16').choices[0].label)
+        entry = self.entry('머지 승인 조건')
+        entry.deleted_at = timezone.now()
+        entry.save(update_fields=['deleted_at'])
+
+        items = self.client.get(self.base).data['questions']
+        item = next(i for i in items if i['templateKey'] == 'fq16')
+
+        self.assertEqual(item['status'], 'ANSWERED')
+        self.assertIsNone(item['entryId'])
 
     # --- 프로젝트 질문 ---
 

@@ -96,24 +96,29 @@ def _reply_expected(company, hours, now):
 # 대표를 기다리지 않는 카드의 단계. 핸드북에 근거가 있는 것부터 보여 준다.
 # 근거를 요구하지는 않는다. 규칙이 붙은 단계는 실측에서 17개 중 0개였다.
 # 검색된 규칙이 그 단계를 실제로 지배하는 경우가 드물기 때문이고, 그 판단은 맞다.
+# 지운 규칙은 근거로 치지 않는다. 인용을 남기려고 행을 지우지 않으므로
+# step.entry 에는 삭제된 규칙도 그대로 딸려 온다.
+def _can_do_item(step):
+    rule = step.entry if step.entry and step.entry.deleted_at is None else None
+
+    return {
+        'cardId': step.card_id,
+        'stepId': step.id,
+        'title': step.text_en or step.text,
+        'entryId': rule.id if rule else None,
+        'entryTitle': rule.title if rule else None,
+        'scopeName': rule.scope.name if rule else None,
+    }
+
+
 def _can_do(card_ids):
     steps = (
         Step.objects.filter(card_id__in=card_ids)
         .select_related('entry', 'entry__scope')
-        .annotate(has_rule=Q(entry__isnull=False))
+        .annotate(has_rule=Q(entry__isnull=False, entry__deleted_at__isnull=True))
         .order_by('-has_rule', 'card__deadline_at', 'card_id', 'ord')
     )
-    items = [
-        {
-            'cardId': step.card_id,
-            'stepId': step.id,
-            'title': step.text_en or step.text,
-            'entryId': step.entry_id,
-            'entryTitle': step.entry.title if step.entry else None,
-            'scopeName': step.entry.scope.name if step.entry else None,
-        }
-        for step in steps[:BUCKET_LIMIT]
-    ]
+    items = [_can_do_item(step) for step in steps[:BUCKET_LIMIT]]
 
     return items, steps.count()
 

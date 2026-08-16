@@ -124,9 +124,12 @@ def _resolution(company, week_start, week_end, sai_count):
 
 
 def _answer_reuse(company):
+    # 지운 규칙은 세지 않는다. 인용 행은 남겨 두므로 entry 를 타고 그대로 딸려 오는데,
+    # 방금 지운 규칙이 '많이 쓰인 규칙' 1위로 뜨면 삭제가 안 먹힌 것처럼 보인다.
     citations = Citation.objects.filter(
         company=company,
         entry__isnull=False,
+        entry__deleted_at__isnull=True,
         message__role=Message.Role.AI,
     )
     total = citations.count()
