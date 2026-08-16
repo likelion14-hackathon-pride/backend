@@ -5,6 +5,10 @@ from handbook.models import CompanyScope
 from .models import Connection, IngestionJob, Item
 
 
+LOCAL_FILE_MAX_SIZE = 20 * 1024 * 1024
+LOCAL_FILE_EXTENSIONS = {'.txt', '.md', '.pdf', '.docx'}
+
+
 class ChannelSerializer(serializers.ModelSerializer):
     externalId = serializers.CharField(source='external_id', read_only=True)
     scopeId = serializers.IntegerField(source='scope_id', read_only=True)
@@ -124,6 +128,45 @@ class RepositoryAddSerializer(serializers.Serializer):
 # 레포도 채널과 같이 기존 회사/프로젝트 범위 하나에 연결한다.
 class RepositoryScopeUpdateSerializer(ChannelScopeUpdateSerializer):
     pass
+
+
+# 로컬 파일 업로드 메타데이터
+class LocalFileUploadCreateSerializer(serializers.Serializer):
+    fileName = serializers.CharField(max_length=200, trim_whitespace=True)
+    mimeType = serializers.CharField(max_length=100, trim_whitespace=True)
+    size = serializers.IntegerField(min_value=1, max_value=LOCAL_FILE_MAX_SIZE)
+
+    def validate_fileName(self, value):
+        from pathlib import Path
+
+        if Path(value).name != value:
+            raise serializers.ValidationError('file name is invalid')
+        if Path(value).suffix.lower() not in LOCAL_FILE_EXTENSIONS:
+            raise serializers.ValidationError('file type is not supported')
+
+        return value
+
+
+class LocalFileSerializer(serializers.ModelSerializer):
+    fileName = serializers.CharField(source='label', read_only=True)
+    mimeType = serializers.CharField(source='mime_type', read_only=True)
+    size = serializers.IntegerField(source='byte_size', read_only=True)
+    status = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Item
+        fields = ['id', 'fileName', 'mimeType', 'size', 'status']
+
+    def get_status(self, obj):
+        if obj.last_synced_at:
+            return 'READY'
+
+        return 'PENDING_UPLOAD'
+
+
+class LocalFileUploadResultSerializer(serializers.Serializer):
+    sourceFile = LocalFileSerializer(read_only=True)
+    uploadTarget = serializers.URLField(read_only=True)
 
 
 class IngestionJobSerializer(serializers.ModelSerializer):
