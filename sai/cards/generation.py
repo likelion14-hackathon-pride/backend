@@ -419,7 +419,11 @@ def _build_card(client, company, document, channels, users):
 def generate_cards(company, documents=None):
     if documents is None:
         documents = RawDocument.objects.filter(
-            company=company, sync_state=RawDocument.SyncState.CURRENT
+            company=company,
+            sync_state__in=[
+                RawDocument.SyncState.CURRENT,
+                RawDocument.SyncState.CHANGED,
+            ],
         )
 
     documents = list(
