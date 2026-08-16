@@ -13,7 +13,8 @@ from qna.answering import find_risk_warnings
 from qna.serializers import AskResultSerializer
 from qna.services import ask, open_thread
 
-from .models import InstructionCard
+from .home import GROWTH_WEEKS, RESOLUTION_DAYS, home_for
+from .models import InstructionCard, Task
 from .queries import cards_for
 from .serializers import (
     CardAskSerializer,
@@ -21,6 +22,11 @@ from .serializers import (
     CardListSerializer,
     CardSerializer,
     CardUpdateSerializer,
+    HomeSerializer,
+    TaskCreateSerializer,
+    TaskListSerializer,
+    TaskSerializer,
+    TaskUpdateSerializer,
     TimingSerializer,
 )
 from .services import (
@@ -31,6 +37,7 @@ from .services import (
     related_rules,
 )
 from .timing import BUCKET_LIMIT, timing_for
+from .todos import TODO_SLOTS, todos_for
 
 COLUMN_PARAMETER = enum_parameter(
     'column', InstructionCard.Column,
@@ -157,6 +164,140 @@ class CardDetailView(APIView):
             CardDetailSerializer(_detailed(company, card_id)).data,
             status=status.HTTP_200_OK,
         )
+
+
+class HomeView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    @swagger_auto_schema(
+        operation_summary='팀원 홈',
+        operation_description=(
+            '홈 화면을 한 번에 그리는 데 필요한 값입니다. '
+            'readToday 는 오늘(회사 시각 기준) SAI 가 읽은 메시지와 만든 카드, '
+            '그리고 내가 답을 기다리는 질문 수입니다. '
+            'unread 는 아직 아무도 열어 보지 않은 지시이며 read_at 이 카드마다 하나라 회사 기준입니다. '
+            f'resolution 은 최근 {RESOLUTION_DAYS}일 동안 대표를 부르지 않고 끝난 답변의 비율, '
+            f'handbook.weekly 는 최근 {GROWTH_WEEKS}주의 확정 규칙 누적 수입니다. '
+            '시차 칩은 /timing 을 따로 부릅니다.'
+        ),
+        responses={
+            200: HomeSerializer(),
+            401: '인증되지 않음',
+            403: '회사 접근 권한 없음',
+            404: '회사를 찾을 수 없음',
+        },
+        tags=['Task'],
+    )
+    def get(self, request, company_id):
+        company = get_member_company(request.user, company_id)
+
+        return Response(
+            HomeSerializer(home_for(company, request.user)).data,
+            status=status.HTTP_200_OK,
+        )
+
+
+class TaskListCreateView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    @swagger_auto_schema(
+        operation_summary='할 일 목록',
+        operation_description=(
+            f'홈 화면의 할 일입니다. 미완료가 {TODO_SLOTS}칸보다 적으면 '
+            '나에게 배정된 Ready 카드에서 최신순으로 채워 넣습니다. '
+            '완료한 항목은 목록 아래로 내려가고 하루 뒤에 사라집니다. '
+            'origin 이 CARD 면 카드에서 담긴 것, SELF 면 직접 적은 것입니다. '
+            '카드에서 담긴 할 일을 완료해도 카드의 상태는 바뀌지 않습니다.'
+        ),
+        responses={
+            200: TaskListSerializer(),
+            401: '인증되지 않음',
+            403: '회사 접근 권한 없음',
+            404: '회사를 찾을 수 없음',
+        },
+        tags=['Task'],
+    )
+    def get(self, request, company_id):
+        company = get_member_company(request.user, company_id)
+        tasks = todos_for(company, request.user)
+
+        return Response(
+            {'items': TaskSerializer(tasks, many=True).data}, status=status.HTTP_200_OK
+        )
+
+    @swagger_auto_schema(
+        operation_summary='할 일 직접 추가',
+        operation_description='카드 없이 내가 적는 할 일입니다. origin 은 SELF 가 됩니다.',
+        request_body=TaskCreateSerializer,
+        responses={
+            201: TaskSerializer(),
+            400: '잘못된 요청',
+            401: '인증되지 않음',
+            403: '회사 접근 권한 없음',
+            404: '회사를 찾을 수 없음',
+        },
+        tags=['Task'],
+    )
+    def post(self, request, company_id):
+        company = get_member_company(request.user, company_id)
+        serializer = TaskCreateSerializer(
+            data=request.data, context={'company': company, 'user': request.user}
+        )
+        serializer.is_valid(raise_exception=True)
+        task = serializer.save()
+
+        return Response(TaskSerializer(task).data, status=status.HTTP_201_CREATED)
+
+
+class TaskDetailView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def _task(self, request, company_id, task_id):
+        company = get_member_company(request.user, company_id)
+
+        return get_object_or_404(
+            Task.objects.select_related('scope', 'card__document__author_identity'),
+            id=task_id, company=company, user=request.user,
+        )
+
+    @swagger_auto_schema(
+        operation_summary='할 일 수정 · 완료',
+        operation_description=(
+            'status 를 DONE 으로 보내면 완료입니다. 되돌리려면 TODO 로 보냅니다. '
+            '카드에서 담긴 할 일이어도 카드의 상태는 건드리지 않습니다.'
+        ),
+        request_body=TaskUpdateSerializer,
+        responses={
+            200: TaskSerializer(),
+            400: '잘못된 요청',
+            401: '인증되지 않음',
+            403: '회사 접근 권한 없음',
+            404: '회사 또는 할 일을 찾을 수 없음',
+        },
+        tags=['Task'],
+    )
+    def patch(self, request, company_id, task_id):
+        task = self._task(request, company_id, task_id)
+        serializer = TaskUpdateSerializer(task, data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        return Response(TaskSerializer(serializer.save()).data, status=status.HTTP_200_OK)
+
+    @swagger_auto_schema(
+        operation_summary='할 일 삭제',
+        operation_description='카드에서 담긴 할 일을 지워도 카드는 남습니다.',
+        responses={
+            204: '삭제됨',
+            401: '인증되지 않음',
+            403: '회사 접근 권한 없음',
+            404: '회사 또는 할 일을 찾을 수 없음',
+        },
+        tags=['Task'],
+    )
+    def delete(self, request, company_id, task_id):
+        self._task(request, company_id, task_id).delete()
+
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 class TimingView(APIView):
