@@ -11,7 +11,7 @@ from sources.models import Connection, Item
 from sources.slack import SlackError
 
 from .escalation import Addition, AdditionResult
-from .models import Escalation
+from .models import Escalation, Message, Thread
 
 SENT_TS = '1700000000.000100'
 
@@ -191,3 +191,27 @@ class AdditionTests(TestCase):
         names = [i['scopeName'] for i in self.client.get(self.base).data['items']]
 
         self.assertIn(None, names)
+
+    # --- 응답 거부 사유 ---
+
+    # 대표 화면은 SAI가 왜 답하지 않았는지를 먼저 보여 준다.
+    def test_the_list_carries_the_refusal_verdict(self):
+        thread = Thread.objects.create(company=self.company, user=self.member)
+        message = Message.objects.create(
+            company=self.company, thread=thread, role=Message.Role.AI,
+            verdict=Message.Verdict.NEEDS_DECISION,
+        )
+        Escalation.objects.create(
+            company=self.company, asked_by=self.member, origin_message=message,
+            question_en='Can I deploy during a hotfix?', draft_ko='핫픽스 배포 가능할까요?',
+        )
+
+        item = self.client.get(self.base).data['items'][0]
+
+        self.assertEqual(item['originVerdict'], 'NEEDS_DECISION')
+
+    # 카드 미정 항목에서 올라온 질문은 물어본 적이 없어 판정이 없다.
+    def test_a_blank_question_has_no_verdict(self):
+        self.escalation()
+
+        self.assertIsNone(self.client.get(self.base).data['items'][0]['originVerdict'])
