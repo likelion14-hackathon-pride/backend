@@ -7,6 +7,7 @@ from django.utils import timezone
 
 from .github_ingestion import run_github_ingestion
 from .ingestion import run_ingestion
+from .local_ingestion import run_local_ingestion
 from .models import Connection, IngestionJob, Item
 from .scheduling import enqueue_due_jobs
 
@@ -97,6 +98,8 @@ def run_job(job):
         runner = run_github_ingestion
     elif connection.kind == Connection.Kind.SLACK:
         runner = run_ingestion
+    elif connection.kind == Connection.Kind.LOCAL:
+        runner = run_local_ingestion
     else:
         return _fail(job, 'source_not_supported')
 
