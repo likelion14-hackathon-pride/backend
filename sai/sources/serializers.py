@@ -173,6 +173,31 @@ class LocalFileSerializer(serializers.ModelSerializer):
         fields = ['id', 'fileName', 'mimeType', 'size', 'status']
 
     def get_status(self, obj):
+        latest_job = (
+            IngestionJob.objects.filter(
+                company_id=obj.company_id,
+                item_ids__contains=[obj.id],
+            )
+            .order_by('-id')
+            .first()
+        )
+        if latest_job and latest_job.status in {
+            IngestionJob.Status.QUEUED,
+            IngestionJob.Status.RUNNING,
+        }:
+            return 'PROCESSING'
+
+        if latest_job and latest_job.status == IngestionJob.Status.FAILED:
+            return 'ERROR'
+
+        if latest_job and latest_job.status == IngestionJob.Status.PARTIAL:
+            item_failed = any(
+                error.get('itemId') == obj.id
+                for error in latest_job.errors or []
+            )
+            if item_failed:
+                return 'ERROR'
+
         if obj.last_synced_at:
             return 'READY'
 
