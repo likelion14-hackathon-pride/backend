@@ -4,10 +4,10 @@ from rest_framework import serializers
 
 from handbook.models import CompanyScope
 
+from .local_files import LOCAL_FILE_MAX_SIZE
 from .models import Connection, IngestionJob, Item
 
 
-LOCAL_FILE_MAX_SIZE = 20 * 1024 * 1024
 LOCAL_FILE_EXTENSIONS = {'.txt', '.md', '.pdf', '.docx'}
 LOCAL_FILE_MIME_TYPES = {
     '.txt': {'text/plain'},
