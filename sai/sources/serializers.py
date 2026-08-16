@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from rest_framework import serializers
 
 from handbook.models import CompanyScope
@@ -7,6 +9,12 @@ from .models import Connection, IngestionJob, Item
 
 LOCAL_FILE_MAX_SIZE = 20 * 1024 * 1024
 LOCAL_FILE_EXTENSIONS = {'.txt', '.md', '.pdf', '.docx'}
+LOCAL_FILE_MIME_TYPES = {
+    '.txt': {'text/plain'},
+    '.md': {'text/markdown', 'text/plain'},
+    '.pdf': {'application/pdf'},
+    '.docx': {'application/vnd.openxmlformats-officedocument.wordprocessingml.document'},
+}
 
 
 class ChannelSerializer(serializers.ModelSerializer):
@@ -137,14 +145,21 @@ class LocalFileUploadCreateSerializer(serializers.Serializer):
     size = serializers.IntegerField(min_value=1, max_value=LOCAL_FILE_MAX_SIZE)
 
     def validate_fileName(self, value):
-        from pathlib import Path
-
         if Path(value).name != value:
             raise serializers.ValidationError('file name is invalid')
         if Path(value).suffix.lower() not in LOCAL_FILE_EXTENSIONS:
             raise serializers.ValidationError('file type is not supported')
 
         return value
+
+    def validate(self, attrs):
+        extension = Path(attrs['fileName']).suffix.lower()
+        if attrs['mimeType'] not in LOCAL_FILE_MIME_TYPES[extension]:
+            raise serializers.ValidationError({
+                'mimeType': ['mime type does not match file extension'],
+            })
+
+        return attrs
 
 
 class LocalFileSerializer(serializers.ModelSerializer):
