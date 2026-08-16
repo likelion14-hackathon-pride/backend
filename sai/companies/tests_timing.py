@@ -9,7 +9,9 @@ from .timing import (
     WORKING,
     WorkingHours,
     add_working_minutes,
+    local_window,
     next_start,
+    overlap_hours,
     state,
     working_minutes_between,
 )
@@ -118,6 +120,55 @@ class WorkingMinutesTests(SimpleTestCase):
         self.assertEqual(
             working_minutes_between(ALWAYS, seoul(12, 20), seoul(12, 22)), 120
         )
+
+
+class LocalWindowTests(SimpleTestCase):
+    # 하노이는 서울보다 두 시간 느리다. 대표의 09~18 이 07~16 으로 읽힌다.
+    def test_owner_hours_read_from_hanoi(self):
+        self.assertEqual(
+            local_window(DAY_HOURS, 'Asia/Ho_Chi_Minh', seoul(12, 12)),
+            (time(7, 0), time(16, 0)),
+        )
+
+    def test_same_zone_is_unchanged(self):
+        self.assertEqual(
+            local_window(DAY_HOURS, 'Asia/Seoul', seoul(12, 12)),
+            (time(9, 0), time(18, 0)),
+        )
+
+    # 뉴욕에서는 대표 근무시간이 밤에 걸린다. 자정을 넘겨도 값이 나와야 한다.
+    def test_owner_hours_read_from_new_york(self):
+        start, end = local_window(DAY_HOURS, 'America/New_York', seoul(12, 12))
+
+        self.assertEqual((start, end), (time(20, 0), time(5, 0)))
+
+    # 뉴욕은 서머타임을 쓴다. 정수 오프셋으로 저장했다면 겨울에 한 시간 틀렸을 값이다.
+    def test_new_york_shifts_in_winter(self):
+        winter = datetime(2026, 1, 14, 12, 0, tzinfo=SEOUL)
+
+        self.assertEqual(
+            local_window(DAY_HOURS, 'America/New_York', winter),
+            (time(19, 0), time(4, 0)),
+        )
+
+
+class OverlapTests(SimpleTestCase):
+    def test_same_zone_overlaps_entirely(self):
+        self.assertEqual(overlap_hours(DAY_HOURS, 'Asia/Seoul', seoul(12, 12)), 9)
+
+    # 서울 09~18 은 하노이 07~16. 하노이 사람의 09~18 과 겹치는 구간은 09~16 이다.
+    def test_hanoi_overlaps_seven_hours(self):
+        self.assertEqual(overlap_hours(DAY_HOURS, 'Asia/Ho_Chi_Minh', seoul(12, 12)), 7)
+
+    def test_tokyo_overlaps_entirely(self):
+        self.assertEqual(overlap_hours(DAY_HOURS, 'Asia/Tokyo', seoul(12, 12)), 9)
+
+    # 반대편 지구와는 겹치는 시간이 없다. 이때 물으면 다음 근무일까지 기다린다.
+    def test_new_york_does_not_overlap(self):
+        self.assertEqual(overlap_hours(DAY_HOURS, 'America/New_York', seoul(12, 12)), 0)
+
+    def test_jakarta_overlaps_seven_hours(self):
+        self.assertEqual(overlap_hours(DAY_HOURS, 'Asia/Jakarta', seoul(12, 12)), 7)
 
 
 class AddWorkingMinutesTests(SimpleTestCase):
