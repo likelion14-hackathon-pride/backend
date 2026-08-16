@@ -5,6 +5,9 @@ from docx import Document
 from pypdf import PdfReader
 
 
+LOCAL_DOCUMENT_PART_SIZE = 4000
+
+
 class FileExtractionError(Exception):
     def __init__(self, code):
         self.code = code
@@ -63,3 +66,31 @@ def extract_file_text(file_name, data):
         raise FileExtractionError('empty_document')
 
     return text
+
+
+def split_file_text(text, part_size=LOCAL_DOCUMENT_PART_SIZE):
+    parts = []
+    current = ''
+
+    for line in text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+
+        line_parts = [
+            line[start:start + part_size]
+            for start in range(0, len(line), part_size)
+        ]
+        for line_part in line_parts:
+            candidate = f'{current}\n{line_part}'.strip() if current else line_part
+            if len(candidate) <= part_size:
+                current = candidate
+                continue
+
+            parts.append(current)
+            current = line_part
+
+    if current:
+        parts.append(current)
+
+    return parts

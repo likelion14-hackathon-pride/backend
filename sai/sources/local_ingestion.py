@@ -3,7 +3,7 @@ import hashlib
 from django.db import transaction
 from django.utils import timezone
 
-from .file_extraction import FileExtractionError, extract_file_text
+from .file_extraction import FileExtractionError, extract_file_text, split_file_text
 from .local_files import LocalFileStorageError, download_file
 from .models import IngestionJob, Item, RawDocument
 
@@ -12,14 +12,9 @@ def _content_hash(text):
     return hashlib.sha256(text.encode()).hexdigest()
 
 
-@transaction.atomic
-def _save_document(item, text):
-    external_ref = f'file:{item.external_id}'
+def _save_part(item, external_ref, text):
     content_hash = _content_hash(text)
-    document = RawDocument.objects.filter(
-        item=item,
-        external_ref=external_ref,
-    ).first()
+    document = RawDocument.objects.filter(item=item, external_ref=external_ref).first()
 
     if document is None:
         RawDocument.objects.create(
@@ -29,28 +24,47 @@ def _save_document(item, text):
             raw_text=text,
             content_hash=content_hash,
         )
-        state = 'created'
-    else:
-        is_changed = document.content_hash != content_hash
-        document.raw_text = text
-        document.content_hash = content_hash
+        return 'created'
 
-        if is_changed:
-            document.sync_state = RawDocument.SyncState.CHANGED
-            document.classified_as = RawDocument.ClassifiedAs.UNCLASSIFIED
-            document.classifier_version = None
-            document.card_version = None
-        elif document.sync_state == RawDocument.SyncState.REMOVED:
-            document.sync_state = RawDocument.SyncState.CURRENT
+    is_changed = document.content_hash != content_hash
+    document.raw_text = text
+    document.content_hash = content_hash
 
-        document.save()
-        state = 'changed' if is_changed else 'unchanged'
+    if is_changed:
+        document.sync_state = RawDocument.SyncState.CHANGED
+        document.classified_as = RawDocument.ClassifiedAs.UNCLASSIFIED
+        document.classifier_version = None
+        document.card_version = None
+    elif document.sync_state == RawDocument.SyncState.REMOVED:
+        document.sync_state = RawDocument.SyncState.CURRENT
 
-    item.item_count = 1
+    document.save()
+
+    return 'changed' if is_changed else 'unchanged'
+
+
+@transaction.atomic
+def _save_documents(item, text):
+    parts = split_file_text(text)
+    seen_refs = set()
+    result = {'created': 0, 'changed': 0, 'removed': 0, 'total': len(parts)}
+
+    for index, part in enumerate(parts):
+        external_ref = f'file:{item.external_id}:{index}'
+        seen_refs.add(external_ref)
+        state = _save_part(item, external_ref, part)
+        if state in result:
+            result[state] += 1
+
+    removed = RawDocument.objects.filter(item=item).exclude(external_ref__in=seen_refs)
+    result['removed'] = removed.exclude(sync_state=RawDocument.SyncState.REMOVED).count()
+    removed.update(sync_state=RawDocument.SyncState.REMOVED)
+
+    item.item_count = len(parts)
     item.last_synced_at = timezone.now()
     item.save(update_fields=['item_count', 'last_synced_at'])
 
-    return state
+    return result
 
 
 def ingest_local_file(item):
@@ -60,7 +74,7 @@ def ingest_local_file(item):
     data = download_file(item.storage_key, item.byte_size)
     text = extract_file_text(item.label, data)
 
-    return _save_document(item, text)
+    return _save_documents(item, text)
 
 
 def run_local_ingestion(job, connection):
