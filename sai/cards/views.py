@@ -7,7 +7,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from companies.access import get_member_company
-from config.filters import enum_parameter, filter_enum, filter_int, flag
+from config.filters import enum_parameter, filter_enum, filter_int, flag, int_parameter
 from config.pagination import CURSOR_PARAMETER, LIMIT_PARAMETER, paged_response
 from qna.answering import find_risk_warnings
 from qna.serializers import AskResultSerializer
@@ -43,9 +43,8 @@ COLUMN_PARAMETER = enum_parameter(
     'column', InstructionCard.Column,
     'WAITING / ANSWERED 는 질문 상태에서 나오므로 status 와 다릅니다.',
 )
-SCOPE_PARAMETER = openapi.Parameter(
-    'scopeId', openapi.IN_QUERY, type=openapi.TYPE_INTEGER,
-    description='프로젝트 지식공간 id. 그 프로젝트 카드만 봅니다.',
+SCOPE_PARAMETER = int_parameter(
+    'scopeId', '프로젝트 지식공간 id. 그 프로젝트 카드만 봅니다.'
 )
 MINE_PARAMETER = openapi.Parameter(
     'mine', openapi.IN_QUERY, type=openapi.TYPE_BOOLEAN,
