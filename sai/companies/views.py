@@ -1,3 +1,4 @@
+from django.utils import timezone
 from drf_yasg.utils import swagger_auto_schema
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
@@ -5,11 +6,13 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from accounts.models import Membership
+from accounts.profile import LOCATION_ZONES, JobRole, WorkLocation
 from accounts.serializers import CompanySerializer, MembershipListSerializer, MembershipSerializer
 from config.pagination import CURSOR_PARAMETER, LIMIT_PARAMETER, paged_response
 
 from .access import get_member_company, get_owner_company
-from .serializers import CompanySettingsSerializer
+from .serializers import CompanySettingsSerializer, ProfileOptionsSerializer
+from .timing import WorkingHours, local_window, overlap_hours
 
 
 class CompanyDetailView(APIView):
@@ -55,6 +58,60 @@ class CompanyMemberListView(APIView):
             .filter(company=company, left_at__isnull=True)
         )
         return paged_response(MembershipSerializer, members, request)
+
+
+class ProfileOptionsView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    @swagger_auto_schema(
+        operation_summary='근무 위치 · 담당 역할 선택지',
+        operation_description=(
+            '가입 직후 초기 설정 화면과 설정 모달이 쓰는 고정 목록입니다. '
+            '위치를 고르면 타임존이 함께 정해지므로 타임존을 따로 보내지 않습니다. '
+            'ownerHoursStart / ownerHoursEnd 는 대표 근무시간을 그 위치의 시계로 읽은 값이고, '
+            'overlapHours 는 양쪽이 같은 근무시간을 쓸 때 하루에 겹치는 시간입니다. '
+            '서머타임을 쓰는 위치는 조회 시점에 따라 값이 달라집니다.'
+        ),
+        responses={
+            200: ProfileOptionsSerializer(),
+            401: '인증되지 않음',
+            403: '회사 접근 권한 없음',
+            404: '회사를 찾을 수 없음',
+        },
+        tags=['User'],
+    )
+    def get(self, request, company_id):
+        company = get_member_company(request.user, company_id)
+        now = timezone.now()
+        hours = WorkingHours(
+            company.timezone,
+            company.working_hours_start,
+            company.working_hours_end,
+            company.working_hours_enabled,
+        )
+
+        locations = []
+        for location in WorkLocation:
+            zone = LOCATION_ZONES[location]
+            start, end = local_window(hours, zone, now)
+            locations.append({
+                'value': location.value,
+                'label': location.label,
+                'timezone': zone,
+                'ownerHoursStart': start,
+                'ownerHoursEnd': end,
+                'overlapHours': overlap_hours(hours, zone, now),
+            })
+
+        return Response(
+            ProfileOptionsSerializer({
+                'locations': locations,
+                'roles': [
+                    {'value': role.value, 'label': role.label} for role in JobRole
+                ],
+            }).data,
+            status=status.HTTP_200_OK,
+        )
 
 
 class CompanySettingsView(APIView):

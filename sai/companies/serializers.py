@@ -32,3 +32,24 @@ class CompanySettingsSerializer(serializers.ModelSerializer):
             )
 
         return attrs
+
+
+class WorkLocationSerializer(serializers.Serializer):
+    value = serializers.CharField()
+    label = serializers.CharField()
+    timezone = serializers.CharField()
+    # 대표 근무시간을 이 위치의 벽시계로 읽은 값.
+    ownerHoursStart = serializers.TimeField()
+    ownerHoursEnd = serializers.TimeField()
+    # 양쪽이 같은 근무시간을 쓴다고 볼 때 하루에 겹치는 시간.
+    overlapHours = serializers.FloatField()
+
+
+class JobRoleSerializer(serializers.Serializer):
+    value = serializers.CharField()
+    label = serializers.CharField()
+
+
+class ProfileOptionsSerializer(serializers.Serializer):
+    locations = WorkLocationSerializer(many=True)
+    roles = JobRoleSerializer(many=True)
