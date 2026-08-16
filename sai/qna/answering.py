@@ -181,10 +181,17 @@ def retrieve_cases(vector, company, scope_ids=None):
     return cases
 
 
+# 답변 생성과 같은 방식으로 실패를 알린다. 감싸지 않으면 임베딩이 죽었을 때
+# 호출부가 OpenAI 예외를 그대로 받아 500 이 나간다.
 def embed_question(client, question):
-    return client.embeddings.create(
-        model=settings.OPENAI_EMBEDDING_MODEL, input=[question]
-    ).data[0].embedding
+    try:
+        return client.embeddings.create(
+            model=settings.OPENAI_EMBEDDING_MODEL, input=[question]
+        ).data[0].embedding
+    except RateLimitError as exc:
+        raise AnswerRateLimited(_retry_after(exc)) from exc
+    except (OpenAIError, ValueError) as exc:
+        raise RuntimeError(f'embed_failed: {type(exc).__name__}') from exc
 
 
 # 같은 벡터를 여러 번 쓴다. 사례를 붙이고 범위를 넓히는 데 임베딩 호출이 늘지 않는다.
