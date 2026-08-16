@@ -50,7 +50,8 @@ class CompanyScopeCreateSerializer(serializers.ModelSerializer):
 
 
 class HandbookEntryCreateSerializer(serializers.ModelSerializer):
-    ruleEn = serializers.CharField(source='body_en')
+    # 대표는 한국어로만 적는다. 영어는 저장할 때 만들어진다.
+    ruleEn = serializers.CharField(source='body_en', required=False, allow_blank=True)
     originalKo = serializers.CharField(source='body_ko')
     scopeId = serializers.PrimaryKeyRelatedField(source='scope', queryset=CompanyScope.objects.all())
 
@@ -66,6 +67,7 @@ class HandbookEntryCreateSerializer(serializers.ModelSerializer):
 
     def create(self, validated_data):
         company = self.context['company']
+        validated_data['body_en'] = validated_data.get('body_en') or None
 
         return HandbookEntry.objects.create(
             company=company, status=HandbookEntry.Status.CONFIRMED,

@@ -82,6 +82,11 @@ class HandbookEntryListCreateView(APIView):
 
     @swagger_auto_schema(
         operation_summary='핸드북 항목 직접 추가',
+        operation_description=(
+            '질문을 기다리지 않고 규칙을 바로 등록합니다. 저장 즉시 확정 상태가 됩니다. '
+            'ruleEn 을 생략하면 한국어 원문에서 영어 표시문을 만들어 채웁니다. '
+            '저장과 함께 임베딩까지 해야 팀원 질문의 답변 근거로 쓰입니다.'
+        ),
         request_body=HandbookEntryCreateSerializer,
         responses={
             201: HandbookEntrySerializer(),
@@ -97,9 +102,10 @@ class HandbookEntryListCreateView(APIView):
         serializer = HandbookEntryCreateSerializer(data=request.data, context={'company': company})
         serializer.is_valid(raise_exception=True)
         entry = serializer.save()
-        response_serializer = HandbookEntrySerializer(entry)
+        # 번역과 임베딩이 없으면 확정 상태여도 검색에 걸리지 않아 답변에 쓰이지 않는다.
+        finalize_entries([entry])
 
-        return Response(response_serializer.data, status=status.HTTP_201_CREATED)
+        return Response(HandbookEntrySerializer(entry).data, status=status.HTTP_201_CREATED)
 
 
 class HandbookEntryDetailView(APIView):
