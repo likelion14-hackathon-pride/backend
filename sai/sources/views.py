@@ -58,7 +58,7 @@ from .services import (
     remove_repository,
 )
 from .github import GitHubError
-from .github_webhook import verify_github_signature
+from .github_webhook import handle_github_event, verify_github_signature
 from .slack import SlackError
 from .worker import drain
 from .webhook import (
@@ -84,11 +84,25 @@ def github_events(request):
         data = json.loads(request.body)
     except json.JSONDecodeError:
         return HttpResponseBadRequest()
+    if not isinstance(data, dict):
+        return HttpResponseBadRequest()
+
+    event_name = request.headers.get('X-GitHub-Event', '')
+    try:
+        job = handle_github_event(event_name, data)
+    except Exception:
+        # 실패를 500으로 응답하면 같은 이벤트가 반복된다. 다음 정기 수집이 놓친 변경을 보완한다.
+        logger.exception(
+            'GitHub 웹훅 처리 실패 delivery=%s',
+            request.headers.get('X-GitHub-Delivery', ''),
+        )
+        job = None
 
     return JsonResponse({
         'ok': True,
-        'event': request.headers.get('X-GitHub-Event', ''),
+        'event': event_name,
         'deliveryId': request.headers.get('X-GitHub-Delivery', ''),
+        'jobId': job.id if job else None,
     })
 
 
