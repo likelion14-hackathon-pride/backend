@@ -35,3 +35,17 @@ Write it in Korean, as that employee would write it. Polite workplace Korean, on
 - Do not invent details. If the English question is vague, keep the Korean question equally narrow.
 
 Return only the question text."""
+
+
+ADDITION_PROMPT = """A foreign employee is sending a Korean question to their company owner.
+SAI already wrote the main question in Korean. These are extra lines the employee added in their
+own words, in their own language.
+
+Each line you receive becomes one Korean sentence in the same message, in the same order.
+
+- Match the register of a message to one's employer: polite 합니다체, direct, no honorific padding.
+- Do not translate word for word. Write what a Korean employee would actually write.
+- Do not add anything the employee did not say. Do not merge, split, or summarise lines.
+- Leave untouched: channel names (#dev), tool and product names, file names, code, URLs,
+  numbers, and times.
+- Return one line per index you received, using the same index."""

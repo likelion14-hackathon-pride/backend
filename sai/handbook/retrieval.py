@@ -1,6 +1,7 @@
 from pgvector.django import CosineDistance
 
 from .models import HandbookEntry
+from .queries import SOURCE_PREFETCH
 
 DEFAULT_LIMIT = 5
 DEFAULT_MAX_DISTANCE = 0.85
@@ -12,7 +13,7 @@ def search_rules(vector, company, scope_ids=None, limit=DEFAULT_LIMIT,
                  max_distance=DEFAULT_MAX_DISTANCE):
     entries = HandbookEntry.objects.filter(
         company=company, status=HandbookEntry.Status.CONFIRMED
-    ).select_related('scope')
+    ).select_related('scope').prefetch_related(SOURCE_PREFETCH)
     if scope_ids is not None:
         entries = entries.filter(scope_id__in=scope_ids)
 

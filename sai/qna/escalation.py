@@ -8,7 +8,7 @@ from sources.models import Connection
 from sources.slack import SlackClient, SlackError
 from sources.text import normalize_slack_text
 
-from .prompts import BLANK_PROMPT, JUDGE_PROMPT
+from .prompts import ADDITION_PROMPT, BLANK_PROMPT, JUDGE_PROMPT
 
 
 # 카드의 미정 항목을 대표에게 보낼 한국어 질문으로 바꾼다.
@@ -62,13 +62,59 @@ def get_slack_connection(company):
     return connection
 
 
+class Addition(BaseModel):
+    index: int
+    text: str
+
+
+class AdditionResult(BaseModel):
+    lines: list[Addition]
+
+
+# 팀원이 자기 언어로 덧붙인 줄을 대표가 읽을 한국어 문장으로 바꾼다.
+# 초안과 같은 말투여야 한 사람이 쓴 메시지로 읽힌다.
+def translate_additions(lines):
+    lines = [line.strip() for line in lines or [] if line and line.strip()]
+    if not lines:
+        return []
+
+    try:
+        completion = _get_client().chat.completions.parse(
+            model=settings.OPENAI_TRANSLATOR_MODEL,
+            messages=[
+                {'role': 'system', 'content': ADDITION_PROMPT},
+                {
+                    'role': 'user',
+                    'content': '\n'.join(
+                        f'[{index}] {line}' for index, line in enumerate(lines)
+                    ),
+                },
+            ],
+            response_format=AdditionResult,
+            temperature=0,
+        )
+    except (OpenAIError, ValueError) as exc:
+        raise RuntimeError(f'addition_failed: {type(exc).__name__}') from exc
+
+    korean = {
+        item.index: item.text.strip()
+        for item in completion.choices[0].message.parsed.lines
+    }
+
+    # 번역이 빠진 줄은 원문 그대로 보낸다. 팀원이 적은 것이 소리 없이 사라지면 안 된다.
+    return [korean.get(index) or line for index, line in enumerate(lines)]
+
+
 # 대표에게 보낼 문구. 질문자가 누구인지와 왜 묻는지가 보여야 답이 잘 온다.
-def build_message(escalation):
+# 덧붙인 줄은 초안과 나란히 인용 안에 들어간다. 한 사람이 이어서 쓴 것처럼 읽혀야 한다.
+def build_message(escalation, additions=()):
     asker = escalation.asked_by.display_name
+    body = [*(escalation.draft_ko or '').splitlines(), *additions]
+    quoted = '\n'.join(f'> {line}' for line in body if line.strip())
 
     return (
         f'*{asker}* 님이 물었는데 핸드북에 근거가 없어 확인 요청드립니다.\n\n'
-        f'> {escalation.draft_ko}\n\n'
+        f'{quoted}\n\n'
         f'_답장해 주시면 SAI가 정리해서 전달합니다. 스레드로 달아도 되고 채널에 그냥 쓰셔도 됩니다._'
     )
 
@@ -86,9 +132,9 @@ def parse_thread_ref(thread_ref):
 
 
 # 슬랙 채널에 질문을 올린다. 응답 ts를 스레드 참조로 저장해 두었다가 답변을 되받는다.
-def send_to_slack(escalation, item):
+def send_to_slack(escalation, item, additions=()):
     connection = get_slack_connection(escalation.company)
-    text = build_message(escalation)
+    text = build_message(escalation, additions)
     response = SlackClient(connection.bot_token).post_message(item.external_id, text)
 
     escalation.sent_text = text

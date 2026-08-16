@@ -2,10 +2,13 @@ from django.core.exceptions import ImproperlyConfigured
 from django.db import transaction
 from django.utils import timezone
 
-from handbook.models import CompanyScope, HandbookEntry
+from handbook.models import CompanyScope, HandbookEntry, HandbookEvidence
 
 from . import questions
 from .models import Question
+
+# 대표 확인 답변(질문 자산화)과 같은 자리에 쓰는 출처 이름.
+DAY0_SOURCE = 'Day 0 기본 규칙'
 
 
 # 답변에서 만든 규칙임을 표시한다. 다시 답하면 같은 항목을 덮어쓴다.
@@ -67,6 +70,18 @@ def build_entry(company, spec, answer, scope):
             'embedding_ko': None,
             'embedding_en': None,
             'embedded_at': None,
+        },
+    )
+    # 소스에서 뽑은 것이 아니라 대표가 직접 답한 것이다. 어디서 왔는지 남기지 않으면
+    # 팀원이 출처를 눌렀을 때 빈 화면이 뜬다.
+    HandbookEvidence.objects.update_or_create(
+        entry=entry,
+        tag=HandbookEvidence.Tag.OWNER,
+        defaults={
+            'company': company,
+            'quote': body_ko,
+            'source_label': DAY0_SOURCE,
+            'occurred_at': timezone.now(),
         },
     )
 

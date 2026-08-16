@@ -1,4 +1,5 @@
 from django.utils import timezone
+from drf_yasg.utils import swagger_serializer_method
 from rest_framework import serializers
 
 from .finalizing import mark_stale
@@ -73,6 +74,34 @@ class HandbookEntryCreateSerializer(serializers.ModelSerializer):
         )
 
 
+# 항목이 어디서 왔는지. 접힌 행에 한 줄로 보여 주고, 누르면 원문으로 간다.
+# 근거가 여럿이면 가장 이른 것을 대표로 쓰고 나머지는 count 로 알린다.
+class EntrySourceSerializer(serializers.Serializer):
+    tag = serializers.CharField()
+    label = serializers.CharField(allow_null=True)
+    speakerName = serializers.CharField(allow_null=True)
+    permalink = serializers.CharField(allow_null=True)
+    occurredAt = serializers.DateTimeField(allow_null=True)
+    count = serializers.IntegerField()
+
+
+def entry_source(entry):
+    evidences = list(entry.evidences.all())
+    if not evidences:
+        return None
+
+    first = evidences[0]
+
+    return {
+        'tag': first.tag,
+        'label': first.source_label,
+        'speakerName': first.speaker_name,
+        'permalink': first.permalink,
+        'occurredAt': first.occurred_at,
+        'count': len(evidences),
+    }
+
+
 class HandbookEntrySerializer(serializers.ModelSerializer):
     companyId = serializers.IntegerField(source='company_id', read_only=True)
     scopeId = serializers.IntegerField(source='scope_id', read_only=True)
@@ -83,6 +112,7 @@ class HandbookEntrySerializer(serializers.ModelSerializer):
     originalKo = serializers.CharField(source='body_ko', read_only=True)
     questionCount = serializers.IntegerField(source='ask_count', read_only=True)
     sourceType = serializers.CharField(source='origin', read_only=True)
+    source = serializers.SerializerMethodField()
     reviewStatus = serializers.CharField(source='review_status', read_only=True)
     reviewedAt = serializers.DateTimeField(source='reviewed_at', read_only=True)
     translatedAt = serializers.DateTimeField(source='translated_at', read_only=True)
@@ -108,11 +138,16 @@ class HandbookEntrySerializer(serializers.ModelSerializer):
             'confidence',
             'questionCount',
             'sourceType',
+            'source',
             'translatedAt',
             'embeddedAt',
             'createdAt',
             'updatedAt',
         ]
+
+    @swagger_serializer_method(serializer_or_field=EntrySourceSerializer)
+    def get_source(self, obj):
+        return entry_source(obj)
 
 
 class HandbookEntryListSerializer(serializers.Serializer):
