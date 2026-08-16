@@ -106,6 +106,8 @@ def _verify_quote(quote, document, channels, users):
 def _entry_origin(document):
     if document.item.connection.kind == 'GITHUB':
         return HandbookEntry.Origin.GITHUB
+    if document.item.connection.kind == 'LOCAL':
+        return HandbookEntry.Origin.FILE
 
     return HandbookEntry.Origin.SLACK
 
@@ -113,6 +115,8 @@ def _entry_origin(document):
 def _evidence_tag(document):
     if document.item.connection.kind == 'GITHUB':
         return HandbookEvidence.Tag.GITHUB
+    if document.item.connection.kind == 'LOCAL':
+        return HandbookEvidence.Tag.FILE
 
     return HandbookEvidence.Tag.SLACK
 
@@ -260,7 +264,11 @@ def _prune_stale_drafts(company, entries):
     HandbookEntry.objects.filter(
         company=company,
         status=HandbookEntry.Status.DRAFT,
-        origin__in=[HandbookEntry.Origin.SLACK, HandbookEntry.Origin.GITHUB],
+        origin__in=[
+            HandbookEntry.Origin.SLACK,
+            HandbookEntry.Origin.GITHUB,
+            HandbookEntry.Origin.FILE,
+        ],
         # 보류는 대표가 의도적으로 남겨 둔 것이라 지우면 안 된다.
         reviewed_at__isnull=True,
     ).exclude(id__in=[entry.id for entry in entries]).delete()
