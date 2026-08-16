@@ -40,6 +40,8 @@ from .serializers import (
     IngestionJobSerializer,
     GitHubConnectionCreateSerializer,
     GitHubConnectionResultSerializer,
+    LocalFileUploadCreateSerializer,
+    LocalFileUploadResultSerializer,
     RepositoryAddSerializer,
     RepositoryListSerializer,
     RepositoryScopeUpdateSerializer,
@@ -52,6 +54,7 @@ from .services import (
     clear_connection_error,
     connect_github,
     connect_slack,
+    create_local_file,
     disconnect,
     list_available_channels,
     list_available_repositories,
@@ -304,6 +307,43 @@ class SourceConnectionDetailView(APIView):
         disconnect(get_connection(company, connection_id))
 
         return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class SourceFileListCreateView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    @swagger_auto_schema(
+        operation_summary='로컬 파일 업로드 메타 생성',
+        operation_description=(
+            '파일 정보를 저장하고 S3에 직접 업로드할 수 있는 15분 유효 URL을 반환합니다.'
+        ),
+        request_body=LocalFileUploadCreateSerializer,
+        responses={
+            201: LocalFileUploadResultSerializer(),
+            400: '잘못된 파일 정보',
+            401: '인증되지 않음',
+            403: 'Owner 권한 없음',
+            404: '회사를 찾을 수 없음',
+        },
+        tags=['Source'],
+    )
+    def post(self, request, company_id):
+        company = get_owner_company(request.user, company_id)
+        serializer = LocalFileUploadCreateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        item, upload_target = create_local_file(
+            company,
+            serializer.validated_data['fileName'],
+            serializer.validated_data['mimeType'],
+            serializer.validated_data['size'],
+        )
+        response_serializer = LocalFileUploadResultSerializer({
+            'sourceFile': item,
+            'uploadTarget': upload_target,
+        })
+
+        return Response(response_serializer.data, status=status.HTTP_201_CREATED)
 
 
 class SourceChannelListView(APIView):
