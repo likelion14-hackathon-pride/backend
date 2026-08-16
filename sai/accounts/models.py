@@ -5,6 +5,8 @@ from django.contrib.auth.models import (
 )
 from django.db import models
 
+from .profile import JobRole, WorkLocation
+
 class UserManager(BaseUserManager):
     def create_user(self, email, password=None, **extra):
         if not email:
@@ -27,6 +29,14 @@ class User(AbstractBaseUser, PermissionsMixin):
     last_seen_at = models.DateTimeField(null=True, blank=True)
     display_name = models.CharField(max_length=60)
     ui_language = models.CharField(max_length=2, default='ko')
+    # 고른 근무 위치가 타임존을 정한다. 시각 계산은 timezone 만 읽는다.
+    # 비어 있으면 아직 초기 설정을 하지 않은 것이다. 별도 완료 플래그를 두지 않는다.
+    work_location = models.CharField(
+        max_length=10, choices=WorkLocation.choices, null=True, blank=True
+    )
+    job_role = models.CharField(
+        max_length=10, choices=JobRole.choices, null=True, blank=True
+    )
     timezone = models.CharField(max_length=40, default='Asia/Seoul')
 
     objects = UserManager()

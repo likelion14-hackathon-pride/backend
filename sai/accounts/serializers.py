@@ -6,10 +6,10 @@ from rest_framework import serializers
 
 from companies.models import Company
 from companies.utils import generate_company_code
-from config.fields import TimeZoneField
 from handbook.services import seed_default_scopes
 
 from .models import Membership
+from .profile import JobRole, WorkLocation, zone_of
 
 User = get_user_model()
 
@@ -115,29 +115,43 @@ class AuthSerializer(serializers.Serializer):
 class UserSerializer(serializers.ModelSerializer):
     name = serializers.CharField(source='display_name', read_only=True)
     locale = serializers.CharField(source='ui_language', read_only=True)
+    location = serializers.CharField(source='work_location', read_only=True)
+    role = serializers.CharField(source='job_role', read_only=True)
 
     class Meta:
         model = User
-        fields = ['id', 'email', 'name', 'locale', 'timezone']
+        fields = ['id', 'email', 'name', 'locale', 'location', 'role', 'timezone']
 
 
-# 회사 타임존은 대표가 정하지만 읽는 사람은 다른 나라에 있다.
-# 본인이 고칠 수 없으면 시차 화면의 '내 시각'이 영영 회사 시각과 같다.
+# 이름·근무 위치·담당 역할. 가입 직후 초기 설정 화면과 설정 모달이 같은 값을 쓴다.
+# 타임존을 직접 받지 않는다. 위치가 타임존을 정하므로 두 갈래로 받으면 어긋난다.
 class ProfileUpdateSerializer(serializers.Serializer):
+    name = serializers.CharField(source='display_name', max_length=60, required=False)
+    location = serializers.ChoiceField(
+        source='work_location', choices=WorkLocation.choices, required=False
+    )
+    role = serializers.ChoiceField(
+        source='job_role', choices=JobRole.choices, required=False
+    )
     locale = serializers.ChoiceField(
         source='ui_language', choices=['ko', 'en'], required=False
     )
-    timezone = TimeZoneField(required=False)
 
     def validate(self, attrs):
         if not attrs:
-            raise serializers.ValidationError('locale or timezone is required')
+            raise serializers.ValidationError(
+                'name, location, role or locale is required'
+            )
 
         return attrs
 
     def update(self, instance, validated_data):
         for field, value in validated_data.items():
             setattr(instance, field, value)
+        # 위치를 바꾸면 시각도 따라 바뀐다. 여기서 같이 쓰지 않으면 옛 시각이 남는다.
+        if 'work_location' in validated_data:
+            instance.timezone = zone_of(validated_data['work_location'])
+            validated_data['timezone'] = instance.timezone
         instance.save(update_fields=list(validated_data))
 
         return instance
