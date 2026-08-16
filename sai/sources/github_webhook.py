@@ -35,18 +35,22 @@ def _needs_collection(event_name, data):
     return data.get('action') in SUPPORTED_ACTIONS.get(event_name, set())
 
 
-def _find_item(data):
+def find_github_connection(data):
     installation_id = (data.get('installation') or {}).get('id')
-    repository_id = (data.get('repository') or {}).get('id')
-    if installation_id is None or repository_id is None:
+    if installation_id is None:
         return None
 
-    connection = Connection.objects.filter(
+    return Connection.objects.filter(
         kind=Connection.Kind.GITHUB,
         external_workspace_id=str(installation_id),
         disconnected_at__isnull=True,
     ).first()
-    if connection is None:
+
+
+def _find_item(data):
+    connection = find_github_connection(data)
+    repository_id = (data.get('repository') or {}).get('id')
+    if connection is None or repository_id is None:
         return None
 
     return Item.objects.filter(
