@@ -47,9 +47,10 @@ class HomeTests(TestCase):
             occurred_at=occurred_at or timezone.now(),
         )
 
-    def card(self, ref='1.1', **extra):
+    def card(self, ref='1.1', occurred_at=None, **extra):
         return InstructionCard.objects.create(
-            company=self.company, scope=self.project, document=self.document(ref),
+            company=self.company, scope=self.project,
+            document=self.document(ref, occurred_at),
             purpose='결제 실패 로그의 원인을 파악한다',
             purpose_en='Find the cause of the payment failures', **extra,
         )
@@ -89,6 +90,25 @@ class HomeTests(TestCase):
         self.document(ref='b.1', occurred_at=timezone.now() - timedelta(days=1))
 
         self.assertEqual(self.get()['readToday']['messages'], 0)
+
+    # 어제 온 지시를 오늘 처리해도 오늘 읽은 것은 아니다.
+    # 만든 시각으로 세면 원문 0건인데 카드 1건이 나온다.
+    def test_a_card_made_today_from_an_old_message_is_not_today(self):
+        self.card(ref='b.2', occurred_at=timezone.now() - timedelta(days=1))
+
+        read = self.get()['readToday']
+
+        self.assertEqual(read['messages'], 0)
+        self.assertEqual(read['cards'], 0)
+
+    # 카드가 된 것은 오늘 들어온 원문의 부분집합이다.
+    def test_cards_never_exceed_messages(self):
+        self.card(ref='b.3')
+        self.document(ref='b.4')
+
+        read = self.get()['readToday']
+
+        self.assertLessEqual(read['cards'], read['messages'])
 
     # 남이 보낸 질문을 내가 기다릴 이유가 없다.
     def test_waiting_counts_only_my_questions(self):

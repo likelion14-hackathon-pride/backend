@@ -32,13 +32,19 @@ def _start_of_day(company, now):
 
 # 오늘 SAI 가 읽고 처리한 양. 회사 전체의 상태다.
 # 기다리는 것만 개인 것이다. 남이 보낸 질문을 내가 기다릴 이유가 없다.
+#
+# 두 숫자는 '오늘 들어온 원문 N건 중 M건이 카드가 됐다'는 한 묶음이라
+# 같은 시계를 봐야 한다. 카드를 만든 시각으로 세면 어제 밀린 것을 오늘 처리했을 때
+# 원문 0건인데 카드 4건이 나온다.
 def _read_today(company, user, since):
     return {
         'messages': RawDocument.objects.filter(
             company=company, occurred_at__gte=since
         ).count(),
         'cards': InstructionCard.objects.filter(
-            company=company, created_at__gte=since, duplicate_of__isnull=True
+            company=company,
+            document__occurred_at__gte=since,
+            duplicate_of__isnull=True,
         ).count(),
         'waiting': Escalation.objects.filter(
             company=company, asked_by=user, status=Escalation.Status.SENT

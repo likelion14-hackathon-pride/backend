@@ -47,6 +47,7 @@ from .serializers import (
     GitHubConnectionCreateSerializer,
     GitHubConnectionResultSerializer,
     LocalFileListSerializer,
+    LocalFileSerializer,
     LocalFileUploadCreateSerializer,
     LocalFileUploadResultSerializer,
     RepositoryAddSerializer,
