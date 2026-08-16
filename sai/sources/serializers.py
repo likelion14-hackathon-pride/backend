@@ -5,7 +5,7 @@ from rest_framework import serializers
 from handbook.models import CompanyScope
 
 from .local_files import LOCAL_FILE_MAX_SIZE
-from .models import Connection, IngestionJob, Item
+from .models import Connection, IngestionJob, Item, RawDocument
 
 
 LOCAL_FILE_EXTENSIONS = {'.txt', '.md', '.pdf', '.docx'}
@@ -368,3 +368,59 @@ class GitHubConnectionCreateSerializer(serializers.Serializer):
             raise serializers.ValidationError('private key must be a PEM file')
 
         return private_key + '\n'
+
+
+class ChannelSummarySerializer(serializers.ModelSerializer):
+    scopeId = serializers.IntegerField(source='scope_id', read_only=True)
+    scopeName = serializers.CharField(source='scope.name', read_only=True, default=None)
+    scopeKind = serializers.CharField(source='scope.kind', read_only=True, default=None)
+    unreadCount = serializers.IntegerField(source='unread_count', read_only=True)
+    lastMessageAt = serializers.DateTimeField(source='last_message_at', read_only=True)
+
+    class Meta:
+        model = Item
+        fields = [
+            'id', 'label', 'scopeId', 'scopeName', 'scopeKind',
+            'unreadCount', 'lastMessageAt',
+        ]
+
+
+class ChannelSummaryListSerializer(serializers.Serializer):
+    items = ChannelSummarySerializer(many=True)
+
+
+class ChannelMessageSerializer(serializers.ModelSerializer):
+    author = serializers.CharField(
+        source='author_identity.external_handle', read_only=True, default=None
+    )
+    isBot = serializers.BooleanField(
+        source='author_identity.is_bot', read_only=True, default=False
+    )
+    body = serializers.CharField(source='raw_text', read_only=True)
+    occurredAt = serializers.DateTimeField(source='occurred_at', read_only=True)
+    # 카드가 있으면 지시다. 없으면 맥락일 뿐 할 일이 아니다.
+    isInstruction = serializers.SerializerMethodField()
+    cardId = serializers.SerializerMethodField()
+
+    class Meta:
+        model = RawDocument
+        fields = [
+            'id', 'author', 'isBot', 'body', 'occurredAt',
+            'isInstruction', 'cardId', 'permalink',
+        ]
+
+    def _card(self, obj):
+        return next(iter(obj.instruction_cards.all()), None)
+
+    def get_isInstruction(self, obj):
+        return self._card(obj) is not None
+
+    def get_cardId(self, obj):
+        card = self._card(obj)
+
+        return card and card.id
+
+
+class ChannelMessageListSerializer(serializers.Serializer):
+    items = ChannelMessageSerializer(many=True)
+    nextCursor = serializers.CharField(allow_null=True)

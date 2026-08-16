@@ -2,6 +2,7 @@ import json
 import logging
 
 from django.conf import settings
+from django.db.models import F
 from django.shortcuts import get_object_or_404
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_POST
@@ -14,8 +15,8 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from companies.access import get_owner_company
-from config.filters import enum_parameter, filter_enum
+from companies.access import get_member_company, get_owner_company
+from config.filters import enum_parameter, filter_enum, filter_int, int_parameter
 from config.pagination import (
     CURSOR_PARAMETER,
     LIMIT_PARAMETER,
@@ -24,6 +25,7 @@ from config.pagination import (
 )
 
 from .models import Connection, IngestionJob, Item
+from .queries import channels_for, messages_in
 from .serializers import (
     AvailableChannelListSerializer,
     AvailableChannelSerializer,
@@ -31,8 +33,12 @@ from .serializers import (
     AvailableRepositorySerializer,
     ChannelAddSerializer,
     ChannelListSerializer,
+    ChannelMessageListSerializer,
+    ChannelMessageSerializer,
     ChannelScopeUpdateSerializer,
     ChannelSerializer,
+    ChannelSummaryListSerializer,
+    ChannelSummarySerializer,
     ConnectionListSerializer,
     ConnectionSerializer,
     IngestionJobCreateSerializer,
@@ -830,3 +836,71 @@ class IngestionJobDetailView(APIView):
         serializer = IngestionJobSerializer(job)
 
         return Response(serializer.data, status=status.HTTP_200_OK)
+
+
+SCOPE_PARAMETER = int_parameter(
+    'scopeId', '프로젝트 지식공간 id. 그 프로젝트 채널만 봅니다.'
+)
+
+
+class ChannelSummaryListView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    @swagger_auto_schema(
+        operation_summary='슬랙 채널 목록',
+        operation_description=(
+            '팀원이 읽는 채널 목록입니다. 대표가 수집 대상을 관리하는 목록과 달리 '
+            '연결에 묶이지 않고 살아 있는 채널만 나옵니다. '
+            'unreadCount 는 아직 아무도 열어 보지 않은 지시 카드 수입니다. '
+            '메시지 단위 읽음은 저장하지 않으므로 안 읽은 메시지 수가 아닙니다.'
+        ),
+        manual_parameters=[SCOPE_PARAMETER],
+        responses={
+            200: ChannelSummaryListSerializer(),
+            400: '잘못된 요청',
+            401: '인증되지 않음',
+            403: '회사 접근 권한 없음',
+            404: '회사를 찾을 수 없음',
+        },
+        tags=['Source'],
+    )
+    def get(self, request, company_id):
+        company = get_member_company(request.user, company_id)
+        channels = filter_int(channels_for(company), request, 'scopeId', 'scope_id')
+
+        return Response(
+            {
+                'items': ChannelSummarySerializer(
+                    channels.order_by(F('last_message_at').desc(nulls_last=True), '-id'),
+                    many=True,
+                ).data
+            },
+            status=status.HTTP_200_OK,
+        )
+
+
+class ChannelMessageListView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    @swagger_auto_schema(
+        operation_summary='채널 메시지 목록',
+        operation_description=(
+            '한 채널에 쌓인 원문입니다. 최신순으로 나옵니다. '
+            'isInstruction 이 true 면 해석 카드가 있는 지시이고, cardId 로 카드 상세를 엽니다. '
+            'false 면 지시가 아니라 맥락입니다.'
+        ),
+        manual_parameters=[CURSOR_PARAMETER, LIMIT_PARAMETER],
+        responses={
+            200: ChannelMessageListSerializer(),
+            400: '잘못된 요청',
+            401: '인증되지 않음',
+            403: '회사 접근 권한 없음',
+            404: '회사 또는 채널을 찾을 수 없음',
+        },
+        tags=['Source'],
+    )
+    def get(self, request, company_id, item_id):
+        company = get_member_company(request.user, company_id)
+        item = get_object_or_404(channels_for(company), id=item_id)
+
+        return paged_response(ChannelMessageSerializer, messages_in(item), request)

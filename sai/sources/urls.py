@@ -1,6 +1,8 @@
 from django.urls import path
 
 from .views import (
+    ChannelMessageListView,
+    ChannelSummaryListView,
     IngestionJobDetailView,
     IngestionJobListCreateView,
     SourceAvailableChannelListView,
@@ -17,6 +19,8 @@ from .views import (
 
 
 urlpatterns = [
+    path('<int:company_id>/channels', ChannelSummaryListView.as_view()),
+    path('<int:company_id>/channels/<int:item_id>/messages', ChannelMessageListView.as_view()),
     path('<int:company_id>/source-connections', SourceConnectionListCreateView.as_view()),
     path('<int:company_id>/source-connections/<int:connection_id>', SourceConnectionDetailView.as_view()),
     path('<int:company_id>/source-files', SourceFileListCreateView.as_view()),
