@@ -39,6 +39,7 @@ from .serializers import (
     IngestionJobListSerializer,
     IngestionJobSerializer,
     GitHubConnectionCreateSerializer,
+    GitHubConnectionResultSerializer,
     RepositoryAddSerializer,
     RepositoryListSerializer,
     RepositoryScopeUpdateSerializer,
@@ -217,7 +218,10 @@ class SourceConnectionListCreateView(APIView):
             )
 
             return Response(
-                ConnectionSerializer(connection).data,
+                GitHubConnectionResultSerializer(
+                    connection,
+                    context={'request': request},
+                ).data,
                 status=status.HTTP_201_CREATED if is_created else status.HTTP_200_OK,
             )
 
