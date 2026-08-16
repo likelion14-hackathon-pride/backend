@@ -25,6 +25,7 @@ from .escalation import judge_reply, send_to_slack
 from .models import Escalation, Message, Thread
 from .queries import escalations_for, messages_in
 from .serializers import (
+    MAX_ADDITIONS,
     AskInputSerializer,
     AskResultSerializer,
     EscalationCreateSerializer,
@@ -41,6 +42,7 @@ from .services import (
     create_escalation,
     draft_for_blank,
     draft_from_message,
+    korean_additions,
     open_thread,
     promote_to_entry,
 )
@@ -277,12 +279,15 @@ class EscalationSendView(APIView):
         operation_summary='슬랙으로 질문 발송',
         operation_description=(
             '지정한 채널에 한국어 질문을 올립니다. 대표가 그 스레드에 답장하면 check-answer로 회수합니다. '
-            '한 번 보낸 질문은 다시 보낼 수 없습니다.'
+            '한 번 보낸 질문은 다시 보낼 수 없습니다. '
+            'extraEn 으로 팀원이 덧붙인 줄을 함께 보내면 보내는 시점에 한국어 문장으로 바뀌어 '
+            f'초안 뒤에 붙습니다. 최대 {MAX_ADDITIONS}줄입니다.'
         ),
         request_body=EscalationSendSerializer,
         responses={
             200: EscalationSerializer(), 400: '이미 발송됨 / 슬랙 오류',
             401: '인증되지 않음', 403: '회사 접근 권한 없음', 404: '질문 또는 채널 없음',
+            503: '한국어 변환 불가',
         },
         tags=['Question'],
     )
@@ -298,8 +303,10 @@ class EscalationSendView(APIView):
         item = get_object_or_404(
             Item, id=serializer.validated_data['itemId'], company=company, removed_at__isnull=True
         )
+        # 덧붙인 줄을 먼저 한국어로 바꾼다. 여기서 실패하면 아무것도 보내지 않는다.
+        additions = korean_additions(serializer.validated_data.get('extraEn'))
         try:
-            escalation = send_to_slack(escalation, item)
+            escalation = send_to_slack(escalation, item, additions)
         except SlackError as exc:
             raise ValidationError({'slack': [exc.code]})
 

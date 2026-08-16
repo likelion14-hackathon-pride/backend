@@ -1,10 +1,15 @@
 from django.utils import timezone
+from drf_yasg.utils import swagger_serializer_method
 from rest_framework import serializers
 
 from accounts.models import Membership
 from companies.timing import STATES
 from handbook.models import CompanyScope
-from handbook.serializers import CompanyScopeSerializer
+from handbook.serializers import (
+    CompanyScopeSerializer,
+    EntrySourceSerializer,
+    entry_source,
+)
 from qna.serializers import RiskWarningSerializer
 
 from .models import Blank, InstructionCard, Step, Task, ToneEvidence
@@ -138,6 +143,12 @@ class RelatedRuleSerializer(serializers.Serializer):
     bodyKo = serializers.CharField(source='body_ko', allow_null=True)
     bodyEn = serializers.CharField(source='body_en', allow_null=True)
     scopeName = serializers.CharField(source='scope.name')
+    # 카드에서도 규칙의 출처를 눌러 원문으로 갈 수 있어야 한다.
+    source = serializers.SerializerMethodField()
+
+    @swagger_serializer_method(serializer_or_field=EntrySourceSerializer)
+    def get_source(self, obj):
+        return entry_source(obj)
 
 
 class CardQuestionSerializer(serializers.Serializer):

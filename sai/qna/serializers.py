@@ -127,6 +127,7 @@ class EscalationSerializer(serializers.ModelSerializer):
     proposedEntryId = serializers.IntegerField(source='proposed_entry_id', read_only=True)
     originMessageId = serializers.IntegerField(source='origin_message_id', read_only=True)
     scopeId = serializers.IntegerField(source='scope_id', read_only=True)
+    scopeName = serializers.CharField(source='scope.name', read_only=True, default=None)
     sentAt = serializers.DateTimeField(source='sent_at', read_only=True)
     answeredAt = serializers.DateTimeField(source='answered_at', read_only=True)
     createdAt = serializers.DateTimeField(source='created_at', read_only=True)
@@ -150,6 +151,7 @@ class EscalationSerializer(serializers.ModelSerializer):
             'proposedEntryId',
             'originMessageId',
             'scopeId',
+            'scopeName',
             'sentAt',
             'answeredAt',
             'createdAt',
@@ -190,5 +192,16 @@ class EscalationDraftUpdateSerializer(serializers.Serializer):
         return instance
 
 
+# 보내기 직전 화면에서 팀원이 한 줄씩 덧붙일 수 있다. 자기 언어로 적으면
+# 보낼 때 SAI가 한국어 문장으로 바꿔 초안 뒤에 붙인다.
+MAX_ADDITIONS = 5
+
+
 class EscalationSendSerializer(serializers.Serializer):
     itemId = serializers.IntegerField(help_text='질문을 올릴 슬랙 채널(수집 대상 채널) ID')
+    extraEn = serializers.ListField(
+        child=serializers.CharField(max_length=500, trim_whitespace=True),
+        required=False,
+        max_length=MAX_ADDITIONS,
+        help_text='팀원이 덧붙인 줄. 보낼 때 한국어 문장으로 바뀌어 초안 뒤에 붙습니다.',
+    )

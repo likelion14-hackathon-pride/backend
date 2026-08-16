@@ -5,11 +5,12 @@ from rest_framework.test import APIClient
 
 from accounts.models import Membership, User
 from companies.models import Company
-from handbook.models import CompanyScope, HandbookEntry
+from handbook.models import CompanyScope, HandbookEntry, HandbookEvidence
 from handbook.services import seed_default_scopes
 
 from . import questions
 from .models import Question
+from .services import DAY0_SOURCE
 
 
 class OnboardingQuestionTests(TestCase):
@@ -141,6 +142,39 @@ class OnboardingQuestionTests(TestCase):
         self.assertEqual(HandbookEntry.objects.filter(company=self.company).count(), 1)
         self.assertEqual(self.entry('머지 승인 조건').body_ko, spec.choices[1].body_ko)
         self.assertEqual(Question.objects.count(), 1)
+
+    # --- 출처 ---
+
+    # 소스에서 뽑은 것이 아니라 대표가 직접 답한 것이다.
+    # 근거를 안 남기면 팀원이 출처를 눌렀을 때 빈 화면이 뜬다.
+    def test_an_answer_leaves_its_source(self):
+        spec = questions.find('fq16')
+        self.answer('fq16', spec.choices[0].label)
+
+        evidence = HandbookEvidence.objects.get(entry=self.entry('머지 승인 조건'))
+        self.assertEqual(evidence.tag, HandbookEvidence.Tag.OWNER)
+        self.assertEqual(evidence.source_label, DAY0_SOURCE)
+        self.assertEqual(evidence.quote, spec.choices[0].body_ko)
+
+    def test_answering_twice_keeps_one_source(self):
+        spec = questions.find('fq16')
+        self.answer('fq16', spec.choices[0].label)
+        self.answer('fq16', spec.choices[1].label)
+
+        evidence = HandbookEvidence.objects.get()
+        self.assertEqual(evidence.quote, spec.choices[1].body_ko)
+
+    # 목록에서 바로 출처가 보여야 한다.
+    def test_the_entry_reports_its_source(self):
+        self.answer('fq16', questions.find('fq16').choices[0].label)
+
+        listed = self.client.get(
+            f'/api/companies/{self.company.id}/handbook/entries'
+        ).data['items']
+        source = next(i['source'] for i in listed if i['title'] == '머지 승인 조건')
+
+        self.assertEqual(source['label'], DAY0_SOURCE)
+        self.assertEqual(source['tag'], 'OWNER')
 
     # --- 넘어가기 ---
 

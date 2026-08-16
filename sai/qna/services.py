@@ -16,7 +16,12 @@ from .answering import (
     answer_question,
     find_risk_warnings,
 )
-from .escalation import draft_from_blank, fetch_reply, judge_reply
+from .escalation import (
+    draft_from_blank,
+    fetch_reply,
+    judge_reply,
+    translate_additions,
+)
 from .models import Citation, Escalation, Message, Thread
 
 # 근거가 없거나 판단이 필요한 경우는 대표 확인이 필요하다는 뜻이다.
@@ -52,6 +57,17 @@ def draft_for_blank(blank):
         raise AnswerUnavailable(str(exc))
     except (OpenAIError, ValueError) as exc:
         raise AnswerUnavailable(f'draft_failed: {type(exc).__name__}')
+
+
+# 팀원이 덧붙인 줄을 한국어로 바꾼다. 실패하면 보내지 않는다.
+# 영어가 그대로 나가면 한국어를 직접 쓰지 않아도 된다는 약속이 깨진다.
+def korean_additions(lines):
+    try:
+        return translate_additions(lines)
+    except ImproperlyConfigured as exc:
+        raise AnswerUnavailable(str(exc))
+    except (OpenAIError, ValueError, RuntimeError) as exc:
+        raise AnswerUnavailable(f'addition_failed: {type(exc).__name__}')
 
 
 # AI 답변 메시지에 저장해 둔 한국어 초안. NEEDS_OWNER 판정일 때만 채워져 있다.
