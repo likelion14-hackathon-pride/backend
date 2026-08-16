@@ -5,6 +5,8 @@ from openai import OpenAIError
 from rest_framework import status
 from rest_framework.exceptions import APIException, ValidationError
 
+from cards.models import Blank
+from handbook.gaps import record_gap
 from handbook.models import CompanyScope, HandbookEntry, HandbookEvidence
 from sources.slack import SlackError
 
@@ -113,7 +115,9 @@ def collect_answer(escalation):
     # 여기서 안 채우면 답은 왔는데 카드는 그대로 비어 있다.
     if judgement.is_answer:
         escalation.card_blanks.update(
-            sai_answer_ko=judgement.answer_ko, sai_answer_en=judgement.answer_en
+            sai_answer_ko=judgement.answer_ko,
+            sai_answer_en=judgement.answer_en,
+            answered_by=Blank.AnsweredBy.OWNER,
         )
 
     return escalation
@@ -207,6 +211,10 @@ def _ask(company, user, thread, question, scope, context):
             )
             for source in cited
         ])
+
+    # 답하지 못한 질문은 핸드북의 빈 자리다. 남겨 두지 않으면 대표는 무엇이 비었는지 모른다.
+    if result.verdict in NEEDS_OWNER:
+        record_gap(company, scope, question)
 
     return {
         'threadId': thread.id,

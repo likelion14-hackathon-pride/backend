@@ -22,11 +22,21 @@ class BlankSerializer(serializers.ModelSerializer):
     questionEn = serializers.CharField(source='question_en', read_only=True)
     saiAnswerEn = serializers.CharField(source='sai_answer_en', read_only=True)
     saiAnswerKo = serializers.CharField(source='sai_answer_ko', read_only=True)
+    answeredBy = serializers.CharField(source='answered_by', read_only=True)
+    # 아직 아무도 답하지 않은 빈칸만 사람을 기다린다.
+    needsOwner = serializers.SerializerMethodField()
+    citations = serializers.JSONField(source='answer_citations', read_only=True)
     escalationId = serializers.IntegerField(source='escalation_id', read_only=True)
 
     class Meta:
         model = Blank
-        fields = ['id', 'questionEn', 'saiAnswerEn', 'saiAnswerKo', 'escalationId']
+        fields = [
+            'id', 'questionEn', 'saiAnswerEn', 'saiAnswerKo', 'answeredBy',
+            'needsOwner', 'citations', 'escalationId',
+        ]
+
+    def get_needsOwner(self, obj):
+        return obj.answered_by is None
 
 
 class ToneEvidenceSerializer(serializers.ModelSerializer):

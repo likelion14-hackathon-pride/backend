@@ -1,3 +1,4 @@
+from contextlib import contextmanager
 from datetime import timedelta
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -9,6 +10,7 @@ from rest_framework.test import APIClient
 from accounts.models import Membership, User
 from companies.models import Company
 from handbook.models import CompanyScope, HandbookEntry
+from qna.tests import openai_stub
 from sources.models import Chunk, Connection, Identity, Item, RawDocument
 
 from .generation import (
@@ -26,6 +28,18 @@ from .models import Blank, InstructionCard, Step, ToneEvidence
 
 VECTOR = [0.1] * 1536
 PAST_CASE = '급한 건 아닌데 시간 되실 때 배포 스크립트 한번 봐주세요'
+
+
+# 카드를 만든 뒤 미정 항목마다 핸드북을 뒤진다. 카드 생성과는 다른 클라이언트를 쓰므로
+# 여기서 같이 막지 않으면 테스트가 실제로 OpenAI 로 나간다.
+@contextmanager
+def offline_blanks(answer=None):
+    stub = answer or openai_stub(verdict='NO_SOURCE', answer='', cited=())
+    with (
+        patch('qna.answering.OpenAI', return_value=stub),
+        patch('handbook.gaps.OpenAI', return_value=stub),
+    ):
+        yield stub
 
 
 def draft(**overrides):
@@ -105,7 +119,7 @@ class CardGenerationTests(TestCase):
             permalink=f'https://slack/{ref}',
         )
 
-    def generate(self, judgements=None, card=None):
+    def generate(self, judgements=None, card=None, blank_answer=None):
         judged = judgements if judgements is not None else [
             Judgement(index=0, asked_of='', reason='상시 규칙입니다', is_instruction=False),
             Judgement(index=1, asked_of='조상원', reason='끝나는 일입니다', is_instruction=True),
@@ -116,7 +130,8 @@ class CardGenerationTests(TestCase):
             SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(
                 parsed=card if card is not None else draft()))]),
         ]
-        with patch('cards.generation.OpenAI') as client:
+        # 기본 픽스처에는 확정 규칙이 없다. 근거를 못 찾는 쪽이 사실이고, 그때 빈 항목이 남는다.
+        with patch('cards.generation.OpenAI') as client, offline_blanks(blank_answer):
             client.return_value.chat.completions.parse.side_effect = chat_results
             client.return_value.embeddings.create.return_value = SimpleNamespace(
                 data=[SimpleNamespace(embedding=VECTOR)]
@@ -248,7 +263,7 @@ class CardGenerationTests(TestCase):
             SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(parsed=retry))]),
             SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(parsed=draft()))]),
         ]
-        with patch('cards.generation.OpenAI') as client:
+        with patch('cards.generation.OpenAI') as client, offline_blanks():
             client.return_value.chat.completions.parse.side_effect = results
             client.return_value.embeddings.create.return_value = SimpleNamespace(
                 data=[SimpleNamespace(embedding=VECTOR)]

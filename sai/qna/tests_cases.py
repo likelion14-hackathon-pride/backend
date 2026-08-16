@@ -62,7 +62,11 @@ class AskWithCasesTests(TestCase):
         )
 
     def ask(self, question='Can I deploy a hotfix on Friday?', **stub):
-        with patch('qna.answering.OpenAI', return_value=openai_stub(**stub)):
+        client = openai_stub(**stub)
+        with (
+            patch('qna.answering.OpenAI', return_value=client),
+            patch('handbook.gaps.OpenAI', return_value=client),
+        ):
             return self.client.post(self.url, {'question': question}, format='json')
 
     # 규칙이 하나도 없어도 과거 대화로 답할 수 있어야 한다.

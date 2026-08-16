@@ -167,14 +167,16 @@ class BlankEscalationTests(TestCase):
         self.blank.refresh_from_db()
         self.assertEqual(self.blank.sai_answer_ko, '운영 환경 로그를 보시면 됩니다.')
         self.assertEqual(self.blank.sai_answer_en, 'Check the production logs.')
+        self.assertEqual(self.blank.answered_by, Blank.AnsweredBy.OWNER)
 
-    # 얼버무린 답장은 카드에 넣지 않는다.
+    # 얼버무린 답장은 카드에 넣지 않는다. 빈칸은 그대로 사람을 기다린다.
     def test_non_answer_leaves_the_card_blank_empty(self):
         self.answer(is_answer=False)
 
         self.blank.refresh_from_db()
         self.assertIsNone(self.blank.sai_answer_ko)
         self.assertIsNone(self.blank.sai_answer_en)
+        self.assertIsNone(self.blank.answered_by)
 
     # 카드 화면에서 답을 바로 볼 수 있어야 한다.
     def test_card_detail_shows_the_answer(self):

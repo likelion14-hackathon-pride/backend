@@ -34,10 +34,9 @@ OPEN_COLUMNS = [
     InstructionCard.Column.ANSWERED,
 ]
 
-# 아직 답이 오지 않은 미정 항목. 답이 온 것은 더 이상 사람을 기다리지 않는다.
-_UNANSWERED = Q(escalation__isnull=True) | Q(
-    escalation__status__in=[Escalation.Status.DRAFT, Escalation.Status.SENT]
-)
+# 아직 아무도 답하지 않은 미정 항목.
+# SAI가 핸드북으로 답한 빈칸은 대표를 기다리지 않으므로 여기 들어오지 않는다.
+_UNANSWERED = Q(answered_by__isnull=True)
 
 
 def _owner(company):
