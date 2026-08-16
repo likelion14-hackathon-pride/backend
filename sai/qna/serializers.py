@@ -126,6 +126,10 @@ class EscalationSerializer(serializers.ModelSerializer):
     answerNeedsReview = serializers.BooleanField(source='answer_needs_review', read_only=True)
     proposedEntryId = serializers.IntegerField(source='proposed_entry_id', read_only=True)
     originMessageId = serializers.IntegerField(source='origin_message_id', read_only=True)
+    # SAI가 답하지 않은 이유. 카드 미정 항목에서 올라온 질문은 물어본 적이 없어 비어 있다.
+    originVerdict = serializers.CharField(
+        source='origin_message.verdict', read_only=True, default=None
+    )
     scopeId = serializers.IntegerField(source='scope_id', read_only=True)
     scopeName = serializers.CharField(source='scope.name', read_only=True, default=None)
     sentAt = serializers.DateTimeField(source='sent_at', read_only=True)
@@ -150,6 +154,7 @@ class EscalationSerializer(serializers.ModelSerializer):
             'answerNeedsReview',
             'proposedEntryId',
             'originMessageId',
+            'originVerdict',
             'scopeId',
             'scopeName',
             'sentAt',
