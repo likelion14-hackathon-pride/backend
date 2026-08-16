@@ -11,7 +11,7 @@ https://docs.djangoproject.com/en/6.1/ref/settings/
 """
 
 from pathlib import Path
-import os, json
+import os, json, sys
 from django.core.exceptions import ImproperlyConfigured
 from datetime import timedelta
 
@@ -258,3 +258,36 @@ OPENAI_TRANSLATOR_MODEL = get_secret('OPENAI_TRANSLATOR_MODEL', 'gpt-4o-mini')
 OPENAI_ANSWER_MODEL = get_secret('OPENAI_ANSWER_MODEL', 'gpt-4o')
 # 1536차원. handbook_entry.embedding_ko/en 과 sources_chunk.embedding 이 이 크기다.
 OPENAI_EMBEDDING_MODEL = get_secret('OPENAI_EMBEDDING_MODEL', 'text-embedding-3-small')
+
+# SDK 기본값은 timeout=600초, max_retries=2 다. 그대로 두면 호출 한 건이 최대 30분 매달린다.
+# 워커는 단일 스레드라 그동안 큐 전체가 멈추고, STALE_AFTER(30분)와도 어긋난다.
+OPENAI_TIMEOUT = float(get_secret('OPENAI_TIMEOUT', 30))
+OPENAI_MAX_RETRIES = int(get_secret('OPENAI_MAX_RETRIES', 1))
+
+
+# 워커가 무엇을 하다 멈췄는지는 로그로만 알 수 있다. 장고 기본 설정은 INFO 를 버린다.
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    'formatters': {
+        'standard': {
+            'format': '{asctime} {levelname} {name} {message}',
+            'style': '{',
+        },
+    },
+    'handlers': {
+        'console': {'class': 'logging.StreamHandler', 'formatter': 'standard'},
+    },
+    'root': {'handlers': ['console'], 'level': 'WARNING'},
+    'loggers': {
+        # 수집·카드·규칙 파이프라인. 여기가 INFO 여야 작업 시작과 끝이 남는다.
+        app: {'handlers': ['console'], 'level': 'INFO', 'propagate': False}
+        for app in ('sources', 'cards', 'handbook', 'qna', 'config')
+    },
+}
+
+# 테스트는 일부러 실패를 만들어 보므로 그 로그가 결과를 덮는다.
+if 'test' in sys.argv:
+    LOGGING['root']['level'] = 'CRITICAL'
+    for _logger in LOGGING['loggers'].values():
+        _logger['level'] = 'CRITICAL'

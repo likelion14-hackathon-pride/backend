@@ -4,6 +4,8 @@ from django.utils import timezone
 from openai import OpenAI, OpenAIError
 from pydantic import BaseModel
 
+from config.ai import client_options, timed_call
+
 from .models import HandbookEntry
 
 # 번역과 임베딩을 한 번에 묶는 크기. 일괄 승인에서 항목 수만큼 호출하지 않기 위함.
@@ -35,7 +37,7 @@ def _get_client():
     if not settings.OPENAI_API_KEY:
         raise ImproperlyConfigured('OPENAI_API_KEY 설정이 없어 번역/임베딩을 실행할 수 없습니다')
 
-    return OpenAI(api_key=settings.OPENAI_API_KEY)
+    return OpenAI(api_key=settings.OPENAI_API_KEY, **client_options())
 
 
 def _source_body(entry):
@@ -61,15 +63,16 @@ def _translate(client, entries):
             f'[{index}] from={entry.original_lang}\n{_source_body(entry)}'
             for index, entry in enumerate(batch)
         )
-        completion = client.chat.completions.parse(
-            model=settings.OPENAI_TRANSLATOR_MODEL,
-            messages=[
-                {'role': 'system', 'content': TRANSLATE_PROMPT},
-                {'role': 'user', 'content': prompt},
-            ],
-            response_format=TranslationResult,
-            temperature=0,
-        )
+        with timed_call(settings.OPENAI_TRANSLATOR_MODEL, len(batch)):
+            completion = client.chat.completions.parse(
+                model=settings.OPENAI_TRANSLATOR_MODEL,
+                messages=[
+                    {'role': 'system', 'content': TRANSLATE_PROMPT},
+                    {'role': 'user', 'content': prompt},
+                ],
+                response_format=TranslationResult,
+                temperature=0,
+            )
         by_index = {t.index: t.text for t in completion.choices[0].message.parsed.translations}
 
         for index, entry in enumerate(batch):
@@ -103,10 +106,11 @@ def _embed(client, entries):
     embedded = set()
     for start in range(0, len(targets), BATCH_SIZE):
         batch = targets[start:start + BATCH_SIZE]
-        response = client.embeddings.create(
-            model=settings.OPENAI_EMBEDDING_MODEL,
-            input=[text for _, _, text in batch],
-        )
+        with timed_call(settings.OPENAI_EMBEDDING_MODEL, len(batch)):
+            response = client.embeddings.create(
+                model=settings.OPENAI_EMBEDDING_MODEL,
+                input=[text for _, _, text in batch],
+            )
         for (entry, lang, _), item in zip(batch, response.data):
             if lang == 'ko':
                 entry.embedding_ko = item.embedding

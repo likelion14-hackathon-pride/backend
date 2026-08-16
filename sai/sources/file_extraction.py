@@ -1,3 +1,5 @@
+import logging
+import time
 from io import BytesIO
 from pathlib import Path
 
@@ -6,8 +8,12 @@ from pypdf import PdfReader
 
 from config.errors import DomainError
 
+logger = logging.getLogger(__name__)
 
 LOCAL_DOCUMENT_PART_SIZE = 4000
+
+# 페이지 추출은 페이지마다 걸리는 시간이 크게 다르다. 몇 장째에서 물렸는지 남긴다.
+PDF_LOG_EVERY = 50
 
 
 class FileExtractionError(DomainError):
@@ -27,7 +33,15 @@ def _pdf_file(data):
         if reader.is_encrypted:
             raise FileExtractionError('encrypted_file')
 
-        return '\n\n'.join(page.extract_text() or '' for page in reader.pages)
+        total = len(reader.pages)
+        logger.info('PDF 페이지 추출 시작 pages=%d', total)
+        parts = []
+        for index, page in enumerate(reader.pages, start=1):
+            parts.append(page.extract_text() or '')
+            if index % PDF_LOG_EVERY == 0:
+                logger.info('PDF 페이지 추출 중 %d/%d', index, total)
+
+        return '\n\n'.join(parts)
     except FileExtractionError:
         raise
     except Exception as exc:
@@ -52,6 +66,14 @@ def _docx_file(data):
 def extract_file_text(file_name, data):
     extension = Path(file_name).suffix.lower()
 
+    # 파서가 물리면 여기서 CPU 를 물고 놓지 않는다. pypdf 와 python-docx 는
+    # 손상된 파일에서 아주 오래 돌 수 있고, except 로는 그것을 끊지 못한다.
+    # 시작 줄만 남고 완료 줄이 없으면 그 파일이 범인이다.
+    logger.info(
+        '파일 추출 시작 name=%s ext=%s bytes=%d', file_name, extension, len(data)
+    )
+    started = time.monotonic()
+
     if extension in {'.txt', '.md'}:
         text = _text_file(data)
     elif extension == '.pdf':
@@ -60,6 +82,11 @@ def extract_file_text(file_name, data):
         text = _docx_file(data)
     else:
         raise FileExtractionError('file_type_not_supported')
+
+    logger.info(
+        '파일 추출 완료 name=%s 소요=%.1fs chars=%d',
+        file_name, time.monotonic() - started, len(text),
+    )
 
     text = text.strip()
     if not text:

@@ -10,6 +10,7 @@ from openai import OpenAI, OpenAIError, RateLimitError
 from pgvector.django import CosineDistance
 from pydantic import BaseModel
 
+from config.ai import client_options, timed_call
 from handbook.retrieval import search_rules
 from handbook.services import scopes_in_view
 from policy.models import RiskKeyword
@@ -151,7 +152,7 @@ def _get_client():
     if not settings.OPENAI_API_KEY:
         raise ImproperlyConfigured('OPENAI_API_KEY 설정이 없어 질문에 답할 수 없습니다')
 
-    return OpenAI(api_key=settings.OPENAI_API_KEY, max_retries=0, timeout=30)
+    return OpenAI(api_key=settings.OPENAI_API_KEY, **client_options(max_retries=0))
 
 
 # 같은 말이 여러 번 올라온 경우 한 번만 쓴다. 같은 문장이 두 줄 뜨면 근거가 빈약해 보인다.
@@ -185,9 +186,10 @@ def retrieve_cases(vector, company, scope_ids=None):
 # 호출부가 OpenAI 예외를 그대로 받아 500 이 나간다.
 def embed_question(client, question):
     try:
-        return client.embeddings.create(
-            model=settings.OPENAI_EMBEDDING_MODEL, input=[question]
-        ).data[0].embedding
+        with timed_call(settings.OPENAI_EMBEDDING_MODEL):
+            return client.embeddings.create(
+                model=settings.OPENAI_EMBEDDING_MODEL, input=[question]
+            ).data[0].embedding
     except RateLimitError as exc:
         raise AnswerRateLimited(_retry_after(exc)) from exc
     except (OpenAIError, ValueError) as exc:
@@ -251,23 +253,24 @@ def _ask(client, question, lang, entries, cases, widened):
     language = 'English' if lang == 'en' else 'Korean'
 
     try:
-        return client.chat.completions.parse(
-            model=settings.OPENAI_ANSWER_MODEL,
-            messages=[
-                {'role': 'system', 'content': SYSTEM_PROMPT},
-                {
-                    'role': 'user',
-                    'content': (
-                        f'Answer in: {language}\n\n'
-                        f'Question:\n{question}{WIDEN_NOTE if widened else ""}\n\n'
-                        f'CONFIRMED RULES:\n{rules}\n\n'
-                        f'PAST CASES:\n{past}'
-                    ),
-                },
-            ],
-            response_format=AnswerResult,
-            temperature=0,
-        )
+        with timed_call(settings.OPENAI_ANSWER_MODEL):
+            return client.chat.completions.parse(
+                model=settings.OPENAI_ANSWER_MODEL,
+                messages=[
+                    {'role': 'system', 'content': SYSTEM_PROMPT},
+                    {
+                        'role': 'user',
+                        'content': (
+                            f'Answer in: {language}\n\n'
+                            f'Question:\n{question}{WIDEN_NOTE if widened else ""}\n\n'
+                            f'CONFIRMED RULES:\n{rules}\n\n'
+                            f'PAST CASES:\n{past}'
+                        ),
+                    },
+                ],
+                response_format=AnswerResult,
+                temperature=0,
+            )
     except RateLimitError as exc:
         raise AnswerRateLimited(_retry_after(exc)) from exc
     except (OpenAIError, ValueError) as exc:
