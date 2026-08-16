@@ -80,6 +80,13 @@ class TimingTests(TestCase):
             status=HandbookEntry.Status.CONFIRMED, origin=HandbookEntry.Origin.SLACK,
         )
 
+    def deleted_entry(self, title='배포 전 공지'):
+        entry = self.entry(title)
+        entry.deleted_at = timezone.now()
+        entry.save(update_fields=['deleted_at'])
+
+        return entry
+
     def step(self, card, entry=None, text='Pull the failure logs', ord=0):
         return Step.objects.create(
             company=self.company, card=card, ord=ord, text='실패 로그를 받는다',
@@ -227,6 +234,27 @@ class TimingTests(TestCase):
         self.assertIsNone(item['entryId'])
         self.assertIsNone(item['entryTitle'])
         self.assertIsNone(item['scopeName'])
+
+    # 지운 규칙은 근거가 아니다. 인용을 남기려고 행을 지우지 않으므로
+    # step.entry 로는 삭제된 규칙도 그대로 딸려 온다.
+    def test_can_do_ignores_a_deleted_rule(self):
+        self.step(self.card(), self.deleted_entry())
+
+        item = self.get().data['canDo'][0]
+
+        self.assertIsNone(item['entryId'])
+        self.assertIsNone(item['entryTitle'])
+        self.assertIsNone(item['scopeName'])
+
+    # 지운 규칙이 붙었다고 그 단계가 위로 올라가면, 살아 있는 규칙이 붙은 단계가 밀린다.
+    def test_can_do_does_not_promote_a_step_with_a_deleted_rule(self):
+        card = self.card()
+        self.step(card, self.deleted_entry('지운 규칙'), text='Post in #dev', ord=0)
+        self.step(card, self.entry('살아 있는 규칙'), text='Ask someone', ord=1)
+
+        titles = [item['title'] for item in self.get().data['canDo']]
+
+        self.assertEqual(titles, ['Ask someone', 'Post in #dev'])
 
     # 아직 안 잡은 일과 끝낸 일은 지금 할 수 있는 일이 아니다.
     def test_can_do_skips_cards_that_are_not_open(self):

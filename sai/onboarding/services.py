@@ -140,13 +140,22 @@ def skip_question(company, template_key, scope=None):
     return row
 
 
+# 지운 규칙의 id 는 내보내지 않는다. 화면이 그 id 로 규칙을 열면 404 다.
+def _created_entry_id(row):
+    entry = row.created_entry if row else None
+    if entry is None or entry.deleted_at is not None:
+        return None
+
+    return entry.id
+
+
 def list_questions(company, scope=None):
     specs = questions.PROJECT_QUESTIONS if scope else questions.COMPANY_QUESTIONS
     rows = {
         row.template_key: row
         for row in Question.objects.filter(
             company=company, scope=scope if scope else None
-        )
+        ).select_related('created_entry')
     }
 
     items = []
@@ -161,7 +170,7 @@ def list_questions(company, scope=None):
             'options': [choice.label for choice in spec.choices],
             'status': row.status if row else 'PENDING',
             'answerKo': row.answer_ko if row else None,
-            'entryId': row.created_entry_id if row else None,
+            'entryId': _created_entry_id(row),
         })
 
     return items
