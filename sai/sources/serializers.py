@@ -274,8 +274,11 @@ class ConnectionSerializer(serializers.ModelSerializer):
     displayName = serializers.CharField(source='display_name', read_only=True)
     workspaceId = serializers.CharField(source='external_workspace_id', read_only=True)
     errorMessage = serializers.CharField(source='error_message', read_only=True)
+    # 목록은 connections_for() 가 미리 세어 둔다. 없으면 직접 세되 그만큼 쿼리가 늘어난다.
     resourceCount = serializers.SerializerMethodField()
     lastSyncedAt = serializers.SerializerMethodField()
+    # 이 소스에서 만들어진 핸드북 항목 수. extracted_counts() 를 context 로 넘겨야 채워진다.
+    extractedCount = serializers.SerializerMethodField()
     createdAt = serializers.DateTimeField(source='created_at', read_only=True)
 
     class Meta:
@@ -288,17 +291,26 @@ class ConnectionSerializer(serializers.ModelSerializer):
             'workspaceId',
             'errorMessage',
             'resourceCount',
+            'extractedCount',
             'lastSyncedAt',
             'createdAt',
         ]
 
     def get_resourceCount(self, obj):
-        return obj.items.filter(removed_at__isnull=True).count()
+        counted = getattr(obj, 'resource_count', None)
+
+        return obj.items.filter(removed_at__isnull=True).count() if counted is None else counted
 
     def get_lastSyncedAt(self, obj):
+        if hasattr(obj, 'last_synced'):
+            return obj.last_synced
+
         latest = obj.items.filter(last_synced_at__isnull=False).order_by('-last_synced_at').first()
 
         return latest.last_synced_at if latest else None
+
+    def get_extractedCount(self, obj):
+        return (self.context.get('extracted') or {}).get(obj.kind, 0)
 
 
 # GitHub 연결 직후 5단계 화면에서만 사용한다.

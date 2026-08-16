@@ -25,7 +25,7 @@ from config.pagination import (
 )
 
 from .models import Connection, IngestionJob, Item
-from .queries import channels_for, messages_in
+from .queries import channels_for, connections_for, extracted_counts, messages_in
 from .serializers import (
     AvailableChannelListSerializer,
     AvailableChannelSerializer,
@@ -169,6 +169,11 @@ class SourceConnectionListCreateView(APIView):
 
     @swagger_auto_schema(
         operation_summary='소스 연결 목록 조회',
+        operation_description=(
+            'resourceCount 는 수집 대상 수(채널·레포·파일), '
+            'extractedCount 는 그 소스에서 만들어진 핸드북 항목 수입니다. '
+            '대표가 거절한 항목은 세지 않습니다.'
+        ),
         responses={
             200: ConnectionListSerializer(),
             401: '인증되지 않음',
@@ -179,12 +184,16 @@ class SourceConnectionListCreateView(APIView):
     )
     def get(self, request, company_id):
         company = get_owner_company(request.user, company_id)
-        connections = (
-            Connection.objects.filter(company=company, disconnected_at__isnull=True)
-            .prefetch_related('items')
-            .order_by('kind')
+
+        return Response(
+            {
+                'items': ConnectionSerializer(
+                    connections_for(company).order_by('kind'), many=True,
+                    context={'extracted': extracted_counts(company)},
+                ).data
+            },
+            status=status.HTTP_200_OK,
         )
-        return page_response(ConnectionSerializer, connections)
 
     @swagger_auto_schema(
         operation_summary='소스 연결',
