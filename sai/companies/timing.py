@@ -100,6 +100,33 @@ def working_minutes_between(hours, a, b):
     return total.total_seconds() / 60
 
 
+# 대표 근무시간을 다른 지역의 벽시계로 읽는다.
+# 하노이에서 서울 09:00~18:00 은 07:00~16:00 이다. 자정을 넘길 수도 있다.
+def local_window(hours, zone, moment):
+    begin, end = _window(hours, moment.astimezone(hours.zone).date())
+    there = ZoneInfo(zone)
+
+    return begin.astimezone(there).time(), end.astimezone(there).time()
+
+
+# 양쪽이 같은 근무시간을 각자의 지역에서 쓴다고 볼 때 하루에 겹치는 시간.
+# 시차 때문에 상대의 근무일이 하루 밀리거나 당겨질 수 있어 앞뒤 하루까지 본다.
+def overlap_hours(hours, zone, moment):
+    begin, end = _window(hours, moment.astimezone(hours.zone).date())
+    theirs = WorkingHours(zone, hours.start, hours.end, hours.enabled)
+
+    total = timedelta()
+    day = begin.astimezone(theirs.zone).date() - DAY
+    for _ in range(3):
+        start, finish = _window(theirs, day)
+        shared = min(end, finish) - max(begin, start)
+        if shared > timedelta():
+            total += shared
+        day += DAY
+
+    return total.total_seconds() / 3600
+
+
 # moment 에서 근무시간으로만 minutes 만큼 흐른 뒤의 시각.
 def add_working_minutes(hours, moment, minutes):
     if not hours.enabled:
