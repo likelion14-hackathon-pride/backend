@@ -10,15 +10,15 @@ from .text import normalize_document_text
 
 # 프롬프트를 고치면 이 값을 올린다. RawDocument.classifier_version에 기록되므로
 # 나중에 "옛 프롬프트로 분류된 것만 다시 돌리기"가 가능하다.
-CLASSIFIER_VERSION = 'clf-v4'
+CLASSIFIER_VERSION = 'clf-v5'
 
 # 한 번의 호출에 넣는 메시지 수. 메시지마다 호출하면 비용과 시간이 수십 배가 된다.
 BATCH_SIZE = 25
 
 # 한국어판과 A/B 비교했을 때 한국어 데이터 정확도는 동일하고(97.1%),
 # 영어 확정 표현까지 커버하므로 이 버전을 쓴다. 예시는 한/영 둘 다 둔다.
-SYSTEM_PROMPT = """You classify Slack messages and GitHub repository documents from a Korean startup
-to extract internal company rules.
+SYSTEM_PROMPT = """You classify Slack messages, GitHub repository documents, and uploaded local files
+from a Korean startup to extract internal company rules.
 
 The company has foreign employees who do not read Korean well. The goal is to surface
 "how this company works" so they can follow it.
@@ -99,6 +99,8 @@ def _render(document, index, channels, users, parents):
             f'[{index}] 소스=GitHub 저장소={document.item.label} '
             f'유형={document_type} 작성자={author}'
         ]
+    elif document.item.connection.kind == 'LOCAL':
+        lines = [f'[{index}] 소스=로컬파일 파일={document.item.label} 작성자={author}']
     else:
         lines = [f'[{index}] 채널={document.item.label} 작성자={author}']
 

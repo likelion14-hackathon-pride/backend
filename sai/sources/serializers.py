@@ -4,10 +4,10 @@ from rest_framework import serializers
 
 from handbook.models import CompanyScope
 
+from .local_files import LOCAL_FILE_MAX_SIZE
 from .models import Connection, IngestionJob, Item
 
 
-LOCAL_FILE_MAX_SIZE = 20 * 1024 * 1024
 LOCAL_FILE_EXTENSIONS = {'.txt', '.md', '.pdf', '.docx'}
 LOCAL_FILE_MIME_TYPES = {
     '.txt': {'text/plain'},
@@ -173,6 +173,31 @@ class LocalFileSerializer(serializers.ModelSerializer):
         fields = ['id', 'fileName', 'mimeType', 'size', 'status']
 
     def get_status(self, obj):
+        latest_job = (
+            IngestionJob.objects.filter(
+                company_id=obj.company_id,
+                item_ids__contains=[obj.id],
+            )
+            .order_by('-id')
+            .first()
+        )
+        if latest_job and latest_job.status in {
+            IngestionJob.Status.QUEUED,
+            IngestionJob.Status.RUNNING,
+        }:
+            return 'PROCESSING'
+
+        if latest_job and latest_job.status == IngestionJob.Status.FAILED:
+            return 'ERROR'
+
+        if latest_job and latest_job.status == IngestionJob.Status.PARTIAL:
+            item_failed = any(
+                error.get('itemId') == obj.id
+                for error in latest_job.errors or []
+            )
+            if item_failed:
+                return 'ERROR'
+
         if obj.last_synced_at:
             return 'READY'
 
@@ -228,7 +253,7 @@ class IngestionJobListSerializer(serializers.Serializer):
 # 수집 작업 시작 요청. provider를 생략하면 기존과 같이 Slack을 수집한다.
 class IngestionJobCreateSerializer(serializers.Serializer):
     provider = serializers.ChoiceField(
-        choices=[Connection.Kind.SLACK, Connection.Kind.GITHUB],
+        choices=[Connection.Kind.SLACK, Connection.Kind.GITHUB, Connection.Kind.LOCAL],
         required=False,
         default=Connection.Kind.SLACK,
     )
@@ -237,7 +262,8 @@ class IngestionJobCreateSerializer(serializers.Serializer):
         required=False,
         allow_empty=False,
         help_text=(
-            '수집할 채널 또는 레포 ID 목록. 생략하면 해당 소스에 등록된 전체 Item이 대상입니다.'
+            '수집할 채널, 레포 또는 로컬 파일 ID 목록. '
+            '생략하면 해당 소스에 등록된 전체 Item이 대상입니다.'
         ),
     )
 

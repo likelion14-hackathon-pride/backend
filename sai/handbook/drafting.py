@@ -20,7 +20,8 @@ DRAFTER_VERSION = 'draft-v1'
 # 한 번에 모델에 넣는 원문 수. 한 범위 안의 규칙끼리 묶으려면 함께 봐야 한다.
 BATCH_SIZE = 40
 
-SYSTEM_PROMPT = """You turn Slack messages and GitHub repository documents into company handbook rules.
+SYSTEM_PROMPT = """You turn Slack messages, GitHub repository documents, and uploaded local files
+into company handbook rules.
 
 The messages given to you were already classified as containing rules. The readers are foreign
 employees who need to know how this company works.
@@ -106,6 +107,8 @@ def _verify_quote(quote, document, channels, users):
 def _entry_origin(document):
     if document.item.connection.kind == 'GITHUB':
         return HandbookEntry.Origin.GITHUB
+    if document.item.connection.kind == 'LOCAL':
+        return HandbookEntry.Origin.FILE
 
     return HandbookEntry.Origin.SLACK
 
@@ -113,6 +116,8 @@ def _entry_origin(document):
 def _evidence_tag(document):
     if document.item.connection.kind == 'GITHUB':
         return HandbookEvidence.Tag.GITHUB
+    if document.item.connection.kind == 'LOCAL':
+        return HandbookEvidence.Tag.FILE
 
     return HandbookEvidence.Tag.SLACK
 
@@ -260,7 +265,11 @@ def _prune_stale_drafts(company, entries):
     HandbookEntry.objects.filter(
         company=company,
         status=HandbookEntry.Status.DRAFT,
-        origin__in=[HandbookEntry.Origin.SLACK, HandbookEntry.Origin.GITHUB],
+        origin__in=[
+            HandbookEntry.Origin.SLACK,
+            HandbookEntry.Origin.GITHUB,
+            HandbookEntry.Origin.FILE,
+        ],
         # 보류는 대표가 의도적으로 남겨 둔 것이라 지우면 안 된다.
         reviewed_at__isnull=True,
     ).exclude(id__in=[entry.id for entry in entries]).delete()
