@@ -7,10 +7,12 @@ from .models import CompanyScope, HandbookEntry, HandbookEvidence, HandbookRevis
 
 class CompanyScopeSerializer(serializers.ModelSerializer):
     areaKey = serializers.CharField(source='area_key', read_only=True, allow_null=True)
+    # 이 공간의 확정 규칙 수. scopes_with_counts() 가 세어 붙인다.
+    entryCount = serializers.IntegerField(source='entry_count', read_only=True, default=0)
 
     class Meta:
         model = CompanyScope
-        fields = ['id', 'kind', 'areaKey', 'name', 'description', 'state']
+        fields = ['id', 'kind', 'areaKey', 'name', 'description', 'state', 'entryCount']
 
 
 class CompanyScopeListSerializer(serializers.Serializer):

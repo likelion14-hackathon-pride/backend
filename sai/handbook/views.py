@@ -18,7 +18,7 @@ from config.pagination import (
 
 from .finalizing import finalize_entries
 from .models import CompanyScope, HandbookEntry, HandbookEvidence
-from .queries import entries_for, filter_by_review_status
+from .queries import entries_for, filter_by_review_status, scopes_with_counts
 from .serializers import (
     CompanyScopeCreateSerializer,
     CompanyScopeListSerializer,
@@ -296,8 +296,9 @@ class CompanyScopeListView(APIView):
     )
     def get(self, request, company_id):
         company = get_member_company(request.user, company_id)
-        scopes = CompanyScope.objects.filter(company=company)
-        scopes = filter_enum(scopes, request, 'kind', CompanyScope.Kind)
+        scopes = filter_enum(
+            scopes_with_counts(company), request, 'kind', CompanyScope.Kind
+        )
 
         return page_response(CompanyScopeSerializer, scopes.order_by('kind', 'name'))
 
