@@ -1,4 +1,6 @@
 import secrets
+import uuid
+from pathlib import Path
 
 from django.conf import settings
 from django.utils import timezone
@@ -6,6 +8,7 @@ from rest_framework.exceptions import ValidationError
 
 from .models import Connection, Item
 from .github import GitHubClient, GitHubError
+from .local_files import create_upload_target
 from .slack import SlackClient, SlackError
 
 
@@ -274,3 +277,41 @@ def remove_repository(item):
     item.save(update_fields=['removed_at'])
 
     return item
+
+
+# 로컬 파일용 연결은 별도 인증 없이 회사마다 하나만 둔다.
+def get_local_connection(company):
+    connection = Connection.objects.filter(
+        company=company,
+        kind=Connection.Kind.LOCAL,
+        disconnected_at__isnull=True,
+    ).first()
+    if connection:
+        return connection
+
+    return Connection.objects.create(
+        company=company,
+        kind=Connection.Kind.LOCAL,
+        display_name='로컬 파일',
+        credential_ref=settings.AWS_STORAGE_BUCKET_NAME,
+    )
+
+
+def create_local_file(company, file_name, mime_type, byte_size):
+    connection = get_local_connection(company)
+    external_id = str(uuid.uuid4())
+    suffix = Path(file_name).suffix.lower()
+    storage_key = f'companies/{company.id}/local/{external_id}{suffix}'
+    upload_target = create_upload_target(storage_key, mime_type)
+
+    item = Item.objects.create(
+        company=company,
+        connection=connection,
+        external_id=external_id,
+        label=file_name,
+        storage_key=storage_key,
+        mime_type=mime_type,
+        byte_size=byte_size,
+    )
+
+    return item, upload_target
