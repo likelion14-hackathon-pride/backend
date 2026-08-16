@@ -17,6 +17,11 @@ class ResolutionSerializer(serializers.Serializer):
     saiRate = serializers.FloatField()
     ownerRate = serializers.FloatField()
 
+    class Meta:
+        # cards.ResolutionSerializer와 클래스 이름이 같다. ref_name을 안 주면
+        # 둘 다 'Resolution'으로 등록돼서 스키마 생성이 통째로 실패한다.
+        ref_name = 'DashboardResolution'
+
 
 class ReusedEntrySerializer(serializers.Serializer):
     entryId = serializers.IntegerField()
