@@ -209,7 +209,12 @@ class SourceConnectionListCreateView(APIView):
         if provider == Connection.Kind.GITHUB:
             serializer = GitHubConnectionCreateSerializer(data=request.data)
             serializer.is_valid(raise_exception=True)
-            connection, is_created = connect_github(company)
+            connection, is_created = connect_github(
+                company,
+                serializer.validated_data['appId'],
+                serializer.validated_data['installationId'],
+                serializer.validated_data['privateKey'],
+            )
 
             return Response(
                 ConnectionSerializer(connection).data,

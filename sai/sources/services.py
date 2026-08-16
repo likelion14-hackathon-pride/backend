@@ -1,3 +1,5 @@
+import secrets
+
 from django.conf import settings
 from django.utils import timezone
 from rest_framework.exceptions import ValidationError
@@ -124,10 +126,11 @@ def _github_client():
     )
 
 
-# 미리 설치한 GitHub App을 회사 소스로 연결한다.
-def connect_github(company):
+# 대표가 입력한 GitHub App을 회사 소스로 연결한다.
+def connect_github(company, app_id, installation_id, private_key):
+    client = GitHubClient(app_id, private_key, installation_id)
     try:
-        installation = _github_client().installation()
+        installation = client.installation()
     except GitHubError as exc:
         raise ValidationError({'github': [exc.code]})
 
@@ -158,6 +161,10 @@ def connect_github(company):
     connection.display_name = display_name
     connection.workspace_url = account.get('html_url')
     connection.credential_ref = f'github-app-installation:{installation_id}'
+    connection.github_app_id = app_id
+    connection.github_private_key = private_key
+    if not connection.github_webhook_secret:
+        connection.github_webhook_secret = secrets.token_urlsafe(32)
     connection.error_message = None
     connection.save()
 
