@@ -45,6 +45,11 @@ def openai_stub(verdict='GROUNDED', answer='No. Deployments are not done on Frid
 class AskTests(TestCase):
     def setUp(self):
         self.company = Company.objects.create(name='에코랩', code='TESTCODE1')
+        # 가입할 때 시딩되는 회사 전반 범위. 어느 프로젝트도 아닌 빈 항목이 여기로 간다.
+        self.company_scope = CompanyScope.objects.create(
+            company=self.company, kind=CompanyScope.Kind.COMPANY,
+            area_key=CompanyScope.AreaKey.COMPANY, name='Company',
+        )
         self.scope = CompanyScope.objects.create(
             company=self.company, kind=CompanyScope.Kind.COMPANY,
             area_key=CompanyScope.AreaKey.PRODUCT_ENG, name='Product / Engineering',
@@ -65,9 +70,19 @@ class AskTests(TestCase):
         self.client.force_authenticate(user=self.member)
         self.url = f'/api/companies/{self.company.id}/ask'
 
+    # 답하지 못한 질문은 빈 항목으로 남는다. 임베딩 클라이언트가 달라 여기서 함께 막는다.
     def ask(self, question='Can I deploy on Friday?', payload=None, **stub):
-        with patch('qna.answering.OpenAI', return_value=openai_stub(**stub)):
+        client = openai_stub(**stub)
+        with (
+            patch('qna.answering.OpenAI', return_value=client),
+            patch('handbook.gaps.OpenAI', return_value=client),
+        ):
             return self.client.post(self.url, payload or {'question': question}, format='json')
+
+    def blanks(self):
+        return HandbookEntry.objects.filter(
+            company=self.company, status=HandbookEntry.Status.BLANK
+        )
 
     # --- 정상 답변 ---
 
@@ -148,6 +163,39 @@ class AskTests(TestCase):
 
         self.assertEqual(response.data['resultType'], 'ANSWERED')
         self.assertIsNone(response.data['answer'])
+
+    # --- 빈 항목 ---
+
+    # 답하지 못한 질문은 핸드북의 빈 자리다. 남겨 두지 않으면 대표는 뭐가 비었는지 모른다.
+    def test_no_source_leaves_a_gap(self):
+        self.ask(question='Do we have a remote work policy?', verdict='NO_SOURCE',
+                 answer='', cited=())
+
+        gap = self.blanks().get()
+        self.assertEqual(gap.title, 'Do we have a remote work policy?')
+        self.assertEqual(gap.ask_count, 1)
+
+    def test_needs_decision_leaves_a_gap(self):
+        self.ask(verdict='NEEDS_DECISION', answer='Rules conflict.', cited=())
+
+        self.assertEqual(self.blanks().count(), 1)
+
+    def test_the_same_unanswered_question_only_raises_the_count(self):
+        for _ in range(2):
+            self.ask(verdict='NO_SOURCE', answer='', cited=())
+
+        self.assertEqual(self.blanks().get().ask_count, 2)
+
+    def test_an_answered_question_leaves_no_gap(self):
+        self.ask()
+
+        self.assertEqual(self.blanks().count(), 0)
+
+    # 회사 규칙에 대한 질문이 아니면 핸드북의 빈 자리도 아니다.
+    def test_out_of_scope_leaves_no_gap(self):
+        self.ask(verdict='OUT_OF_SCOPE', answer='', cited=())
+
+        self.assertEqual(self.blanks().count(), 0)
 
     # 모델이 없는 번호를 인용해도 응답에 새어 나가면 안 된다.
     def test_out_of_range_citation_is_dropped(self):

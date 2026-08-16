@@ -291,7 +291,11 @@ class BoardTests(TestCase):
             origin=HandbookEntry.Origin.SLACK, embedding_ko=VECTOR,
         )
 
-        with patch('qna.answering.OpenAI', return_value=openai_stub()):
+        client = openai_stub()
+        with (
+            patch('qna.answering.OpenAI', return_value=client),
+            patch('handbook.gaps.OpenAI', return_value=client),
+        ):
             response = self.client.post(
                 f'{self.base}/{card.id}/ask', {'question': 'Do I need QA?'}, format='json'
             )

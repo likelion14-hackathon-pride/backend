@@ -86,9 +86,10 @@ class TimingTests(TestCase):
             text_en=text, entry=entry,
         )
 
-    def blank(self, card, escalation=None, question='Are tests required?'):
+    def blank(self, card, escalation=None, question='Are tests required?', answered_by=None):
         return Blank.objects.create(
-            company=self.company, card=card, question_en=question, escalation=escalation
+            company=self.company, card=card, question_en=question,
+            escalation=escalation, answered_by=answered_by,
         )
 
     def escalation(self, status=Escalation.Status.SENT, sent=None, answered=None):
@@ -252,9 +253,21 @@ class TimingTests(TestCase):
         self.blank(
             card,
             self.escalation(Escalation.Status.ANSWERED, seoul(11, 10), seoul(11, 12)),
+            answered_by=Blank.AnsweredBy.OWNER,
         )
 
         self.assertEqual(self.get().data['canDoTotal'], 1)
+
+    # SAI가 핸드북으로 답한 빈칸은 대표를 기다리지 않는다. 카드도 막지 않는다.
+    def test_a_blank_answered_by_sai_does_not_block(self):
+        card = self.card()
+        self.step(card, self.entry())
+        self.blank(card, answered_by=Blank.AnsweredBy.SAI)
+
+        data = self.get().data
+
+        self.assertEqual(data['canDoTotal'], 1)
+        self.assertEqual(data['needsPersonTotal'], 0)
 
     # 막힌 카드만 빠진다. 옆 카드까지 같이 사라지면 안 된다.
     def test_one_blocked_card_does_not_hide_another(self):
@@ -291,6 +304,7 @@ class TimingTests(TestCase):
         self.blank(
             self.card(),
             self.escalation(Escalation.Status.ANSWERED, seoul(11, 10), seoul(11, 12)),
+            answered_by=Blank.AnsweredBy.OWNER,
         )
 
         self.assertEqual(self.get().data['needsPersonTotal'], 0)

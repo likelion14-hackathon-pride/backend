@@ -16,6 +16,7 @@ from sources.classifier import build_lookup
 from sources.models import Chunk, Identity, RawDocument
 from sources.text import normalize_document_text
 
+from .blanks import answer_blanks
 from .models import Blank, InstructionCard, Step, ToneEvidence
 from .prompts import CARD_PROMPT, JUDGE_PROMPT
 
@@ -462,6 +463,8 @@ def generate_cards(company, documents=None):
             })
             continue
         if card:
+            # 카드를 저장한 뒤에 돈다. 트랜잭션 밖이어야 빈칸 답변이 카드 저장을 붙잡지 않는다.
+            answer_blanks(card)
             cards.append(card)
 
     return cards, errors

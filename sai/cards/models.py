@@ -86,11 +86,20 @@ class Step(models.Model):
 
 # 카드에서 확인이 필요한 미정 항목
 class Blank(models.Model):
+    # 누가 이 빈칸을 채웠는가. 비어 있으면 아직 아무도 답하지 않았다는 뜻이고,
+    # 그때만 사람을 기다린다. 핸드북에 답이 있는 것까지 대표에게 보내면 안 된다.
+    class AnsweredBy(models.TextChoices):
+        SAI = 'SAI'
+        OWNER = 'OWNER'
+
     company = models.ForeignKey('companies.Company', on_delete=models.CASCADE, related_name='card_blanks')
     card = models.ForeignKey(InstructionCard, on_delete=models.CASCADE, related_name='blanks')
     question_en = models.TextField()
     sai_answer_en = models.TextField(null=True, blank=True)
     sai_answer_ko = models.TextField(null=True, blank=True)
+    answered_by = models.CharField(max_length=5, choices=AnsweredBy.choices, null=True, blank=True)
+    # SAI가 답했을 때 근거로 쓴 규칙과 과거 대화. 출처 없는 답은 화면에 띄우지 않는다.
+    answer_citations = models.JSONField(null=True, blank=True)
     escalation = models.ForeignKey('qna.Escalation', on_delete=models.SET_NULL, null=True, blank=True, related_name='card_blanks')
 
     class Meta:

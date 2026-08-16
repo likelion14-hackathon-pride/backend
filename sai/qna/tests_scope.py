@@ -89,7 +89,11 @@ class AskScopeTests(TestCase):
         )
 
     def ask(self, payload=None, **stub):
-        with patch('qna.answering.OpenAI', return_value=openai_stub(**stub)):
+        client = openai_stub(**stub)
+        with (
+            patch('qna.answering.OpenAI', return_value=client),
+            patch('handbook.gaps.OpenAI', return_value=client),
+        ):
             return self.client.post(
                 self.url, payload or {'question': 'How many approvals?'}, format='json'
             )
@@ -100,7 +104,10 @@ class AskScopeTests(TestCase):
         parse = Mock(side_effect=[_completion(**stage) for stage in stages])
         client = openai_stub()
         client.chat.completions.parse = parse
-        with patch('qna.answering.OpenAI', return_value=client):
+        with (
+            patch('qna.answering.OpenAI', return_value=client),
+            patch('handbook.gaps.OpenAI', return_value=openai_stub()),
+        ):
             response = self.client.post(self.url, payload, format='json')
 
         return response, parse.call_count
