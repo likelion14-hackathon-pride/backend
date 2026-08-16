@@ -101,6 +101,19 @@ def _resolution(company, since):
     }
 
 
+# 한 주 구간 안에서 확정된 규칙 수.
+#
+# 가장 최근 주(index 0)는 위쪽을 닫지 않는다. now 로 자르면 확정 시각이 조회 시각과
+# 같은 항목이 이 주에도, 한 주 앞에도 들어가지 못하고 어느 칸에서도 사라진다.
+# 시계는 밀리초 단위로 똑딱거리므로 방금 확정한 규칙에서 실제로 일어난다.
+def _week_count(confirmed, now, index):
+    week = confirmed.filter(confirmed_at__gte=now - timedelta(weeks=index + 1))
+    if index:
+        week = week.filter(confirmed_at__lt=now - timedelta(weeks=index))
+
+    return week.count()
+
+
 def _handbook(company, now):
     confirmed = live_entries(company).filter(status=HandbookEntry.Status.CONFIRMED)
     month = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
@@ -111,17 +124,13 @@ def _handbook(company, now):
     # 확정 시각이 없는 옛 항목은 어느 주에도 넣지 않는다. 언제였는지 모르기 때문이다.
     # 그래서 주별 합이 총계보다 작을 수 있다.
     weekly = [
-        confirmed.filter(
-            confirmed_at__gte=now - timedelta(weeks=index + 1),
-            confirmed_at__lt=now - timedelta(weeks=index),
-        ).count()
+        _week_count(confirmed, now, index)
         for index in range(GROWTH_WEEKS - 1, -1, -1)
     ]
 
     return {
         'confirmed': confirmed.count(),
         'addedThisMonth': confirmed.filter(confirmed_at__gte=month).count(),
-        # 누적이라 우상향한다. 주마다 몇 개 늘었는지가 아니라 얼마나 쌓였는지를 보여 준다.
         'weekly': weekly,
         'scopes': scopes_with_counts(company).order_by('kind', 'name'),
     }
