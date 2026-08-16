@@ -18,3 +18,11 @@ def create_upload_target(storage_key, mime_type):
         },
         ExpiresIn=UPLOAD_URL_EXPIRES,
     )
+
+
+def delete_file(storage_key):
+    client = boto3.client('s3', region_name=settings.AWS_S3_REGION_NAME)
+    client.delete_object(
+        Bucket=settings.AWS_STORAGE_BUCKET_NAME,
+        Key=storage_key,
+    )

@@ -8,7 +8,7 @@ from rest_framework.exceptions import ValidationError
 
 from .models import Connection, Item
 from .github import GitHubClient, GitHubError
-from .local_files import create_upload_target
+from .local_files import create_upload_target, delete_file
 from .slack import SlackClient, SlackError
 
 
@@ -315,3 +315,13 @@ def create_local_file(company, file_name, mime_type, byte_size):
     )
 
     return item, upload_target
+
+
+def remove_local_file(item):
+    if item.storage_key:
+        delete_file(item.storage_key)
+
+    item.removed_at = timezone.now()
+    item.save(update_fields=['removed_at'])
+
+    return item

@@ -60,6 +60,7 @@ from .services import (
     list_available_channels,
     list_available_repositories,
     remove_channel,
+    remove_local_file,
     remove_repository,
 )
 from .github import GitHubError
@@ -368,6 +369,36 @@ class SourceFileListCreateView(APIView):
         })
 
         return Response(response_serializer.data, status=status.HTTP_201_CREATED)
+
+
+class SourceFileDetailView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    @swagger_auto_schema(
+        operation_summary='로컬 파일 삭제',
+        operation_description=(
+            'S3에 업로드한 원본 파일을 삭제합니다. 이미 생성된 핸드북 항목과 근거는 유지됩니다.'
+        ),
+        responses={
+            204: '삭제됨',
+            401: '인증되지 않음',
+            403: 'Owner 권한 없음',
+            404: '회사 또는 파일을 찾을 수 없음',
+        },
+        tags=['Source'],
+    )
+    def delete(self, request, company_id, item_id):
+        company = get_owner_company(request.user, company_id)
+        item = get_object_or_404(
+            Item,
+            id=item_id,
+            company=company,
+            connection__kind=Connection.Kind.LOCAL,
+            removed_at__isnull=True,
+        )
+        remove_local_file(item)
+
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 class SourceChannelListView(APIView):
