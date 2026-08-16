@@ -7,6 +7,8 @@ from django.utils import timezone
 from openai import OpenAI, OpenAIError
 from pgvector.django import CosineDistance
 
+from config.ai import client_options, timed_call
+
 from .models import CompanyScope, HandbookEntry
 
 logger = logging.getLogger(__name__)
@@ -24,11 +26,12 @@ def _embed(question):
     if not settings.OPENAI_API_KEY:
         raise ImproperlyConfigured('OPENAI_API_KEY 설정이 없어 빈 항목을 남길 수 없습니다')
 
-    client = OpenAI(api_key=settings.OPENAI_API_KEY)
+    client = OpenAI(api_key=settings.OPENAI_API_KEY, **client_options())
 
-    return client.embeddings.create(
-        model=settings.OPENAI_EMBEDDING_MODEL, input=[question]
-    ).data[0].embedding
+    with timed_call(settings.OPENAI_EMBEDDING_MODEL):
+        return client.embeddings.create(
+            model=settings.OPENAI_EMBEDDING_MODEL, input=[question]
+        ).data[0].embedding
 
 
 def _fallback_scope(company):

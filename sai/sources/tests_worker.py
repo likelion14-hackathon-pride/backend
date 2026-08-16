@@ -9,7 +9,15 @@ from accounts.models import Membership, User
 from companies.models import Company
 
 from .models import Connection, IngestionJob, Item
-from .worker import STALE_AFTER, claim_job, drain, reap_stale_jobs, run_job, work_forever
+from .worker import (
+    SCHEDULE_EVERY,
+    STALE_AFTER,
+    claim_job,
+    drain,
+    reap_stale_jobs,
+    run_job,
+    work_forever,
+)
 
 
 class WorkerTests(TestCase):
@@ -134,6 +142,27 @@ class WorkerTests(TestCase):
         self.assertEqual(job.errors[0]['code'], 'worker_died')
         self.assertIsNotNone(job.completed_at)
 
+    # started_at 컬럼이 생기기 전에 만들어진 행은 RUNNING 인 채로 남아 있다.
+    # started_at__lt 는 NULL 을 걸러 내므로 예전에는 영원히 정리되지 않았고,
+    # 그 회사의 주기 작업이 RUNNING 가드에 막혀 통째로 멈췄다.
+    def test_running_job_without_start_time_is_reaped(self):
+        job = self.job(status=IngestionJob.Status.RUNNING, started_at=None)
+        IngestionJob.objects.filter(id=job.id).update(
+            created_at=timezone.now() - STALE_AFTER - timedelta(minutes=1)
+        )
+
+        self.assertEqual(reap_stale_jobs(), 1)
+        job.refresh_from_db()
+        self.assertEqual(job.status, IngestionJob.Status.FAILED)
+
+    # 방금 만들어진 작업까지 거두면 안 된다. 시작 시각이 비어 있어도 마찬가지다.
+    def test_recent_job_without_start_time_is_left_alone(self):
+        job = self.job(status=IngestionJob.Status.RUNNING, started_at=None)
+
+        self.assertEqual(reap_stale_jobs(), 0)
+        job.refresh_from_db()
+        self.assertEqual(job.status, IngestionJob.Status.RUNNING)
+
     # 아직 돌고 있는 작업을 죽이면 안 된다.
     def test_running_job_within_the_window_is_left_alone(self):
         job = self.job(status=IngestionJob.Status.RUNNING, started_at=timezone.now())
@@ -141,6 +170,21 @@ class WorkerTests(TestCase):
         self.assertEqual(reap_stale_jobs(), 0)
         job.refresh_from_db()
         self.assertEqual(job.status, IngestionJob.Status.RUNNING)
+
+    # 큐가 비어 있으면 반드시 쉬어야 한다.
+    #
+    # 예전에는 주기 정리를 마치고 무조건 continue 했고, 다음 주기를 정리 '시작' 시각으로
+    # 계산했다. 정리가 주기(60초)보다 오래 걸리면 곧바로 다시 조건이 참이 되어
+    # sleep 에 영영 닿지 못하고 CPU 를 100% 물고 돌았다.
+    def test_idle_loop_always_sleeps(self):
+        # 주기를 0 으로 두면 스케줄링 조건이 매 바퀴 참이 된다. 정리가 주기보다
+        # 오래 걸리는 상황과 같은 모양이고, 예전 코드에서는 이것이 곧 무한 루프였다.
+        with patch('sources.worker.SCHEDULE_EVERY', timedelta(0)), \
+             patch('sources.worker.enqueue_due_jobs', return_value=[]), \
+             patch('sources.worker.time.sleep') as sleep:
+            work_forever(idle_seconds=3, stop_after_idle=2)
+
+        sleep.assert_called_once_with(3)
 
     # 큐가 빌 때마다 정리한다.
     def test_worker_loop_reaps(self):

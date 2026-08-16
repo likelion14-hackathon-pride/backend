@@ -5,6 +5,8 @@ from django.core.exceptions import ImproperlyConfigured
 from django.utils import timezone
 from openai import OpenAI, OpenAIError
 
+from config.ai import client_options, timed_call
+
 from .classifier import build_lookup
 from .models import Chunk, RawDocument
 from .text import normalize_document_text, redact_secrets
@@ -19,7 +21,7 @@ def _get_client():
     if not settings.OPENAI_API_KEY:
         raise ImproperlyConfigured('OPENAI_API_KEY 설정이 없어 임베딩을 실행할 수 없습니다')
 
-    return OpenAI(api_key=settings.OPENAI_API_KEY)
+    return OpenAI(api_key=settings.OPENAI_API_KEY, **client_options())
 
 
 def _language(text):
@@ -101,10 +103,11 @@ def embed_chunks(company):
     for start in range(0, len(pending), BATCH_SIZE):
         batch = pending[start:start + BATCH_SIZE]
         try:
-            response = client.embeddings.create(
-                model=settings.OPENAI_EMBEDDING_MODEL,
-                input=[chunk.text for chunk in batch],
-            )
+            with timed_call(settings.OPENAI_EMBEDDING_MODEL, len(batch)):
+                response = client.embeddings.create(
+                    model=settings.OPENAI_EMBEDDING_MODEL,
+                    input=[chunk.text for chunk in batch],
+                )
         except (OpenAIError, ValueError) as exc:
             errors.append({
                 'scope': 'embed_chunks',

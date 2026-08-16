@@ -8,6 +8,7 @@ from django.db import transaction
 from openai import OpenAI, OpenAIError
 from pydantic import BaseModel
 
+from config.ai import client_options, timed_call
 from sources.classifier import build_lookup
 from sources.models import RawDocument
 from sources.text import normalize_document_text
@@ -68,7 +69,7 @@ def _get_client():
     if not settings.OPENAI_API_KEY:
         raise ImproperlyConfigured('OPENAI_API_KEY 설정이 없어 초안 생성을 실행할 수 없습니다')
 
-    return OpenAI(api_key=settings.OPENAI_API_KEY)
+    return OpenAI(api_key=settings.OPENAI_API_KEY, **client_options())
 
 
 def _dedupe_key(scope_id, title):
@@ -179,15 +180,16 @@ def _build_entry(company, scope, rule, documents, channels, users):
 
 def _draft_batch(client, company, scope, batch, channels, users):
     prompt = '\n'.join(_render(d, i, channels, users) for i, d in enumerate(batch))
-    completion = client.chat.completions.parse(
-        model=settings.OPENAI_DRAFTER_MODEL,
-        messages=[
-            {'role': 'system', 'content': SYSTEM_PROMPT},
-            {'role': 'user', 'content': prompt},
-        ],
-        response_format=DraftResult,
-        temperature=0,
-    )
+    with timed_call(settings.OPENAI_DRAFTER_MODEL, len(batch)):
+        completion = client.chat.completions.parse(
+            model=settings.OPENAI_DRAFTER_MODEL,
+            messages=[
+                {'role': 'system', 'content': SYSTEM_PROMPT},
+                {'role': 'user', 'content': prompt},
+            ],
+            response_format=DraftResult,
+            temperature=0,
+        )
     result = completion.choices[0].message.parsed
     documents = dict(enumerate(batch))
 

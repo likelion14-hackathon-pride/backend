@@ -4,6 +4,7 @@ from django.utils import timezone
 from openai import OpenAI, OpenAIError
 from pydantic import BaseModel, Field
 
+from config.ai import client_options, timed_call
 from sources.models import Connection
 from sources.slack import SlackClient, SlackError
 from sources.text import normalize_slack_text
@@ -17,21 +18,22 @@ def draft_from_blank(blank):
     card = blank.card
     original = (card.document.raw_text if card.document else '') or ''
 
-    completion = _get_client().chat.completions.create(
-        model=settings.OPENAI_TRANSLATOR_MODEL,
-        messages=[
-            {'role': 'system', 'content': BLANK_PROMPT},
-            {
-                'role': 'user',
-                'content': (
-                    f'Original Slack request:\n{original[:500]}\n\n'
-                    f'What the card says the work is:\n{card.purpose}\n\n'
-                    f'What the employee needs to know:\n{blank.question_en}'
-                ),
-            },
-        ],
-        temperature=0,
-    )
+    with timed_call(settings.OPENAI_TRANSLATOR_MODEL):
+        completion = _get_client().chat.completions.create(
+            model=settings.OPENAI_TRANSLATOR_MODEL,
+            messages=[
+                {'role': 'system', 'content': BLANK_PROMPT},
+                {
+                    'role': 'user',
+                    'content': (
+                        f'Original Slack request:\n{original[:500]}\n\n'
+                        f'What the card says the work is:\n{card.purpose}\n\n'
+                        f'What the employee needs to know:\n{blank.question_en}'
+                    ),
+                },
+            ],
+            temperature=0,
+        )
 
     return (completion.choices[0].message.content or '').strip() or None
 
@@ -50,7 +52,7 @@ def _get_client():
     if not settings.OPENAI_API_KEY:
         raise ImproperlyConfigured('OPENAI_API_KEY 설정이 없습니다')
 
-    return OpenAI(api_key=settings.OPENAI_API_KEY)
+    return OpenAI(api_key=settings.OPENAI_API_KEY, **client_options())
 
 
 def get_slack_connection(company):
@@ -80,20 +82,21 @@ def translate_additions(lines):
         return []
 
     try:
-        completion = _get_client().chat.completions.parse(
-            model=settings.OPENAI_TRANSLATOR_MODEL,
-            messages=[
-                {'role': 'system', 'content': ADDITION_PROMPT},
-                {
-                    'role': 'user',
-                    'content': '\n'.join(
-                        f'[{index}] {line}' for index, line in enumerate(lines)
-                    ),
-                },
-            ],
-            response_format=AdditionResult,
-            temperature=0,
-        )
+        with timed_call(settings.OPENAI_TRANSLATOR_MODEL, len(lines)):
+            completion = _get_client().chat.completions.parse(
+                model=settings.OPENAI_TRANSLATOR_MODEL,
+                messages=[
+                    {'role': 'system', 'content': ADDITION_PROMPT},
+                    {
+                        'role': 'user',
+                        'content': '\n'.join(
+                            f'[{index}] {line}' for index, line in enumerate(lines)
+                        ),
+                    },
+                ],
+                response_format=AdditionResult,
+                temperature=0,
+            )
     except (OpenAIError, ValueError) as exc:
         raise RuntimeError(f'addition_failed: {type(exc).__name__}') from exc
 
@@ -210,22 +213,23 @@ def fetch_reply(escalation):
 def judge_reply(question_en, draft_ko, reply_text):
     client = _get_client()
     try:
-        completion = client.chat.completions.parse(
-            model=settings.OPENAI_ANSWER_MODEL,
-            messages=[
-                {'role': 'system', 'content': JUDGE_PROMPT},
-                {
-                    'role': 'user',
-                    'content': (
-                        f"Employee's question (English):\n{question_en}\n\n"
-                        f'What SAI asked the owner (Korean):\n{draft_ko}\n\n'
-                        f"Owner's reply (Korean):\n{reply_text}"
-                    ),
-                },
-            ],
-            response_format=AnswerJudgement,
-            temperature=0,
-        )
+        with timed_call(settings.OPENAI_ANSWER_MODEL):
+            completion = client.chat.completions.parse(
+                model=settings.OPENAI_ANSWER_MODEL,
+                messages=[
+                    {'role': 'system', 'content': JUDGE_PROMPT},
+                    {
+                        'role': 'user',
+                        'content': (
+                            f"Employee's question (English):\n{question_en}\n\n"
+                            f'What SAI asked the owner (Korean):\n{draft_ko}\n\n'
+                            f"Owner's reply (Korean):\n{reply_text}"
+                        ),
+                    },
+                ],
+                response_format=AnswerJudgement,
+                temperature=0,
+            )
     except (OpenAIError, ValueError) as exc:
         raise RuntimeError(f'judge_failed: {type(exc).__name__}') from exc
 

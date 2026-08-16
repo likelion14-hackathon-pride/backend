@@ -5,6 +5,8 @@ from django.core.exceptions import ImproperlyConfigured
 from openai import OpenAI, OpenAIError
 from pydantic import BaseModel
 
+from config.ai import client_options, timed_call
+
 from .models import Identity, Item, RawDocument
 from .text import normalize_document_text
 
@@ -72,7 +74,7 @@ def _get_client():
     if not settings.OPENAI_API_KEY:
         raise ImproperlyConfigured('OPENAI_API_KEY 설정이 없어 분류를 실행할 수 없습니다')
 
-    return OpenAI(api_key=settings.OPENAI_API_KEY)
+    return OpenAI(api_key=settings.OPENAI_API_KEY, **client_options())
 
 
 # 채널 ID -> '#dev', 슬랙 유저 ID -> '조상원' 매핑.
@@ -119,15 +121,16 @@ def _classify_batch(client, documents, channels, users, parents):
         _render(document, index, channels, users, parents)
         for index, document in enumerate(documents)
     )
-    completion = client.chat.completions.parse(
-        model=settings.OPENAI_CLASSIFIER_MODEL,
-        messages=[
-            {'role': 'system', 'content': SYSTEM_PROMPT},
-            {'role': 'user', 'content': prompt},
-        ],
-        response_format=ClassificationResult,
-        temperature=0,
-    )
+    with timed_call(settings.OPENAI_CLASSIFIER_MODEL, len(documents)):
+        completion = client.chat.completions.parse(
+            model=settings.OPENAI_CLASSIFIER_MODEL,
+            messages=[
+                {'role': 'system', 'content': SYSTEM_PROMPT},
+                {'role': 'user', 'content': prompt},
+            ],
+            response_format=ClassificationResult,
+            temperature=0,
+        )
     result = completion.choices[0].message.parsed
 
     return {label.index: label.label for label in result.labels}

@@ -10,6 +10,7 @@ from openai import OpenAI, OpenAIError
 from pgvector.django import CosineDistance
 from pydantic import BaseModel, Field
 
+from config.ai import client_options, timed_call
 from handbook.retrieval import search_rules
 from handbook.services import scopes_in_view
 from sources.classifier import build_lookup
@@ -92,7 +93,7 @@ def _get_client():
     if not settings.OPENAI_API_KEY:
         raise ImproperlyConfigured('OPENAI_API_KEY 설정이 없어 카드를 만들 수 없습니다')
 
-    return OpenAI(api_key=settings.OPENAI_API_KEY)
+    return OpenAI(api_key=settings.OPENAI_API_KEY, **client_options())
 
 
 # 멘션된 사람 중 SAI 계정이 연결된 첫 번째를 담당자로 본다.
@@ -135,15 +136,16 @@ def _judge_batch(client, batch, channels, users):
         f'{normalize_document_text(document, channels, users)[:300]}'
         for index, document in enumerate(batch)
     )
-    completion = client.chat.completions.parse(
-        model=settings.OPENAI_CLASSIFIER_MODEL,
-        messages=[
-            {'role': 'system', 'content': JUDGE_PROMPT},
-            {'role': 'user', 'content': prompt},
-        ],
-        response_format=JudgementResult,
-        temperature=0,
-    )
+    with timed_call(settings.OPENAI_CLASSIFIER_MODEL, len(batch)):
+        completion = client.chat.completions.parse(
+            model=settings.OPENAI_CLASSIFIER_MODEL,
+            messages=[
+                {'role': 'system', 'content': JUDGE_PROMPT},
+                {'role': 'user', 'content': prompt},
+            ],
+            response_format=JudgementResult,
+            temperature=0,
+        )
 
     # 대상이 비면 지시가 아니다. 프롬프트에도 적었지만 여기서 한 번 더 막는다.
     # 조각글과 붙여넣은 명령어가 남의 할 일 목록에 올라가는 것을 프롬프트만으로 막지 못했다.
@@ -193,9 +195,10 @@ def _judge(client, documents, channels, users):
 # 프로젝트 채널의 지시에도 회사 규칙이 적용된다. 프로젝트만 뒤지면 '배포 전 공지' 같은
 # 회사 규칙을 단계에 달지 못한다.
 def _find_rules(client, company, text, scope):
-    vector = client.embeddings.create(
-        model=settings.OPENAI_EMBEDDING_MODEL, input=[text]
-    ).data[0].embedding
+    with timed_call(settings.OPENAI_EMBEDDING_MODEL):
+        vector = client.embeddings.create(
+            model=settings.OPENAI_EMBEDDING_MODEL, input=[text]
+        ).data[0].embedding
     rules = search_rules(
         vector, company, scopes_in_view(company, scope), MAX_RULES, RULE_MAX_DISTANCE
     )
@@ -401,15 +404,16 @@ def _build_card(client, company, document, channels, users):
         f'\nPast messages with similar phrasing (for tone_note):\n{_render_cases(cases)}'
     )
 
-    completion = client.chat.completions.parse(
-        model=settings.OPENAI_DRAFTER_MODEL,
-        messages=[
-            {'role': 'system', 'content': CARD_PROMPT},
-            {'role': 'user', 'content': user_content},
-        ],
-        response_format=CardDraft,
-        temperature=0,
-    )
+    with timed_call(settings.OPENAI_DRAFTER_MODEL):
+        completion = client.chat.completions.parse(
+            model=settings.OPENAI_DRAFTER_MODEL,
+            messages=[
+                {'role': 'system', 'content': CARD_PROMPT},
+                {'role': 'user', 'content': user_content},
+            ],
+            response_format=CardDraft,
+            temperature=0,
+        )
     draft = completion.choices[0].message.parsed
     if not draft.purpose.strip():
         return None

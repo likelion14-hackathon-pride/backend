@@ -3,6 +3,7 @@ import time
 from datetime import timedelta
 
 from django.db import transaction
+from django.db.models import Q
 from django.utils import timezone
 
 from cards.todos import purge_done
@@ -29,9 +30,13 @@ STALE_AFTER = timedelta(minutes=30)
 # 화면에서는 영원히 진행 중으로 보이고 다시 실행할 방법도 없다.
 def reap_stale_jobs(now=None):
     cutoff = (now or timezone.now()) - STALE_AFTER
+    # started_at 이 비어 있는 작업도 거둔다. started_at 컬럼이 생기기 전에 만들어진 행이
+    # RUNNING 으로 남아 있으면 started_at__lt 는 NULL 을 걸러 내므로 영원히 정리되지 않고,
+    # 그 회사의 주기 작업이 RUNNING 가드에 막혀 통째로 멈춘다.
     stale = list(
         IngestionJob.objects.filter(
-            status=IngestionJob.Status.RUNNING, started_at__lt=cutoff
+            Q(started_at__lt=cutoff) | Q(started_at__isnull=True, created_at__lt=cutoff),
+            status=IngestionJob.Status.RUNNING,
         )
     )
     for job in stale:
@@ -113,11 +118,26 @@ def run_job(job):
     if active_connection is None:
         return _fail(job, 'source_not_connected')
 
+    # 시작만 있고 종료가 없는 job id 가 곧 멈춘 지점이다.
+    logger.info(
+        '작업 시작 job=%s kind=%s company=%s source=%s items=%d',
+        job.id, job.kind, job.company_id, connection.kind, len(items),
+    )
+    started = time.monotonic()
     try:
-        return runner(job, active_connection)
+        result = runner(job, active_connection)
     except Exception:
-        logger.exception('수집 작업 실패 job=%s', job.id)
+        logger.exception(
+            '수집 작업 실패 job=%s 소요=%.1fs', job.id, time.monotonic() - started
+        )
         return _fail(job, 'unexpected_error')
+
+    logger.info(
+        '작업 종료 job=%s status=%s 소요=%.1fs',
+        job.id, getattr(result, 'status', None), time.monotonic() - started,
+    )
+
+    return result
 
 
 def drain(limit=None):
@@ -132,6 +152,31 @@ def drain(limit=None):
     return processed
 
 
+# 주기 정리와 큐잉. 새로 넣은 작업 목록을 돌려준다.
+def _run_schedule(now):
+    started = time.monotonic()
+    reaped = reap_stale_jobs(now)
+    purged = purge_done(now)
+    jobs = enqueue_due_jobs(now)
+    for job in jobs:
+        logger.info('주기 작업을 큐에 넣었습니다 job=%s kind=%s', job.id, job.kind)
+
+    elapsed = time.monotonic() - started
+    logger.info(
+        '스케줄링 완료 reap=%d purge=%d enqueue=%d 소요=%.1fs',
+        reaped, purged, len(jobs), elapsed,
+    )
+    # 한 바퀴가 주기보다 오래 걸리면 정리가 큐잉을 따라가지 못한다는 뜻이다.
+    # 예전에는 이 상태에서 sleep 에 영영 닿지 못하고 CPU 를 100% 물고 돌았다.
+    if elapsed >= SCHEDULE_EVERY.total_seconds():
+        logger.warning(
+            '스케줄링이 주기(%ds)보다 오래 걸립니다 소요=%.1fs',
+            SCHEDULE_EVERY.total_seconds(), elapsed,
+        )
+
+    return jobs
+
+
 def work_forever(idle_seconds=IDLE_SECONDS, stop_after_idle=None):
     idle_rounds = 0
     next_schedule = timezone.now()
@@ -141,15 +186,17 @@ def work_forever(idle_seconds=IDLE_SECONDS, stop_after_idle=None):
             continue
 
         # 큐가 빈 김에 처리한다. 바쁠 때 끼어들지 않는다.
-        now = timezone.now()
-        if now >= next_schedule:
-            reap_stale_jobs(now)
-            purge_done(now)
-            for job in enqueue_due_jobs(now):
-                logger.info('주기 작업을 큐에 넣었습니다 job=%s kind=%s', job.id, job.kind)
-            next_schedule = now + SCHEDULE_EVERY
-            # 방금 넣은 작업을 다음 바퀴에서 바로 집는다.
-            continue
+        if timezone.now() >= next_schedule:
+            jobs = _run_schedule(timezone.now())
+            # 다음 주기는 일을 마친 시각부터 센다. 시작 시각으로 재면 스케줄링이 걸린
+            # 시간만큼 대기가 줄고, 한 바퀴가 주기를 넘기는 순간 sleep 에 닿지 못한다.
+            next_schedule = timezone.now() + SCHEDULE_EVERY
+            if jobs:
+                # 방금 넣은 작업을 다음 바퀴에서 바로 집는다.
+                # 아무것도 넣지 않았으면 쉬어야 한다. 여기서 무조건 continue 하면
+                # 큐가 빈 채로 루프만 도는 구간이 생긴다.
+                idle_rounds = 0
+                continue
 
         idle_rounds += 1
         if stop_after_idle is not None and idle_rounds >= stop_after_idle:
