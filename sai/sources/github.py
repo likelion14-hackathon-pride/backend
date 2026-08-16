@@ -6,16 +6,17 @@ import urllib.request
 
 import jwt
 
+from config.errors import DomainError
+
 
 GITHUB_API_BASE = 'https://api.github.com'
 DEFAULT_TIMEOUT = 10
 
 
 # GitHub API 호출 또는 GitHub App 설정이 실패한 경우.
-class GitHubError(Exception):
-    def __init__(self, code):
-        self.code = code
-        super().__init__(code)
+# 요청 중에 터지면 그대로 400 봉투가 되고, 워커에서는 exc.code 를 작업 기록에 남긴다.
+class GitHubError(DomainError):
+    pass
 
 
 # GitHub App 설치 토큰으로 API를 호출하는 최소 클라이언트.

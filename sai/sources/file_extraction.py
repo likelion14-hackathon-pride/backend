@@ -4,14 +4,14 @@ from pathlib import Path
 from docx import Document
 from pypdf import PdfReader
 
+from config.errors import DomainError
+
 
 LOCAL_DOCUMENT_PART_SIZE = 4000
 
 
-class FileExtractionError(Exception):
-    def __init__(self, code):
-        self.code = code
-        super().__init__(code)
+class FileExtractionError(DomainError):
+    pass
 
 
 def _text_file(data):

@@ -1,6 +1,7 @@
 from django.utils import timezone
 from rest_framework.exceptions import ValidationError
 
+from config.errors import INVALID_STATUS_MOVE
 from handbook.retrieval import search_rules
 from handbook.services import scopes_in_view
 
@@ -25,7 +26,9 @@ ALLOWED_MOVES = {
 
 def check_move(column, target):
     if target not in ALLOWED_MOVES.get(column, set()):
-        raise ValidationError({'status': [f'cannot move to {target} from {column}']})
+        raise ValidationError(
+            f'cannot move to {target} from {column}', code=INVALID_STATUS_MOVE
+        )
 
 
 def original_text(card):

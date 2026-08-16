@@ -1,4 +1,3 @@
-from django.core.exceptions import ImproperlyConfigured
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from drf_yasg.utils import no_body, swagger_auto_schema
@@ -11,6 +10,14 @@ from rest_framework.views import APIView
 from accounts.models import Membership
 from cards.models import Blank
 from companies.access import get_member_company, get_owner_company
+from config.errors import (
+    ALREADY_APPROVED,
+    ALREADY_ESCALATED,
+    ALREADY_SENT,
+    NO_ANSWER_YET,
+    NOT_SENT_YET,
+    field_error,
+)
 from config.filters import enum_parameter, filter_enum
 from config.pagination import (
     CURSOR_PARAMETER,
@@ -19,9 +26,8 @@ from config.pagination import (
     paged_response,
 )
 from sources.models import Item
-from sources.slack import SlackError
 
-from .escalation import judge_reply, send_to_slack
+from .escalation import send_to_slack
 from .models import Escalation, Message, Thread
 from .queries import escalations_for, messages_in
 from .serializers import (
@@ -151,7 +157,7 @@ class EscalationListCreateView(APIView):
                 id=data['blankId'], company=company,
             )
             if blank.escalation_id:
-                raise ValidationError({'blankId': ['already escalated']})
+                raise field_error('blankId', 'already escalated', ALREADY_ESCALATED)
 
             scope = blank.card.scope
             question_en = question_en or blank.question_en
@@ -163,7 +169,7 @@ class EscalationListCreateView(APIView):
                 id=data['messageId'], company=company, thread__user=request.user,
             )
             if hasattr(origin, 'escalation'):
-                raise ValidationError({'messageId': ['already escalated']})
+                raise field_error('messageId', 'already escalated', ALREADY_ESCALATED)
             question = Message.objects.filter(
                 thread=origin.thread, role=Message.Role.USER, id__lt=origin.id
             ).order_by('-id').first()
@@ -213,7 +219,7 @@ class EscalationDetailView(APIView):
         escalation = get_object_or_404(escalations_for(company, request.user), id=escalation_id)
 
         if escalation.status != Escalation.Status.DRAFT:
-            raise ValidationError({'draftKo': ['already sent']})
+            raise ValidationError('already sent', code=ALREADY_SENT)
 
         serializer = EscalationDraftUpdateSerializer(escalation, data=request.data)
         serializer.is_valid(raise_exception=True)
@@ -245,7 +251,7 @@ class EscalationDismissView(APIView):
         )
 
         if escalation.status == Escalation.Status.APPROVED:
-            raise ValidationError({'status': ['already approved']})
+            raise ValidationError('already approved', code=ALREADY_APPROVED)
 
         escalation.status = Escalation.Status.DISMISSED
         escalation.save(update_fields=['status'])
@@ -276,7 +282,7 @@ class EscalationAcknowledgeView(APIView):
         )
 
         if escalation.answered_at is None:
-            raise ValidationError({'status': ['no answer yet']})
+            raise ValidationError('no answer yet', code=NO_ANSWER_YET)
 
         if escalation.acknowledged_at is None:
             escalation.acknowledged_at = timezone.now()
@@ -311,17 +317,15 @@ class EscalationSendView(APIView):
         serializer.is_valid(raise_exception=True)
 
         if escalation.status != Escalation.Status.DRAFT:
-            raise ValidationError({'status': ['already sent']})
+            raise ValidationError('already sent', code=ALREADY_SENT)
 
         item = get_object_or_404(
             Item, id=serializer.validated_data['itemId'], company=company, removed_at__isnull=True
         )
         # 덧붙인 줄을 먼저 한국어로 바꾼다. 여기서 실패하면 아무것도 보내지 않는다.
         additions = korean_additions(serializer.validated_data.get('extraEn'))
-        try:
-            escalation = send_to_slack(escalation, item, additions)
-        except SlackError as exc:
-            raise ValidationError({'slack': [exc.code]})
+        # SlackError 는 DomainError 라서 슬랙이 돌려준 코드가 그대로 봉투의 code 가 된다.
+        escalation = send_to_slack(escalation, item, additions)
 
         return Response(EscalationSerializer(escalation).data, status=status.HTTP_200_OK)
 
@@ -348,33 +352,9 @@ class EscalationCheckAnswerView(APIView):
         escalation = get_object_or_404(escalations_for(company, request.user), id=escalation_id)
 
         if escalation.status == Escalation.Status.DRAFT:
-            raise ValidationError({'status': ['not sent yet']})
+            raise ValidationError('not sent yet', code=NOT_SENT_YET)
 
         escalation = collect_answer(escalation)
-
-        return Response(EscalationSerializer(escalation).data, status=status.HTTP_200_OK)
-
-        try:
-            judgement = judge_reply(escalation.question_en, escalation.draft_ko, text)
-        except (ImproperlyConfigured, RuntimeError) as exc:
-            raise AnswerUnavailable(str(exc))
-
-        escalation.answer_is_answer = judgement.is_answer
-        escalation.answer_reason = judgement.reason[:200]
-        escalation.answer_needs_review = judgement.needs_review
-        if judgement.is_answer:
-            escalation.answer_ko = judgement.answer_ko
-            escalation.answer_en = judgement.answer_en
-            escalation.answered_at = timezone.now()
-            escalation.status = Escalation.Status.ANSWERED
-        escalation.save()
-
-        # 카드에서 올라온 질문이면 카드에도 답을 채운다.
-        # 여기서 안 채우면 답은 왔는데 카드는 그대로 비어 있다.
-        if judgement.is_answer:
-            escalation.card_blanks.update(
-                sai_answer_ko=judgement.answer_ko, sai_answer_en=judgement.answer_en
-            )
 
         return Response(EscalationSerializer(escalation).data, status=status.HTTP_200_OK)
 

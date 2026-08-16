@@ -16,6 +16,7 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from companies.access import get_member_company, get_owner_company
+from config.errors import NO_INGESTION_TARGET
 from config.filters import enum_parameter, filter_enum, filter_int, int_parameter
 from config.pagination import (
     CURSOR_PARAMETER,
@@ -70,13 +71,11 @@ from .services import (
     remove_local_file,
     remove_repository,
 )
-from .github import GitHubError
 from .github_webhook import (
     find_github_connection,
     handle_github_event,
     verify_github_signature,
 )
-from .slack import SlackError
 from .worker import drain
 from .webhook import (
     find_connection,
@@ -459,10 +458,9 @@ class SourceChannelListView(APIView):
         serializer = ChannelAddSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
-        try:
-            item = add_channel(connection, serializer.validated_data['externalId'])
-        except SlackError as exc:
-            raise ValidationError({'externalId': [exc.code]})
+        # SlackError / GitHubError 는 DomainError 라서 밖에서 받은 코드가
+        # 그대로 봉투의 code 가 된다. 여기서 옮겨 담지 않는다.
+        item = add_channel(connection, serializer.validated_data['externalId'])
 
         clear_connection_error(connection)
         response_serializer = ChannelSerializer(item)
@@ -493,10 +491,7 @@ class SourceAvailableChannelListView(APIView):
         company = get_owner_company(request.user, company_id)
         connection = get_connection(company, connection_id, Connection.Kind.SLACK)
 
-        try:
-            channels = list_available_channels(connection)
-        except SlackError as exc:
-            raise ValidationError({'slack': [exc.code]})
+        channels = list_available_channels(connection)
 
         return page_response(AvailableChannelSerializer, channels)
 
@@ -616,10 +611,7 @@ class SourceRepositoryListView(APIView):
         serializer = RepositoryAddSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
-        try:
-            repository = add_repository(connection, serializer.validated_data['externalId'])
-        except GitHubError as exc:
-            raise ValidationError({'externalId': [exc.code]})
+        repository = add_repository(connection, serializer.validated_data['externalId'])
 
         response_serializer = RepositorySerializer(repository)
 
@@ -646,10 +638,7 @@ class SourceAvailableRepositoryListView(APIView):
         company = get_owner_company(request.user, company_id)
         connection = get_connection(company, connection_id, Connection.Kind.GITHUB)
 
-        try:
-            repositories = list_available_repositories(connection)
-        except GitHubError as exc:
-            raise ValidationError({'github': [exc.code]})
+        repositories = list_available_repositories(connection)
 
         return page_response(AvailableRepositorySerializer, repositories)
 
@@ -810,8 +799,8 @@ class IngestionJobListCreateView(APIView):
 
         item_ids = list(items.values_list('id', flat=True))
         if not item_ids:
-            code = 'no matching item' if requested_ids else 'no item registered'
-            raise ValidationError({'itemIds': [code]})
+            reason = 'no matching item' if requested_ids else 'no item registered'
+            raise ValidationError(reason, code=NO_INGESTION_TARGET)
 
         job = IngestionJob.objects.create(company=company, item_ids=item_ids)
 

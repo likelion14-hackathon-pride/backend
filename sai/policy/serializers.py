@@ -1,5 +1,7 @@
 from rest_framework import serializers
 
+from config.errors import KEYWORD_TAKEN
+
 from .models import RiskKeyword
 
 
@@ -19,6 +21,6 @@ class RiskKeywordSerializer(serializers.ModelSerializer):
 
         # 이미 등록된 키워드가 중복으로 저장되지 않도록 확인한다.
         if company and RiskKeyword.objects.filter(company=company, word=value).exists():
-            raise serializers.ValidationError('keyword already registered')
+            raise serializers.ValidationError('keyword already registered', code=KEYWORD_TAKEN)
 
         return value

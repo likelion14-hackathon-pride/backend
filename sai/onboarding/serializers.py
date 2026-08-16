@@ -1,5 +1,7 @@
 from rest_framework import serializers
 
+from config.errors import ANSWER_REQUIRED
+
 from .models import Question
 
 
@@ -30,9 +32,13 @@ class OnboardingQuestionUpdateSerializer(serializers.Serializer):
         question_status = attrs.get('status')
 
         if not answer and question_status != Question.Status.SKIPPED:
-            raise serializers.ValidationError('answerKo or SKIPPED status is required')
+            raise serializers.ValidationError(
+                'answerKo or SKIPPED status is required', code=ANSWER_REQUIRED
+            )
         if question_status == Question.Status.ANSWERED and not answer:
-            raise serializers.ValidationError('answerKo is required for ANSWERED status')
+            raise serializers.ValidationError(
+                'answerKo is required for ANSWERED status', code=ANSWER_REQUIRED
+            )
 
         return attrs
 

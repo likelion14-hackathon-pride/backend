@@ -1,5 +1,6 @@
 from drf_yasg import openapi
-from rest_framework.exceptions import ValidationError
+
+from .errors import INVALID_PARAMETER, field_error
 
 
 def enum_parameter(name, choices, description=None):
@@ -20,7 +21,7 @@ def enum_value(request, name, choices):
     if not value:
         return None
     if value not in choices.values:
-        raise ValidationError({name: [f'invalid {name}']})
+        raise field_error(name, f'invalid {name}', INVALID_PARAMETER)
 
     return value
 
@@ -32,7 +33,7 @@ def int_value(request, name):
     try:
         return int(value)
     except ValueError:
-        raise ValidationError({name: [f'invalid {name}']})
+        raise field_error(name, f'invalid {name}', INVALID_PARAMETER)
 
 
 def flag(request, name):

@@ -21,7 +21,25 @@ from rest_framework import permissions
 from drf_yasg.views import get_schema_view 
 from drf_yasg import openapi 
 from accounts.views import MeView
+from config.errors import SERVER_ERROR
 from sources.views import github_events, slack_events
+
+
+# DRF 뷰 밖에서 난 에러도 같은 봉투로 내보낸다.
+# 없는 주소로 온 요청과 미들웨어에서 터진 예외가 여기로 온다.
+# 뷰 안에서 난 것은 config.exceptions.api_exception_handler 가 맡는다.
+def _error_json(code, message, status):
+    return JsonResponse(
+        {'error': {'code': code, 'field': None, 'message': message}}, status=status
+    )
+
+
+def handler404(request, exception):
+    return _error_json('not_found', 'not found', 404)
+
+
+def handler500(request):
+    return _error_json(SERVER_ERROR, 'unexpected server error', 500)
 
 # Swagger 설정
 schema_view = get_schema_view(

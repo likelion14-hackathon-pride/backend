@@ -1,4 +1,7 @@
-from django.test import TestCase
+from unittest.mock import patch
+
+from django.core.exceptions import ImproperlyConfigured
+from django.test import TestCase, override_settings
 from rest_framework.exceptions import ValidationError
 from rest_framework.request import Request
 from rest_framework.test import APIClient
@@ -6,6 +9,8 @@ from rest_framework.test import APIClient
 from accounts.models import Membership, User
 from cards.models import InstructionCard
 from companies.models import Company
+from sources.models import Connection
+from sources.slack import SlackError
 
 from .pagination import paginate
 
@@ -98,6 +103,72 @@ class ErrorEnvelopeTests(TestCase):
 
         self.assertEqual(response.status_code, 400)
         self.assertEnvelope(response, field=None)
+
+    # 밖에서 온 예외도 뷰가 옮겨 담지 않고 그대로 봉투가 된다.
+    # 슬랙이 준 코드가 message 가 아니라 code 로 나가야 프론트가 분기할 수 있다.
+    def test_domain_error_carries_its_own_code(self):
+        self.client.force_authenticate(user=self.owner)
+        connection = Connection.objects.create(
+            company=self.company, kind=Connection.Kind.SLACK,
+            status=Connection.Status.CONNECTED, bot_token='xoxb-test',
+        )
+
+        with patch(
+            'sources.services.add_channel', side_effect=SlackError('invalid_auth')
+        ):
+            response = self.client.post(
+                f'/api/companies/{self.company.id}/source-connections/{connection.id}/channels',
+                {'externalId': 'C1'}, format='json',
+            )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEnvelope(response, code='invalid_auth')
+
+    # 429 는 어디서 났든 같은 코드로 나가야 한다. DRF 스로틀은 throttled 를 쓰므로 이름을 바꾼다.
+    def test_rate_limited(self):
+        for _ in range(6):
+            response = self.client.post(
+                '/api/auth/signup/owner',
+                {'email': 'a@b.com', 'password': 'pw', 'displayName': 'x', 'companyName': 'y'},
+                format='json',
+            )
+
+        self.assertEqual(response.status_code, 429)
+        self.assertEnvelope(response, code='rate_limited')
+        self.assertIn('Retry-After', response)
+
+    # 503 은 원인을 밖으로 내보내지 않는다. 설정 파일 내용이 화면에 뜨면 안 된다.
+    def test_upstream_error_hides_its_reason(self):
+        self.client.force_authenticate(user=self.owner)
+
+        with patch(
+            'qna.services._ask',
+            side_effect=ImproperlyConfigured('OPENAI_API_KEY 설정이 없습니다'),
+        ):
+            response = self.client.post(
+                f'/api/companies/{self.company.id}/ask',
+                {'question': 'what time'}, format='json',
+            )
+
+        self.assertEqual(response.status_code, 503)
+        self.assertEnvelope(response, code='ai_unavailable')
+        self.assertNotIn('OPENAI_API_KEY', response.data['error']['message'])
+
+    # 아무도 잡지 않은 예외도 봉투로 나가야 한다. 여기서 HTML 이 나가면
+    # JSON 을 기대하던 클라이언트는 파싱에서 죽는다.
+    @override_settings(DEBUG=False)
+    def test_unhandled_exception_is_wrapped(self):
+        self.client.force_authenticate(user=self.owner)
+
+        with patch('qna.services._ask', side_effect=TypeError('boom')):
+            response = self.client.post(
+                f'/api/companies/{self.company.id}/ask',
+                {'question': 'what time'}, format='json',
+            )
+
+        self.assertEqual(response.status_code, 500)
+        self.assertEqual(response['Content-Type'], 'application/json')
+        self.assertEnvelope(response, code='server_error')
 
 
 class PaginationTests(TestCase):

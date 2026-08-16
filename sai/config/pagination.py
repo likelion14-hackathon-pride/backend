@@ -1,7 +1,8 @@
 from drf_yasg import openapi
 from rest_framework import status
-from rest_framework.exceptions import ValidationError
 from rest_framework.response import Response
+
+from .errors import INVALID_CURSOR, INVALID_LIMIT, field_error
 
 DEFAULT_LIMIT = 20
 MAX_LIMIT = 100
@@ -20,10 +21,12 @@ def read_limit(request):
     try:
         limit = int(request.query_params.get('limit', DEFAULT_LIMIT))
     except ValueError:
-        raise ValidationError({'limit': ['limit must be an integer']})
+        raise field_error('limit', 'limit must be an integer', INVALID_LIMIT)
 
     if limit < 1 or limit > MAX_LIMIT:
-        raise ValidationError({'limit': [f'limit must be between 1 and {MAX_LIMIT}']})
+        raise field_error(
+            'limit', f'limit must be between 1 and {MAX_LIMIT}', INVALID_LIMIT
+        )
 
     return limit
 
@@ -40,7 +43,7 @@ def paginate(queryset, request):
         try:
             queryset = queryset.filter(id__lt=int(cursor))
         except ValueError:
-            raise ValidationError({'cursor': ['invalid cursor']})
+            raise field_error('cursor', 'invalid cursor', INVALID_CURSOR)
 
     rows = list(queryset.order_by('-id')[:limit + 1])
     items = rows[:limit]

@@ -1,5 +1,10 @@
 from rest_framework import serializers
 
+from config.errors import (
+    CONFLICTING_SOURCE,
+    ESCALATION_SOURCE_REQUIRED,
+    SCOPE_NOT_FOUND,
+)
 from handbook.models import CompanyScope
 
 from .models import Escalation, Message
@@ -14,7 +19,7 @@ class AskInputSerializer(serializers.Serializer):
 
     def validate_scopeId(self, value):
         if value is not None and value.company_id != self.context['company'].id:
-            raise serializers.ValidationError('scope not found')
+            raise serializers.ValidationError('scope not found', code=SCOPE_NOT_FOUND)
 
         return value
 
@@ -196,7 +201,7 @@ class EscalationApproveSerializer(serializers.Serializer):
 
     def validate_scopeId(self, value):
         if value.company_id != self.context['company'].id:
-            raise serializers.ValidationError('scope not found')
+            raise serializers.ValidationError('scope not found', code=SCOPE_NOT_FOUND)
 
         return value
 
@@ -210,11 +215,14 @@ class EscalationCreateSerializer(serializers.Serializer):
 
     def validate(self, attrs):
         if attrs.get('messageId') and attrs.get('blankId'):
-            raise serializers.ValidationError('messageId and blankId cannot be used together')
+            raise serializers.ValidationError(
+                'messageId and blankId cannot be used together', code=CONFLICTING_SOURCE
+            )
 
         if not any(attrs.get(key) for key in ('messageId', 'blankId', 'questionEn')):
             raise serializers.ValidationError(
-                'one of messageId, blankId, questionEn is required'
+                'one of messageId, blankId, questionEn is required',
+                code=ESCALATION_SOURCE_REQUIRED,
             )
 
         return attrs
