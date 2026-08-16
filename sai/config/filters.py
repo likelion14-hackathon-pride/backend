@@ -9,6 +9,12 @@ def enum_parameter(name, choices, description=None):
     )
 
 
+def int_parameter(name, description=None):
+    return openapi.Parameter(
+        name, openapi.IN_QUERY, type=openapi.TYPE_INTEGER, description=description,
+    )
+
+
 def enum_value(request, name, choices):
     value = request.query_params.get(name)
     if not value:
