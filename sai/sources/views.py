@@ -59,7 +59,11 @@ from .services import (
     remove_repository,
 )
 from .github import GitHubError
-from .github_webhook import handle_github_event, verify_github_signature
+from .github_webhook import (
+    find_github_connection,
+    handle_github_event,
+    verify_github_signature,
+)
 from .slack import SlackError
 from .worker import drain
 from .webhook import (
@@ -77,16 +81,21 @@ logger = logging.getLogger(__name__)
 @csrf_exempt
 @require_POST
 def github_events(request):
-    signature = request.headers.get('X-Hub-Signature-256', '')
-    if not verify_github_signature(settings.GITHUB_WEBHOOK_SECRET, signature, request.body):
-        return HttpResponseForbidden()
-
     try:
         data = json.loads(request.body)
     except json.JSONDecodeError:
         return HttpResponseBadRequest()
     if not isinstance(data, dict):
         return HttpResponseBadRequest()
+
+    connection = find_github_connection(data)
+    if connection is None:
+        return HttpResponseForbidden()
+
+    signature = request.headers.get('X-Hub-Signature-256', '')
+    webhook_secret = connection.github_webhook_secret or settings.GITHUB_WEBHOOK_SECRET
+    if not verify_github_signature(webhook_secret, signature, request.body):
+        return HttpResponseForbidden()
 
     event_name = request.headers.get('X-GitHub-Event', '')
     try:
