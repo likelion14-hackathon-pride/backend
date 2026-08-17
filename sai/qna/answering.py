@@ -18,7 +18,7 @@ from policy.models import RiskKeyword
 from sources.models import Chunk
 
 # 프롬프트를 고치면 올린다. Message.prompt_version 에 기록된다.
-PROMPT_VERSION = 'ask-v3'
+PROMPT_VERSION = 'ask-v4'
 
 # 검색해서 모델에 넘길 규칙 수. 너무 많으면 모델이 엉뚱한 걸 인용한다.
 TOP_K = 5
@@ -73,7 +73,8 @@ Hard requirements
 - Cite by the index numbers you were given, only for the items you actually used. Rules and cases
   share one numbering. Put them in `cited_indexes` only. Never write index markers like [0] or
   footnote numbers inside `answer`.
-- Write `answer` in the language named in the request. Keep it short: two or three sentences.
+- Write `answer` in English only, even when the question or source material is Korean. Keep it
+  short: two or three sentences.
 - For NO_SOURCE and NEEDS_DECISION, write `draft_ko`: a short, polite Korean message the employee
   could send to the company owner to get this decided. Otherwise leave draft_ko empty.
 - For OUT_OF_SCOPE, leave answer empty."""
@@ -314,6 +315,7 @@ def _ids(rows):
 # 정한 규칙이 후보에 아예 없어서, 넓히기가 걸리지도 않은 채 회사 기본값이 확정 답변으로
 # 나간다. 틀린 답을 확신을 갖고 주는 쪽이 '모르겠습니다'보다 나쁘다.
 def answer_question(company, question, lang='en', scope=None):
+    lang = 'en'
     client = _get_client()
     started = time.time()
 

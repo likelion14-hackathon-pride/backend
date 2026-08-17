@@ -283,17 +283,16 @@ def ask(company, user, thread, question, scope=None, context=None):
 
 
 def _ask(company, user, thread, question, scope, context):
-    lang = language_of(user)
-    body_field = 'body_en' if lang == 'en' else 'body_ko'
+    user_body_field = 'body_en' if language_of(user) == 'en' else 'body_ko'
 
     Message.objects.create(
-        company=company, thread=thread, role=Message.Role.USER, **{body_field: question}
+        company=company, thread=thread, role=Message.Role.USER, **{user_body_field: question}
     )
 
     asked = f'{context}\n\n{question}' if context else question
-    result, cited, retrieval, usage = answer_question(company, asked, lang, scope)
+    result, cited, retrieval, usage = answer_question(company, asked, 'en', scope)
 
-    bodies = {body_field: result.answer or None}
+    bodies = {'body_en': result.answer or None}
     # 대표 확인이 필요한 답변은 한국어 초안이 본체다.
     # 여기서 저장해 두지 않으면 나중에 에스컬레이션을 만들 때 초안을 잃어버린다.
     if result.verdict in NEEDS_OWNER and result.draft_ko:
