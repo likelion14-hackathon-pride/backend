@@ -41,6 +41,26 @@ def sampling_options(model, temperature=0):
     return {'temperature': temperature}
 
 
+def reasoning_options(model, effort=None, verbosity=None):
+    if not (model or '').startswith(FIXED_SAMPLING_MODELS):
+        return {}
+
+    options = {}
+    if effort:
+        options['reasoning_effort'] = effort
+    if verbosity and (model or '').startswith('gpt-5.6'):
+        options['verbosity'] = verbosity
+
+    return options
+
+
+def generation_options(model, temperature=0, reasoning_effort=None, verbosity=None):
+    return {
+        **sampling_options(model, temperature),
+        **reasoning_options(model, reasoning_effort, verbosity),
+    }
+
+
 # 호출 한 건이 얼마나 걸렸는지 남긴다.
 # 실패해도 남겨야 한다. 타임아웃으로 죽은 호출이야말로 알고 싶은 것이기 때문이다.
 @contextmanager

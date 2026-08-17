@@ -4,7 +4,7 @@ from django.utils import timezone
 from openai import OpenAI, OpenAIError
 from pydantic import BaseModel
 
-from config.ai import client_options, sampling_options, timed_call
+from config.ai import client_options, generation_options, timed_call
 
 from .models import HandbookEntry
 
@@ -101,7 +101,11 @@ def _translate(client, entries):
                     {'role': 'user', 'content': prompt},
                 ],
                 response_format=TranslationResult,
-                **sampling_options(settings.OPENAI_TRANSLATOR_MODEL),
+                **generation_options(
+                    settings.OPENAI_TRANSLATOR_MODEL,
+                    reasoning_effort=settings.OPENAI_TRANSLATOR_REASONING_EFFORT,
+                    verbosity=settings.OPENAI_TRANSLATOR_VERBOSITY,
+                ),
             )
         by_index = {t.index: t for t in completion.choices[0].message.parsed.translations}
 

@@ -245,6 +245,18 @@ class DraftEntriesTests(TestCase):
         self.assertEqual(entries, [])
         self.assertFalse(HandbookEntry.objects.exists())
 
+    @override_settings(OPENAI_API_KEY='test-key')
+    def test_low_confidence_rule_is_dropped(self):
+        entries, _ = self.draft([{
+            'title': '금요일 오후 배포 금지',
+            'body': '배포는 금요일 오후에 하지 않습니다.',
+            'confidence': 'LOW',
+            'citations': [{'index': 0, 'quote': '배포는 금요일 오후에는 하지 않는 걸로 합시다'}],
+        }])
+
+        self.assertEqual(entries, [])
+        self.assertFalse(HandbookEntry.objects.exists())
+
     # 버려진 인용이 안 보이면 규칙이 사라졌을 때 모델이 못 찾은 것인지
     # 대조에서 떨어진 것인지 구분할 수 없다.
     @override_settings(OPENAI_API_KEY='test-key')

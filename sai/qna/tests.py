@@ -140,6 +140,50 @@ class AskTests(TestCase):
 
         self.assertIn('Answer in: English', prompt)
 
+    @override_settings(
+        OPENAI_ANSWER_MODEL='gpt-5.6-sol',
+        OPENAI_ANSWER_REASONING_EFFORT='high',
+        OPENAI_ANSWER_VERBOSITY='medium',
+    )
+    def test_answer_generation_sets_reasoning_options(self):
+        parse = Mock(return_value=SimpleNamespace(
+            choices=[SimpleNamespace(message=SimpleNamespace(parsed=AnswerResult(
+                verdict='GROUNDED',
+                answer='Deployments are blocked on Friday afternoons.',
+                cited_indexes=[0],
+                draft_ko='',
+            )))],
+            usage=SimpleNamespace(prompt_tokens=120, completion_tokens=40),
+        ))
+        client = openai_stub()
+        client.chat.completions.parse = parse
+
+        with patch('qna.answering.OpenAI', return_value=client):
+            answer_question(self.company, 'Can I deploy on Friday?')
+
+        self.assertEqual(parse.call_args.kwargs['reasoning_effort'], 'high')
+        self.assertEqual(parse.call_args.kwargs['verbosity'], 'medium')
+
+    def test_answer_prompt_declares_company_scope_boundary(self):
+        parse = Mock(return_value=SimpleNamespace(
+            choices=[SimpleNamespace(message=SimpleNamespace(parsed=AnswerResult(
+                verdict='GROUNDED',
+                answer='Deployments are blocked on Friday afternoons.',
+                cited_indexes=[0],
+                draft_ko='',
+            )))],
+            usage=SimpleNamespace(prompt_tokens=120, completion_tokens=40),
+        ))
+        client = openai_stub()
+        client.chat.completions.parse = parse
+
+        with patch('qna.answering.OpenAI', return_value=client):
+            answer_question(self.company, 'Can I deploy on Friday?')
+
+        prompt = parse.call_args.kwargs['messages'][1]['content']
+        self.assertIn('Selected knowledge space: company-wide rules only.', prompt)
+        self.assertIn('Hard boundary: do not use project rules or project cases.', prompt)
+
     def test_records_usage_and_retrieval(self):
         response = self.ask()
         message = Message.objects.get(id=response.data['messageId'])
@@ -170,6 +214,14 @@ class AskTests(TestCase):
         self.assertEqual(response.data['resultType'], 'NEEDS_OWNER')
         self.assertIsNone(response.data['answer'])
         self.assertEqual(response.data['draftKo'], '대표님, 재택근무 규정이 따로 있을까요?')
+        self.assertEqual(response.data['citations'], [])
+
+    def test_no_source_never_returns_citations(self):
+        response = self.ask(
+            verdict='NO_SOURCE', answer='', cited=(0,),
+            draft_ko='대표님, 재택근무 규정이 따로 있을까요?',
+        )
+
         self.assertEqual(response.data['citations'], [])
 
     def test_needs_decision_also_needs_owner(self):

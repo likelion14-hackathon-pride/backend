@@ -5,7 +5,7 @@ from openai import OpenAI, OpenAIError
 from pydantic import BaseModel, Field
 
 from accounts.models import Membership
-from config.ai import client_options, sampling_options, timed_call
+from config.ai import client_options, generation_options, timed_call
 from sources.models import Connection, Identity
 from sources.slack import SlackClient, SlackError
 from sources.text import normalize_slack_text
@@ -34,7 +34,11 @@ def draft_from_blank(blank):
                     ),
                 },
             ],
-            **sampling_options(settings.OPENAI_TRANSLATOR_MODEL),
+            **generation_options(
+                settings.OPENAI_TRANSLATOR_MODEL,
+                reasoning_effort=settings.OPENAI_TRANSLATOR_REASONING_EFFORT,
+                verbosity=settings.OPENAI_TRANSLATOR_VERBOSITY,
+            ),
         )
 
     return (completion.choices[0].message.content or '').strip() or None
@@ -97,7 +101,11 @@ def translate_additions(lines):
                     },
                 ],
                 response_format=AdditionResult,
-                **sampling_options(settings.OPENAI_TRANSLATOR_MODEL),
+                **generation_options(
+                    settings.OPENAI_TRANSLATOR_MODEL,
+                    reasoning_effort=settings.OPENAI_TRANSLATOR_REASONING_EFFORT,
+                    verbosity=settings.OPENAI_TRANSLATOR_VERBOSITY,
+                ),
             )
     except (OpenAIError, ValueError) as exc:
         raise RuntimeError(f'addition_failed: {type(exc).__name__}') from exc
@@ -336,7 +344,11 @@ def judge_reply(question_en, draft_ko, reply_text):
                     },
                 ],
                 response_format=AnswerJudgement,
-                **sampling_options(settings.OPENAI_ANSWER_MODEL),
+                **generation_options(
+                    settings.OPENAI_ANSWER_MODEL,
+                    reasoning_effort=settings.OPENAI_ANSWER_REASONING_EFFORT,
+                    verbosity=settings.OPENAI_ANSWER_VERBOSITY,
+                ),
             )
     except (OpenAIError, ValueError) as exc:
         raise RuntimeError(f'judge_failed: {type(exc).__name__}') from exc
