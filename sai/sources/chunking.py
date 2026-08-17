@@ -118,8 +118,11 @@ def untranslated_chunks(company):
 
 
 # 한국어 원문의 영어판을 채운다. 영어로 쓰인 청크는 원문이 곧 영어라 번역하지 않는다.
+#
+# 벡터는 읽지 않는다. 1536차원 하나가 6KB라 수천 건이면 그것만으로 수십 MB가 되는데,
+# 번역에는 원문 텍스트 말고 쓸 것이 없다.
 def translate_chunks(company):
-    pending = list(untranslated_chunks(company).order_by('id'))
+    pending = list(untranslated_chunks(company).only('id', 'text').order_by('id'))
     if not pending:
         return 0, []
 
