@@ -7,7 +7,7 @@ from rest_framework.test import APIClient
 from accounts.models import Membership, User
 from companies.models import Company
 from handbook.models import CompanyScope, HandbookEntry, HandbookEvidence
-from sources.models import Connection, Item
+from sources.models import Connection, Identity, Item
 from sources.slack import SlackError
 
 from .escalation import AnswerJudgement, make_thread_ref, parse_thread_ref
@@ -275,9 +275,15 @@ class EscalationTests(TestCase):
         self.assertIsNone(response.data['answerIsAnswer'])
 
     # 다음 질문이 올라오면 거기서 끊는다. 남의 질문 답을 가져오면 안 된다.
-    def test_stops_at_next_bot_message(self):
+    def test_stops_at_the_next_question(self):
         escalation_id = self.create().data['id']
         self.send(escalation_id)
+        Escalation.objects.create(
+            company=self.company, asked_by=self.member,
+            question_en='next one', draft_ko='다음 질문',
+            status=Escalation.Status.SENT,
+            slack_thread_ref=make_thread_ref('C001', '1786800000.000300'),
+        )
 
         self.check(
             escalation_id,
@@ -291,6 +297,63 @@ class EscalationTests(TestCase):
         )
 
         self.assertEqual(self.judge_mock.call_args[0][2], '내 질문의 답')
+
+    # 깃허브 알림 같은 다른 봇이 한 줄 쓰면 그 뒤에 온 대표의 답을 통째로 놓쳤다.
+    # 답장을 했는데도 질문이 답변대기에 남던 원인이다.
+    def test_an_unrelated_bot_message_does_not_cut_off_the_answer(self):
+        escalation_id = self.create().data['id']
+        self.send(escalation_id)
+
+        self.check(
+            escalation_id,
+            replies=[{'ts': SENT_TS, 'bot_id': 'B1', 'text': '질문'}],
+            history=[
+                {'ts': '1786800000.000300', 'user': 'U001', 'text': '연차는 그냥 쓰세요'},
+                {'ts': REPLY_TS, 'bot_id': 'B9', 'text': '[GitHub] PR opened'},
+                {'ts': SENT_TS, 'bot_id': 'B1', 'text': '질문'},
+            ],
+        )
+
+        self.assertEqual(self.judge_mock.call_args[0][2], '연차는 그냥 쓰세요')
+
+    # 대표에게 물었으니 대표가 쓴 것만 답으로 본다.
+    # 옆에서 오간 잡담이 섞이면 그 잡담이 답변으로 저장된다.
+    def test_only_the_owner_is_read_as_the_answer(self):
+        Identity.objects.create(
+            company=self.company, connection=self.item.connection,
+            external_user_id='UOWNER', user=self.owner,
+        )
+        escalation_id = self.create().data['id']
+        self.send(escalation_id)
+
+        self.check(
+            escalation_id,
+            replies=[{'ts': SENT_TS, 'bot_id': 'B1', 'text': '질문'}],
+            history=[
+                {'ts': '1786800000.000300', 'user': 'UOWNER', 'text': '연차는 그냥 쓰세요'},
+                {'ts': REPLY_TS, 'user': 'U999', 'text': '저도 그거 궁금했어요'},
+                {'ts': SENT_TS, 'bot_id': 'B1', 'text': '질문'},
+            ],
+        )
+
+        self.assertEqual(self.judge_mock.call_args[0][2], '연차는 그냥 쓰세요')
+
+    # 슬랙 계정이 아직 이어지지 않았으면 작성자를 가리지 않는다.
+    # 여기서 걸러 버리면 매칭 전에는 답을 하나도 못 줍는다.
+    def test_without_a_linked_owner_everyone_is_read(self):
+        escalation_id = self.create().data['id']
+        self.send(escalation_id)
+
+        self.check(
+            escalation_id,
+            replies=[{'ts': SENT_TS, 'bot_id': 'B1', 'text': '질문'}],
+            history=[
+                {'ts': REPLY_TS, 'user': 'U999', 'text': '연차는 그냥 쓰세요'},
+                {'ts': SENT_TS, 'bot_id': 'B1', 'text': '질문'},
+            ],
+        )
+
+        self.assertEqual(self.judge_mock.call_args[0][2], '연차는 그냥 쓰세요')
 
     # 스레드 답글이 있으면 그쪽이 우선이다.
     def test_thread_reply_wins_over_channel(self):
