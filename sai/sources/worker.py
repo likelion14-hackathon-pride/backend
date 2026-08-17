@@ -7,6 +7,7 @@ from django.db.models import Q
 from django.utils import timezone
 
 from cards.todos import purge_done
+from qna.services import collect_pending_answers
 
 from .github_ingestion import run_github_ingestion
 from .ingestion import run_ingestion
@@ -152,19 +153,30 @@ def drain(limit=None):
     return processed
 
 
+# 답장 회수가 터져도 큐잉까지 같이 멈추면 안 된다.
+def _collect_answers(now):
+    try:
+        return collect_pending_answers(now)
+    except Exception:
+        logger.exception('답장 회수 실패')
+
+        return 0
+
+
 # 주기 정리와 큐잉. 새로 넣은 작업 목록을 돌려준다.
 def _run_schedule(now):
     started = time.monotonic()
     reaped = reap_stale_jobs(now)
     purged = purge_done(now)
+    answers = _collect_answers(now)
     jobs = enqueue_due_jobs(now)
     for job in jobs:
         logger.info('주기 작업을 큐에 넣었습니다 job=%s kind=%s', job.id, job.kind)
 
     elapsed = time.monotonic() - started
     logger.info(
-        '스케줄링 완료 reap=%d purge=%d enqueue=%d 소요=%.1fs',
-        reaped, purged, len(jobs), elapsed,
+        '스케줄링 완료 reap=%d purge=%d answer=%d enqueue=%d 소요=%.1fs',
+        reaped, purged, answers, len(jobs), elapsed,
     )
     # 한 바퀴가 주기보다 오래 걸리면 정리가 큐잉을 따라가지 못한다는 뜻이다.
     # 예전에는 이 상태에서 sleep 에 영영 닿지 못하고 CPU 를 100% 물고 돌았다.

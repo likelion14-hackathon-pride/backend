@@ -10,10 +10,15 @@ SOURCE_PREFETCH = Prefetch(
 
 
 # review_status 는 status 와 reviewed_at 에서 파생되므로 쿼리로도 같은 규칙을 따른다.
+#
+# BLANK 는 검토 대상이 아니다. 내용이 없어 승인하면 400 이 나므로,
+# 검토 큐에 섞이면 대표는 누를 수 없는 항목을 계속 보게 된다. status=BLANK 로 따로 본다.
 def filter_by_review_status(entries, review_status):
     Status = HandbookEntry.Status
     ReviewStatus = HandbookEntry.ReviewStatus
-    reviewable = entries.exclude(status__in=[Status.CONFIRMED, Status.ARCHIVED])
+    reviewable = entries.exclude(
+        status__in=[Status.CONFIRMED, Status.ARCHIVED, Status.BLANK]
+    )
 
     if review_status == ReviewStatus.APPROVED:
         return entries.filter(status=Status.CONFIRMED)
