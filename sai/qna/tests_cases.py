@@ -69,6 +69,27 @@ class AskWithCasesTests(TestCase):
         ):
             return self.client.post(self.url, {'question': question}, format='json')
 
+    # 한국어 원문 벡터가 멀어도 영어판 벡터가 가까우면 걸려야 한다.
+    # 실측상 영어 질문과 한국어 원문의 거리는 평균 0.752 로 상한(0.75)을 넘는다.
+    # 한쪽만 보던 때에는 이 사례가 통째로 버려졌다.
+    def test_case_is_found_by_its_english_embedding(self):
+        self.chunk.embedding = FAR_VECTOR
+        self.chunk.text_en = 'We do ship hotfixes on Friday, but post in #dev first'
+        self.chunk.embedding_en = VECTOR
+        self.chunk.save()
+
+        response = self.ask(verdict='GROUNDED_BY_CASES')
+
+        self.assertEqual(response.data['citations'][0]['chunkId'], self.chunk.id)
+
+    # 영어판이 아직 없는 청크도 한국어 벡터로는 그대로 걸려야 한다.
+    def test_case_without_translation_still_works(self):
+        self.assertIsNone(self.chunk.text_en)
+
+        response = self.ask(verdict='GROUNDED_BY_CASES')
+
+        self.assertEqual(response.data['citations'][0]['chunkId'], self.chunk.id)
+
     # 규칙이 하나도 없어도 과거 대화로 답할 수 있어야 한다.
     def test_case_is_retrieved_when_no_rule_exists(self):
         response = self.ask(

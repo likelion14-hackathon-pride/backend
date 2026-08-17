@@ -11,7 +11,7 @@ from handbook.finalizing import finalize_entries
 from handbook.models import HandbookEntry
 from handbook.queries import live_entries
 
-from .chunking import sync_chunks
+from .chunking import sync_chunks, untranslated_chunks
 from .classifier import CLASSIFIER_VERSION, classify_documents
 from .models import Identity, IngestionJob, Item, RawDocument
 from .slack import SlackClient, SlackError
@@ -50,6 +50,11 @@ def has_pending_work(company):
         status=HandbookEntry.Status.CONFIRMED,
         embedded_at__isnull=True,
     ).exists():
+        return True
+
+    # 영어판이 없는 청크는 영어 질문에 걸리지 않는다. 수집이 끝난 뒤에도 남을 수 있어
+    # 여기 넣지 않으면 밀린 번역이 영영 처리되지 않는다.
+    if untranslated_chunks(company).exists():
         return True
 
     return (

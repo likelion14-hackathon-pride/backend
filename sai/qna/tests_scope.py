@@ -129,22 +129,60 @@ class AskScopeTests(TestCase):
 
         self.assertEqual(self.titles(self.ask()), ['PR 승인 규칙'])
 
-    # 회사 전반을 골라 두고 프로젝트 이야기를 물어도 막다른 길이 되면 안 된다.
-    # 회사 범위에도 규칙이 있어 검색 결과는 비지 않는다. 답을 못 냈을 때 넓혀야 한다.
-    def test_widens_when_the_selected_area_cannot_answer(self):
-        # 넓힌 뒤 프로젝트 규칙이 1순위가 되도록 회사 규칙을 조금 멀리 둔다.
+    # 프로젝트를 골라 두면 그 밖의 규칙은 좁혀진 범위에 없다. 답을 못 냈을 때 넓혀야 한다.
+    def test_widens_when_the_selected_project_cannot_answer(self):
+        other = CompanyScope.objects.create(
+            company=self.company, kind=CompanyScope.Kind.PROJECT, name='관리자 도구'
+        )
+        # 넓힌 뒤 남의 프로젝트 규칙이 1순위가 되도록 회사 규칙을 조금 멀리 둔다.
         self.rule(self.eng, 'PR 승인 규칙', embedding=NEARBY)
-        self.rule(self.project, '배포 전 QA 승인')
+        self.rule(other, '배포 전 QA 승인')
 
         response, calls = self.ask_staged(
-            {'question': 'Do I need QA approval?'},
+            {'question': 'Do I need QA approval?', 'scopeId': self.project.id},
             {'verdict': 'NO_SOURCE', 'answer': '', 'cited': ()},
-            {'verdict': 'GROUNDED', 'answer': 'Yes, in the veritas project.', 'cited': (0,)},
+            {'verdict': 'GROUNDED', 'answer': 'Yes, in the admin tools project.', 'cited': (0,)},
         )
 
         self.assertEqual(calls, 2)
         self.assertEqual(response.data['verdict'], 'GROUNDED')
         self.assertEqual(self.titles(response), ['배포 전 QA 승인'])
+
+    # 아무것도 고르지 않았을 때 프로젝트 규칙이 후보에서 빠지면, 프로젝트가 다르게 정해 둔
+    # 것을 모른 채 회사 기본값이 GROUNDED 로 나간다. 넓히기는 NO_SOURCE 에서만 걸리므로
+    # 회사 규칙이 답이 되는 순간 되돌릴 기회가 없다.
+    def test_no_selection_sees_project_rules(self):
+        self.rule(self.eng, '회사 PR 승인 1명', embedding=NEARBY)
+        self.rule(self.project, '결제 시스템 PR 승인 2명')
+
+        response, calls = self.ask_staged(
+            {'question': 'How many approvals?'},
+            {'verdict': 'GROUNDED', 'answer': 'Two on this project.', 'cited': (0, 1)},
+        )
+
+        self.assertEqual(calls, 1)
+        self.assertEqual(
+            self.titles(response), ['결제 시스템 PR 승인 2명', '회사 PR 승인 1명']
+        )
+
+    # 공간 이름만 넘기면 어느 쪽이 회사 전반인지 알 수 없어 우선순위를 지킬 수 없다.
+    def test_prompt_marks_company_and_project_rules(self):
+        self.rule(self.eng, '회사 규칙', embedding=NEARBY)
+        self.rule(self.project, '프로젝트 규칙')
+
+        parse = Mock(side_effect=[_completion('GROUNDED', 'ok', (0,))])
+        client = openai_stub()
+        client.chat.completions.parse = parse
+        with (
+            patch('qna.answering.OpenAI', return_value=client),
+            patch('handbook.gaps.OpenAI', return_value=openai_stub()),
+        ):
+            self.client.post(self.url, {'question': 'How many approvals?'}, format='json')
+
+        prompt = parse.call_args.kwargs['messages'][1]['content']
+
+        self.assertIn('결제 시스템 (project)', prompt)
+        self.assertIn('(company-wide)', prompt)
 
     # 넓혀도 더 나올 것이 없으면 두 번 묻지 않는다.
     def test_no_second_call_when_widening_adds_nothing(self):

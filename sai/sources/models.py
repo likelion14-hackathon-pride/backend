@@ -134,7 +134,12 @@ class Chunk(models.Model):
     ord = models.SmallIntegerField(default=0)
     text = models.TextField()
     lang = models.CharField(max_length=2, default='ko')
+    # 원문은 대부분 한국어인데 질문은 영어로 들어온다. 한쪽 벡터만 두면 교차언어 거리가
+    # 컷오프에 걸려 사례가 통째로 버려진다. 규칙(HandbookEntry)과 같은 방식으로 양쪽을 둔다.
+    text_en = models.TextField(null=True, blank=True)
+    translated_at = models.DateTimeField(null=True, blank=True)
     embedding = VectorField(dimensions=1536, null=True, blank=True)
+    embedding_en = VectorField(dimensions=1536, null=True, blank=True)
     embedding_model = models.CharField(max_length=40, null=True, blank=True)
     embedded_at = models.DateTimeField(null=True, blank=True)
     token_count = models.SmallIntegerField(default=0)
@@ -151,6 +156,13 @@ class Chunk(models.Model):
             HnswIndex(
                 name='chunk_emb_idx',
                 fields=['embedding'],
+                m=16,
+                ef_construction=64,
+                opclasses=['vector_cosine_ops'],
+            ),
+            HnswIndex(
+                name='chunk_emb_en_idx',
+                fields=['embedding_en'],
                 m=16,
                 ef_construction=64,
                 opclasses=['vector_cosine_ops'],
