@@ -2,12 +2,14 @@ from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 from django.test import TestCase, override_settings
+from django.utils import timezone
 from rest_framework.test import APIClient
 
 from accounts.models import Membership, User
 from companies.models import Company
 from handbook.models import CompanyScope, HandbookEntry
 from handbook.services import scopes_in_view, seed_default_scopes
+from sources.models import Chunk, Connection, Item, RawDocument
 
 from .answering import AnswerResult
 from .models import Thread
@@ -75,6 +77,9 @@ class AskScopeTests(TestCase):
         Membership.objects.create(
             user=self.member, company=self.company, role=Membership.Role.MEMBER
         )
+        self.connection = Connection.objects.create(
+            company=self.company, kind=Connection.Kind.SLACK, bot_token='xoxb-test'
+        )
         self.client = APIClient()
         self.client.force_authenticate(user=self.member)
         self.url = f'/api/companies/{self.company.id}/ask'
@@ -88,6 +93,21 @@ class AskScopeTests(TestCase):
             origin=HandbookEntry.Origin.SLACK, embedding_ko=vector, embedding_en=vector,
         )
 
+    def case(self, scope, text='배포 전에 QA 승인을 받았습니다.', ref='1.1'):
+        item = Item.objects.create(
+            company=self.company, connection=self.connection,
+            external_id=ref, label=f'#{ref}', scope=scope,
+        )
+        document = RawDocument.objects.create(
+            company=self.company, item=item, external_ref=ref, raw_text=text,
+            content_hash=ref.ljust(64, '0'), occurred_at=timezone.now(),
+        )
+
+        return Chunk.objects.create(
+            company=self.company, document=document, scope=scope,
+            ord=0, text=text, embedding=VECTOR, embedding_en=VECTOR,
+        )
+
     def ask(self, payload=None, **stub):
         client = openai_stub(**stub)
         with (
@@ -98,8 +118,6 @@ class AskScopeTests(TestCase):
                 self.url, payload or {'question': 'How many approvals?'}, format='json'
             )
 
-    # 고른 범위에서 답을 못 내면 회사 전체로 넓혀 한 번 더 묻는다.
-    # 두 번째 호출에 다른 응답을 주려면 parse 자체를 갈아 끼워야 한다.
     def ask_staged(self, payload, *stages):
         parse = Mock(side_effect=[_completion(**stage) for stage in stages])
         client = openai_stub()
@@ -129,29 +147,23 @@ class AskScopeTests(TestCase):
 
         self.assertEqual(self.titles(self.ask()), ['PR 승인 규칙'])
 
-    # 프로젝트를 골라 두면 그 밖의 규칙은 좁혀진 범위에 없다. 답을 못 냈을 때 넓혀야 한다.
-    def test_widens_when_the_selected_project_cannot_answer(self):
+    def test_selected_project_does_not_widen_to_other_projects(self):
         other = CompanyScope.objects.create(
             company=self.company, kind=CompanyScope.Kind.PROJECT, name='관리자 도구'
         )
-        # 넓힌 뒤 남의 프로젝트 규칙이 1순위가 되도록 회사 규칙을 조금 멀리 둔다.
         self.rule(self.eng, 'PR 승인 규칙', embedding=NEARBY)
         self.rule(other, '배포 전 QA 승인')
 
         response, calls = self.ask_staged(
             {'question': 'Do I need QA approval?', 'scopeId': self.project.id},
             {'verdict': 'NO_SOURCE', 'answer': '', 'cited': ()},
-            {'verdict': 'GROUNDED', 'answer': 'Yes, in the admin tools project.', 'cited': (0,)},
         )
 
-        self.assertEqual(calls, 2)
-        self.assertEqual(response.data['verdict'], 'GROUNDED')
-        self.assertEqual(self.titles(response), ['배포 전 QA 승인'])
+        self.assertEqual(calls, 1)
+        self.assertEqual(response.data['verdict'], 'NO_SOURCE')
+        self.assertEqual(self.titles(response), [])
 
-    # 아무것도 고르지 않았을 때 프로젝트 규칙이 후보에서 빠지면, 프로젝트가 다르게 정해 둔
-    # 것을 모른 채 회사 기본값이 GROUNDED 로 나간다. 넓히기는 NO_SOURCE 에서만 걸리므로
-    # 회사 규칙이 답이 되는 순간 되돌릴 기회가 없다.
-    def test_no_selection_sees_project_rules(self):
+    def test_no_selection_does_not_see_project_rules(self):
         self.rule(self.eng, '회사 PR 승인 1명', embedding=NEARBY)
         self.rule(self.project, '결제 시스템 PR 승인 2명')
 
@@ -161,9 +173,19 @@ class AskScopeTests(TestCase):
         )
 
         self.assertEqual(calls, 1)
-        self.assertEqual(
-            self.titles(response), ['결제 시스템 PR 승인 2명', '회사 PR 승인 1명']
+        self.assertEqual(self.titles(response), ['회사 PR 승인 1명'])
+
+    def test_project_rules_stay_ahead_of_company_rules(self):
+        for i in range(6):
+            self.rule(self.eng, f'회사 규칙 {i}')
+        self.rule(self.project, '결제 시스템 PR 승인 2명', embedding=NEARBY)
+
+        response = self.ask(
+            {'question': 'How many approvals?', 'scopeId': self.project.id},
+            verdict='GROUNDED', answer='Two approvals are required.', cited=(0,),
         )
+
+        self.assertEqual(self.titles(response), ['결제 시스템 PR 승인 2명'])
 
     # 공간 이름만 넘기면 어느 쪽이 회사 전반인지 알 수 없어 우선순위를 지킬 수 없다.
     def test_prompt_marks_company_and_project_rules(self):
@@ -177,15 +199,18 @@ class AskScopeTests(TestCase):
             patch('qna.answering.OpenAI', return_value=client),
             patch('handbook.gaps.OpenAI', return_value=openai_stub()),
         ):
-            self.client.post(self.url, {'question': 'How many approvals?'}, format='json')
+            self.client.post(
+                self.url,
+                {'question': 'How many approvals?', 'scopeId': self.project.id},
+                format='json',
+            )
 
         prompt = parse.call_args.kwargs['messages'][1]['content']
 
         self.assertIn('결제 시스템 (project)', prompt)
         self.assertIn('(company-wide)', prompt)
 
-    # 넓혀도 더 나올 것이 없으면 두 번 묻지 않는다.
-    def test_no_second_call_when_widening_adds_nothing(self):
+    def test_no_source_uses_the_selected_scope_once(self):
         self.rule(self.eng, 'PR 승인 규칙')
 
         response, calls = self.ask_staged(
@@ -196,7 +221,6 @@ class AskScopeTests(TestCase):
         self.assertEqual(calls, 1)
         self.assertEqual(response.data['verdict'], 'NO_SOURCE')
 
-    # 다른 프로젝트 규칙은 넓히기 전까지 닿지 않는다.
     def test_other_project_rule_is_out_of_view(self):
         other = CompanyScope.objects.create(
             company=self.company, kind=CompanyScope.Kind.PROJECT, name='관리자 도구'
@@ -205,6 +229,26 @@ class AskScopeTests(TestCase):
 
         response = self.ask({'question': 'How many approvals?', 'scopeId': self.project.id},
                             verdict='NO_SOURCE', answer='', cited=())
+
+        self.assertEqual(response.data['citations'], [])
+
+    def test_no_selection_does_not_see_project_cases(self):
+        self.case(self.project)
+
+        response = self.ask(verdict='GROUNDED_BY_CASES', answer='QA was done.', cited=(0,))
+
+        self.assertEqual(response.data['citations'], [])
+
+    def test_selected_project_does_not_see_other_project_cases(self):
+        other = CompanyScope.objects.create(
+            company=self.company, kind=CompanyScope.Kind.PROJECT, name='관리자 도구'
+        )
+        self.case(other)
+
+        response = self.ask(
+            {'question': 'Was QA done?', 'scopeId': self.project.id},
+            verdict='GROUNDED_BY_CASES', answer='QA was done.', cited=(0,),
+        )
 
         self.assertEqual(response.data['citations'], [])
 
