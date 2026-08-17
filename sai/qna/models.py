@@ -5,6 +5,7 @@ class Thread(models.Model):
     company = models.ForeignKey('companies.Company', on_delete=models.CASCADE, related_name='qna_threads')
     user = models.ForeignKey('accounts.User', on_delete=models.PROTECT, related_name='qna_threads')
     scope = models.ForeignKey('handbook.CompanyScope', on_delete=models.PROTECT, null=True, blank=True, related_name='qna_threads')
+    card = models.ForeignKey('cards.InstructionCard', on_delete=models.SET_NULL, null=True, blank=True, related_name='qna_threads')
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
