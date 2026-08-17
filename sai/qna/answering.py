@@ -10,7 +10,7 @@ from openai import OpenAI, OpenAIError, RateLimitError
 from pgvector.django import CosineDistance
 from pydantic import BaseModel
 
-from config.ai import client_options, sampling_options, timed_call
+from config.ai import client_options, generation_options, timed_call
 from handbook.models import CompanyScope
 from handbook.retrieval import search_rules
 from handbook.services import scopes_in_view
@@ -18,7 +18,7 @@ from policy.models import RiskKeyword
 from sources.models import Chunk
 
 # 프롬프트를 고치면 올린다. Message.prompt_version 에 기록된다.
-PROMPT_VERSION = 'ask-v4'
+PROMPT_VERSION = 'ask-v5'
 
 # 지식공간마다 검색해서 모델에 넘길 규칙 수. 너무 많으면 모델이 엉뚱한 걸 인용한다.
 TOP_K = 5
@@ -47,10 +47,14 @@ PAST CASES - raw Slack messages from this company. Nobody approved them. They sh
              actually did before, which is often the only thing available when the handbook is
              still thin. Treat them as evidence of practice, never as a settled rule.
 
+The selected knowledge space is a hard boundary. If the selected space does not contain the
+answer, use NO_SOURCE. Do not infer from other teams, other projects, general knowledge, or what
+would be reasonable at another company.
+
 Choose exactly one verdict.
 
 GROUNDED - the confirmed rules answer the question. Cite them.
-GROUNDED_BY_CASES - no confirmed rule covers it, but the past cases show how this was handled.
+GROUNDED_BY_CASES - no confirmed rule covers it, but several past cases show how this was handled.
                     Answer from them and say plainly that this is what people did before, not a
                     confirmed rule, so it may be worth confirming with the owner.
 NO_SOURCE - nothing retrieved actually answers the question. Do NOT guess.
@@ -59,12 +63,18 @@ NEEDS_DECISION - the retrieved material contradicts itself, or the question need
 OUT_OF_SCOPE - not a question about company rules or how to work here.
 
 Prefer a confirmed rule over a past case whenever one applies. Use past cases only when no
-confirmed rule answers the question. A single offhand message is not enough to answer from -
-if the cases do not clearly show a practice, use NO_SOURCE.
+confirmed rule answers the question. A single offhand message is not enough unless it is from the
+owner or clearly records a decision. If the cases do not clearly show a practice, use NO_SOURCE.
 
 Each rule carries the area it belongs to. Company-wide rules apply everywhere; a project's rules
 apply on top of them. When a project rule and a company rule cover the same thing, follow the
 project rule and say that the project does it differently.
+
+Answer style
+- Lead with the practical answer.
+- Include the basis in plain English: which rule or past practice supports it.
+- Mention an important caveat or missing piece when it changes what the employee should do.
+- If the answer comes only from past cases, make that limitation explicit.
 
 Hard requirements
 - Never state a rule that is not in the retrieved list. If nothing covers it, use NO_SOURCE.
@@ -74,7 +84,7 @@ Hard requirements
   share one numbering. Put them in `cited_indexes` only. Never write index markers like [0] or
   footnote numbers inside `answer`.
 - Write `answer` in English only, even when the question or source material is Korean. Keep it
-  short: two or three sentences.
+  concise, polished, and specific enough that the employee can act on it.
 - For NO_SOURCE and NEEDS_DECISION, write `draft_ko`: a short, polite Korean message the employee
   could send to the company owner to get this decided. Otherwise leave draft_ko empty.
 - For OUT_OF_SCOPE, leave answer empty."""
@@ -280,7 +290,21 @@ def find_risk_warnings(company, *texts):
     return warnings
 
 
-def _ask(client, question, lang, entries, cases):
+def _scope_context(scope):
+    if scope is not None and scope.kind == CompanyScope.Kind.PROJECT:
+        return (
+            f"Selected knowledge space: company-wide rules plus project '{scope.name}'.\n"
+            "Hard boundary: do not use rules or cases from any other project.\n"
+            "Priority: project rules override company-wide rules for this project."
+        )
+
+    return (
+        'Selected knowledge space: company-wide rules only.\n'
+        'Hard boundary: do not use project rules or project cases.'
+    )
+
+
+def _ask(client, question, lang, entries, cases, scope):
     rules = '\n'.join(
         _render_rule(entry, index, lang) for index, entry in enumerate(entries)
     ) or '(no confirmed rules retrieved)'
@@ -299,6 +323,7 @@ def _ask(client, question, lang, entries, cases):
                         'role': 'user',
                         'content': (
                             f'Answer in: {language}\n\n'
+                            f'{_scope_context(scope)}\n\n'
                             f'Question:\n{question}\n\n'
                             f'CONFIRMED RULES:\n{rules}\n\n'
                             f'PAST CASES:\n{past}'
@@ -306,7 +331,11 @@ def _ask(client, question, lang, entries, cases):
                     },
                 ],
                 response_format=AnswerResult,
-                **sampling_options(settings.OPENAI_ANSWER_MODEL),
+                **generation_options(
+                    settings.OPENAI_ANSWER_MODEL,
+                    reasoning_effort=settings.OPENAI_ANSWER_REASONING_EFFORT,
+                    verbosity=settings.OPENAI_ANSWER_VERBOSITY,
+                ),
             )
     except RateLimitError as exc:
         raise AnswerRateLimited(_retry_after(exc)) from exc
@@ -327,7 +356,7 @@ def answer_question(company, question, lang='en', scope=None):
 
     vector = embed_question(client, question)
     entries, cases = retrieve(vector, company, scope)
-    completion = _ask(client, question, lang, entries, cases)
+    completion = _ask(client, question, lang, entries, cases, scope)
     prompt_tokens = _tokens(completion, 'prompt_tokens')
     completion_tokens = _tokens(completion, 'completion_tokens')
 
@@ -340,6 +369,12 @@ def answer_question(company, question, lang='en', scope=None):
     result.answer = CITATION_MARKER.sub('', result.answer).strip()
     # 모델이 없는 번호를 인용하는 경우가 있어 실제 후보로만 걸러낸다.
     cited = [sources[i] for i in result.cited_indexes if 0 <= i < len(sources)]
+    if result.verdict in ('NO_SOURCE', 'OUT_OF_SCOPE'):
+        cited = []
+    elif result.verdict == 'GROUNDED':
+        cited = [source for source in cited if source.entry]
+    elif result.verdict == 'GROUNDED_BY_CASES':
+        cited = [source for source in cited if source.chunk]
     usage = {
         'model': settings.OPENAI_ANSWER_MODEL,
         'promptTokens': prompt_tokens,

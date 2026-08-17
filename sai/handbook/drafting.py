@@ -9,7 +9,7 @@ from django.db import transaction
 from openai import OpenAI, OpenAIError
 from pydantic import BaseModel
 
-from config.ai import client_options, sampling_options, timed_call
+from config.ai import client_options, generation_options, timed_call
 from sources.classifier import build_lookup, build_parents
 from sources.models import RawDocument
 from sources.text import normalize_document_text
@@ -19,7 +19,7 @@ from .models import CompanyScope, HandbookEntry, HandbookEvidence
 logger = logging.getLogger(__name__)
 
 # 프롬프트를 고치면 올린다. 재생성 대상을 고를 때 쓴다.
-DRAFTER_VERSION = 'draft-v3'
+DRAFTER_VERSION = 'draft-v4'
 
 # 한 번에 모델에 넣는 원문 수. 한 범위 안의 규칙끼리 묶으려면 함께 봐야 한다.
 BATCH_SIZE = 40
@@ -31,6 +31,8 @@ The messages given to you were already classified as containing rules. The reade
 employees who need to know how this company works.
 
 Group related messages into ONE rule each. Produce one entry per distinct policy.
+Skip anything that is only a task, status update, isolated example, unresolved discussion, or
+temporary decision for one incident.
 
 For every rule return:
 - title: one Korean sentence that captures the core rule from the source, under 80 characters.
@@ -40,8 +42,11 @@ For every rule return:
   repository, tool and product names exactly as written.
 - body: the rule written in Korean as something the reader must follow. One to three sentences.
   Write the rule itself, not a summary of the conversation. No "~라고 합니다" reporting style.
+  Include the specific condition, exception, owner, channel, tool, deadline, or approval count
+  when the source provides it.
 - confidence: HIGH when the messages state it explicitly and agree, MEDIUM when you had to infer
-  part of it, LOW when the evidence is thin.
+  part of it. Use LOW only when the source still clearly states a recurring rule but the evidence
+  is thin. If you are less certain than LOW, output no rule.
 - citations: which messages this rule came from.
 
 Some messages are thread replies. Their parent is shown on a "parent:" line so you can tell what
@@ -56,8 +61,13 @@ Citation rules - these matter most:
   citing both.
 - If a later message overrides an earlier one, write the rule as it stands NOW and cite both.
 
-Never invent a rule that is not in the messages. Producing fewer, well-supported rules is better
-than producing many weak ones."""
+Quality bar
+- Do not turn a one-time request into a policy.
+- Do not turn a proposal into a rule unless the thread shows it was accepted.
+- Do not create broad rules from narrow examples. Preserve the actual scope.
+- Prefer one precise rule over several overlapping rules.
+- Never invent a rule that is not in the messages. Producing fewer, well-supported rules is better
+  than producing many weak ones."""
 
 
 class DraftCitation(BaseModel):
@@ -142,6 +152,9 @@ def _evidence_tag(document):
 
 
 def _build_entry(company, scope, rule, documents, channels, users):
+    if rule.confidence == HandbookEntry.Confidence.LOW:
+        return None
+
     verified = []
     seen_quotes = set()
     dropped = 0
@@ -223,7 +236,11 @@ def _draft_batch(client, company, scope, batch, channels, users, parents):
                 {'role': 'user', 'content': prompt},
             ],
             response_format=DraftResult,
-            **sampling_options(settings.OPENAI_DRAFTER_MODEL),
+            **generation_options(
+                settings.OPENAI_DRAFTER_MODEL,
+                reasoning_effort=settings.OPENAI_DRAFTER_REASONING_EFFORT,
+                verbosity=settings.OPENAI_DRAFTER_VERBOSITY,
+            ),
         )
     result = completion.choices[0].message.parsed
     documents = dict(enumerate(batch))

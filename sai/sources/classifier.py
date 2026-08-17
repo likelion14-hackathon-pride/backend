@@ -5,14 +5,14 @@ from django.core.exceptions import ImproperlyConfigured
 from openai import OpenAI, OpenAIError
 from pydantic import BaseModel
 
-from config.ai import client_options, sampling_options, timed_call
+from config.ai import client_options, generation_options, timed_call
 
 from .models import Identity, Item, RawDocument
 from .text import normalize_document_text
 
 # 프롬프트를 고치면 이 값을 올린다. RawDocument.classifier_version에 기록되므로
 # 나중에 "옛 프롬프트로 분류된 것만 다시 돌리기"가 가능하다.
-CLASSIFIER_VERSION = 'clf-v5'
+CLASSIFIER_VERSION = 'clf-v6'
 
 # 한 번의 호출에 넣는 메시지 수. 메시지마다 호출하면 비용과 시간이 수십 배가 된다.
 BATCH_SIZE = 25
@@ -47,6 +47,12 @@ AMBIGUOUS - could become a rule but is not settled: the discussion stalled or di
 How to decide
 - The core question is "will this keep applying from now on?" A one-time event is CONTEXT.
 - A question with no conclusion is AMBIGUOUS.
+- A task, request, deadline, status update, incident, release plan, or one-off decision is CONTEXT
+  unless it explicitly creates a rule for future similar cases.
+- A settled thread reply can be INSTRUCTION only when the parent proposes a recurring rule and the
+  reply clearly accepts or finalizes it.
+- Suggestions, preferences, complaints, and "we should discuss/fix/clean up later" are AMBIGUOUS
+  until someone settles what will apply going forward.
 - Commitment markers push toward INSTRUCTION. Korean: '~하겠습니다', '~로 합시다', '~하지 마세요',
   '~로 확정'. English: "let's", "from now on", "going forward", "please make sure", "never".
 - For thread replies, judge within the context given in the parent line.
@@ -56,6 +62,8 @@ How to decide
 - An Issue, Pull Request, or comment is INSTRUCTION only when it clearly establishes a rule that
   will continue to apply to future work.
 - Do not over-assign INSTRUCTION. A wrong rule is more harmful than a missed one.
+- When uncertain between INSTRUCTION and another label, choose AMBIGUOUS if the discussion might
+  become a rule, otherwise CONTEXT.
 - Messages may be in Korean or English. Apply the same criteria to both.
 
 Return a label for every index given in the input."""
@@ -146,7 +154,11 @@ def _classify_batch(client, documents, channels, users, parents):
                 {'role': 'user', 'content': prompt},
             ],
             response_format=ClassificationResult,
-            **sampling_options(settings.OPENAI_CLASSIFIER_MODEL),
+            **generation_options(
+                settings.OPENAI_CLASSIFIER_MODEL,
+                reasoning_effort=settings.OPENAI_CLASSIFIER_REASONING_EFFORT,
+                verbosity=settings.OPENAI_CLASSIFIER_VERBOSITY,
+            ),
         )
     result = completion.choices[0].message.parsed
 
