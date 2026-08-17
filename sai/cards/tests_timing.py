@@ -123,6 +123,8 @@ class TimingTests(TestCase):
         self.assertEqual(data['you']['name'], 'Minh')
         self.assertEqual(data['owner']['timezone'], 'Asia/Seoul')
         self.assertEqual(data['owner']['name'], '김대표')
+        self.assertMoment(data['you']['localNow'], NOW.astimezone(ZoneInfo('Asia/Ho_Chi_Minh')))
+        self.assertMoment(data['owner']['localNow'], NOW)
 
     # 21:40 은 양쪽 다 근무시간 밖이다. 접속 여부가 아니라 근무시간으로 판단한다.
     def test_state_is_off_hours_at_night(self):
@@ -130,6 +132,18 @@ class TimingTests(TestCase):
 
         self.assertEqual(data['owner']['state'], 'OFF_HOURS')
         self.assertEqual(data['you']['state'], 'OFF_HOURS')
+        self.assertFalse(data['owner']['available'])
+        self.assertFalse(data['you']['available'])
+
+    def test_owner_is_available_during_seoul_working_hours(self):
+        self.owner.last_seen_at = None
+        self.owner.save(update_fields=['last_seen_at'])
+
+        with patch('cards.timing.timezone.now', return_value=seoul(12, 10)):
+            data = self.client.get(self.url).data
+
+        self.assertEqual(data['owner']['state'], 'WORKING')
+        self.assertTrue(data['owner']['available'])
 
     # 하노이 17시는 서울 19시다. 나는 아직 근무 중이고 대표는 퇴근했다.
     def test_states_differ_across_the_gap(self):
@@ -138,6 +152,8 @@ class TimingTests(TestCase):
 
         self.assertEqual(data['you']['state'], 'WORKING')
         self.assertEqual(data['owner']['state'], 'OFF_HOURS')
+        self.assertTrue(data['you']['available'])
+        self.assertFalse(data['owner']['available'])
 
     def test_state_is_unknown_when_working_hours_are_off(self):
         Company.objects.filter(id=self.company.id).update(working_hours_enabled=False)
@@ -145,6 +161,17 @@ class TimingTests(TestCase):
         data = self.get().data
 
         self.assertEqual(data['owner']['state'], 'UNKNOWN')
+        self.assertFalse(data['owner']['available'])
+
+    def test_profile_location_change_updates_my_timing_timezone(self):
+        self.client.patch('/api/me', {'location': 'NEW_YORK'}, format='json')
+
+        with patch('cards.timing.timezone.now', return_value=seoul(12, 10)):
+            data = self.client.get(self.url).data
+
+        self.assertEqual(data['you']['timezone'], 'America/New_York')
+        self.assertEqual(data['owner']['timezone'], 'Asia/Seoul')
+        self.assertMoment(data['you']['localNow'], seoul(12, 10).astimezone(ZoneInfo('America/New_York')))
 
     def test_working_hours_echo_the_company_setting(self):
         Company.objects.filter(id=self.company.id).update(working_hours_start=time(10, 0))

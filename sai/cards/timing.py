@@ -5,6 +5,7 @@ from django.utils import timezone
 
 from accounts.models import Membership
 from companies.timing import (
+    WORKING,
     WorkingHours,
     add_working_minutes,
     next_start,
@@ -25,6 +26,7 @@ HISTORY_SIZE = 20
 HISTORY = 'HISTORY'
 WORKING_HOURS = 'WORKING_HOURS'
 BASES = (HISTORY, WORKING_HOURS)
+OWNER_TIMEZONE = 'Asia/Seoul'
 
 # 손을 댄 카드만 본다. 아직 안 잡은 일(READY)과 끝낸 일(DONE)은 여기 없다.
 # ANSWERED 는 답이 도착했을 뿐 아직 하던 일이므로 포함한다.
@@ -59,10 +61,14 @@ def _hours(company, zone):
 
 
 def _person(user, hours, now):
+    status = state(hours, now)
+
     return {
         'name': user.display_name if user else None,
         'timezone': hours.timezone,
-        'state': state(hours, now),
+        'localNow': now.astimezone(hours.zone),
+        'state': status,
+        'available': status == WORKING,
     }
 
 
@@ -149,7 +155,7 @@ def _needs_person(card_ids):
 
 def timing_for(company, user, cards):
     now = timezone.now()
-    hours = _hours(company, company.timezone)
+    hours = _hours(company, OWNER_TIMEZONE)
     # 구성원별 근무시간을 받는 곳은 없다. 대표와 같은 근무시간을 쓰되
     # 시계만 각자의 지역으로 돌린다.
     your_hours = _hours(company, user.timezone)
@@ -169,7 +175,7 @@ def timing_for(company, user, cards):
             'enabled': company.working_hours_enabled,
             'start': company.working_hours_start,
             'end': company.working_hours_end,
-            'timezone': company.timezone,
+            'timezone': hours.timezone,
         },
         'replyExpected': _reply_expected(company, hours, now),
         'canDo': can_do,

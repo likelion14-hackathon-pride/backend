@@ -341,7 +341,9 @@ class HomeSerializer(serializers.Serializer):
 class PersonTimingSerializer(serializers.Serializer):
     name = serializers.CharField(allow_null=True)
     timezone = serializers.CharField()
+    localNow = serializers.DateTimeField()
     state = serializers.ChoiceField(choices=STATES)
+    available = serializers.BooleanField()
 
 
 class WorkingHoursSerializer(serializers.Serializer):
