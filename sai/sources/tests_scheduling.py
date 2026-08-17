@@ -1,4 +1,5 @@
 from datetime import timedelta
+from unittest.mock import patch
 
 from django.test import TestCase
 from django.utils import timezone
@@ -10,6 +11,7 @@ from handbook.models import CompanyScope, HandbookEntry
 
 from .classifier import CLASSIFIER_VERSION
 from .ingestion import has_pending_work
+from .local_files import LocalFileStorageError
 from .models import Connection, IngestionJob, Item, RawDocument
 from .scheduling import COLLECT_EVERY, PROCESS_EVERY, RETRY_AFTER, enqueue_due_jobs
 
@@ -42,9 +44,10 @@ class SchedulingTests(TestCase):
             card_version=GENERATOR_VERSION,
         )
 
-    def job(self, kind, created_ago, status=IngestionJob.Status.SUCCEEDED):
+    def job(self, kind, created_ago, status=IngestionJob.Status.SUCCEEDED, connection=None):
         job = IngestionJob.objects.create(
-            company=self.company, kind=kind, item_ids=[self.item.id], status=status
+            company=self.company, connection=connection or self.connection,
+            kind=kind, item_ids=[self.item.id], status=status,
         )
         IngestionJob.objects.filter(id=job.id).update(created_at=self.now - created_ago)
 
@@ -150,6 +153,20 @@ class SchedulingTests(TestCase):
 
         self.assertEqual(enqueue_due_jobs(self.now), [])
 
+    # 깃헙 웹훅도 COLLECT 를 만든다. 소스를 구분하지 않으면 푸시 한 번에
+    # 슬랙 수집이 12시간 밀린다.
+    def test_github_collect_does_not_delay_slack_collect(self):
+        github = Connection.objects.create(
+            company=self.company, kind=Connection.Kind.GITHUB
+        )
+        self.job(IngestionJob.Kind.COLLECT, timedelta(minutes=5), connection=github)
+
+        jobs = enqueue_due_jobs(self.now)
+
+        self.assertEqual(len(jobs), 1)
+        self.assertEqual(jobs[0].kind, IngestionJob.Kind.COLLECT)
+        self.assertEqual(jobs[0].connection_id, self.connection.id)
+
     # 웹훅으로 들어온 메시지는 슬랙을 다시 읽지 않고 처리만 한다.
     def test_pending_work_between_collects_is_processed(self):
         self.job(IngestionJob.Kind.COLLECT, timedelta(hours=1))
@@ -223,3 +240,118 @@ class SchedulingTests(TestCase):
         self.item.save()
 
         self.assertEqual(enqueue_due_jobs(self.now), [])
+
+
+# 업로드는 브라우저가 S3로 직접 한다. 서버는 완료 통보를 받지 못하므로
+# 올라온 파일을 찾아 큐에 넣는 것은 이 스윕뿐이다.
+class LocalFileSchedulingTests(TestCase):
+    def setUp(self):
+        self.company = Company.objects.create(name='에코랩', code='TESTCODE3')
+        self.connection = Connection.objects.create(
+            company=self.company, kind=Connection.Kind.LOCAL
+        )
+        self.now = timezone.now()
+
+    def file_item(self, external_id='file-1', **extra):
+        return Item.objects.create(
+            company=self.company, connection=self.connection,
+            external_id=external_id, label='개발규칙.txt',
+            storage_key=f'companies/{self.company.id}/local/{external_id}.txt',
+            mime_type='text/plain', byte_size=12,
+            **extra,
+        )
+
+    def enqueue(self, now=None, exists=True):
+        with patch('sources.scheduling.object_exists', return_value=exists) as check:
+            return enqueue_due_jobs(now or self.now), check
+
+    def test_uploaded_file_is_queued(self):
+        item = self.file_item()
+
+        jobs, _ = self.enqueue()
+
+        self.assertEqual(len(jobs), 1)
+        self.assertEqual(jobs[0].kind, IngestionJob.Kind.COLLECT)
+        self.assertEqual(jobs[0].item_ids, [item.id])
+        self.assertEqual(jobs[0].connection_id, self.connection.id)
+
+    # 메타만 만들고 S3 PUT 이 아직 끝나지 않은 사이에 큐에 넣으면
+    # 워커가 file_not_uploaded 로 실패시킨다.
+    def test_file_not_uploaded_yet_is_not_queued(self):
+        self.file_item()
+
+        jobs, _ = self.enqueue(exists=False)
+
+        self.assertEqual(jobs, [])
+
+    def test_already_ingested_file_is_not_queued(self):
+        self.file_item(last_synced_at=self.now)
+
+        jobs, check = self.enqueue()
+
+        self.assertEqual(jobs, [])
+        check.assert_not_called()
+
+    def test_removed_file_is_not_queued(self):
+        self.file_item(removed_at=self.now)
+
+        jobs, _ = self.enqueue()
+
+        self.assertEqual(jobs, [])
+
+    def test_failed_file_waits_before_retry(self):
+        item = self.file_item()
+        IngestionJob.objects.create(
+            company=self.company, connection=self.connection,
+            kind=IngestionJob.Kind.COLLECT, item_ids=[item.id],
+            status=IngestionJob.Status.FAILED,
+        )
+
+        jobs, _ = self.enqueue()
+        self.assertEqual(jobs, [])
+
+        later, _ = self.enqueue(now=self.now + RETRY_AFTER + timedelta(minutes=1))
+        self.assertEqual(len(later), 1)
+
+    # S3가 답하지 않는 것은 파일이 없다는 뜻이 아니다. 실패로 굳히지 않고 다음 주기에 다시 본다.
+    def test_storage_error_is_skipped(self):
+        self.file_item()
+
+        with patch(
+            'sources.scheduling.object_exists',
+            side_effect=LocalFileStorageError('storage_unavailable'),
+        ):
+            jobs = enqueue_due_jobs(self.now)
+
+        self.assertEqual(jobs, [])
+        self.assertEqual(IngestionJob.objects.count(), 0)
+
+    def test_several_files_share_one_job(self):
+        first = self.file_item('file-1')
+        second = self.file_item('file-2')
+
+        jobs, _ = self.enqueue()
+
+        self.assertEqual(len(jobs), 1)
+        self.assertCountEqual(jobs[0].item_ids, [first.id, second.id])
+
+    def test_running_job_blocks_the_sweep(self):
+        self.file_item()
+        IngestionJob.objects.create(
+            company=self.company, connection=self.connection,
+            kind=IngestionJob.Kind.COLLECT, item_ids=[],
+            status=IngestionJob.Status.RUNNING,
+        )
+
+        jobs, _ = self.enqueue()
+
+        self.assertEqual(jobs, [])
+
+    def test_disconnected_local_source_is_skipped(self):
+        self.file_item()
+        self.connection.disconnected_at = self.now
+        self.connection.save()
+
+        jobs, _ = self.enqueue()
+
+        self.assertEqual(jobs, [])

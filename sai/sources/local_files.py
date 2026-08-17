@@ -33,6 +33,27 @@ def create_upload_target(storage_key, mime_type):
         raise LocalFileStorageError(STORAGE_UNAVAILABLE) from exc
 
 
+# 업로드는 브라우저가 S3에 직접 한다. 서버는 끝났다는 통보를 받지 못하므로
+# 큐에 넣기 전에 파일이 실제로 올라왔는지 여기서 확인한다.
+def object_exists(storage_key):
+    client = boto3.client('s3', region_name=settings.AWS_S3_REGION_NAME)
+
+    try:
+        client.head_object(
+            Bucket=settings.AWS_STORAGE_BUCKET_NAME,
+            Key=storage_key,
+        )
+    except ClientError as exc:
+        code = exc.response.get('Error', {}).get('Code')
+        if code in {'NoSuchKey', 'NotFound', '404'}:
+            return False
+        raise LocalFileStorageError(STORAGE_UNAVAILABLE) from exc
+    except BotoCoreError as exc:
+        raise LocalFileStorageError(STORAGE_UNAVAILABLE) from exc
+
+    return True
+
+
 def delete_file(storage_key):
     client = boto3.client('s3', region_name=settings.AWS_S3_REGION_NAME)
 

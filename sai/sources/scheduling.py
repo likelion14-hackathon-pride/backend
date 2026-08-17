@@ -5,6 +5,7 @@ from django.utils import timezone
 from companies.models import Company
 
 from .ingestion import has_pending_work
+from .local_files import LocalFileStorageError, object_exists
 from .models import Connection, IngestionJob, Item
 
 # 아침에 받은 지시가 점심때 카드로 뜨면 늦다. 처리할 것이 있을 때만 돈다.
@@ -18,10 +19,14 @@ RETRY_AFTER = timedelta(hours=1)
 
 FAILED_STATUSES = (IngestionJob.Status.FAILED, IngestionJob.Status.PARTIAL)
 
+SWEPT_KINDS = (Connection.Kind.SLACK, Connection.Kind.LOCAL)
 
-def _last_job(company, kind):
+
+def _last_job(company, kind, connection):
     return (
-        IngestionJob.objects.filter(company=company, kind=kind).order_by('-id').first()
+        IngestionJob.objects.filter(company=company, kind=kind, connection=connection)
+        .order_by('-id')
+        .first()
     )
 
 
@@ -34,21 +39,68 @@ def _is_due(last, every, now):
     return last.created_at + wait <= now
 
 
-def _enqueue(company, kind, item_ids):
-    return IngestionJob.objects.create(company=company, kind=kind, item_ids=item_ids)
+def _enqueue(company, connection, kind, item_ids):
+    return IngestionJob.objects.create(
+        company=company, connection=connection, kind=kind, item_ids=item_ids
+    )
 
 
-def _due_job(company, now):
-    # 이미 대기 중이거나 도는 작업이 있으면 쌓지 않는다.
-    if IngestionJob.objects.filter(
-        company=company,
-        status__in=(IngestionJob.Status.QUEUED, IngestionJob.Status.RUNNING),
-    ).exists():
+def _active_connection(company, kind):
+    return Connection.objects.filter(
+        company=company, kind=kind, disconnected_at__isnull=True
+    ).first()
+
+
+# 실패한 파일이 60초마다 되살아나면 S3와 큐만 계속 두드린다.
+def _attempted_recently(company, item_id, now):
+    last = (
+        IngestionJob.objects.filter(company=company, item_ids__contains=[item_id])
+        .order_by('-id')
+        .first()
+    )
+
+    return last is not None and last.created_at + RETRY_AFTER > now
+
+
+def _uploaded_local_items(company, connection, now):
+    pending = (
+        Item.objects.filter(
+            connection=connection,
+            removed_at__isnull=True,
+            last_synced_at__isnull=True,
+        )
+        .exclude(storage_key__isnull=True)
+        .exclude(storage_key='')
+    )
+
+    item_ids = []
+    for item in pending:
+        if _attempted_recently(company, item.id, now):
+            continue
+        try:
+            if object_exists(item.storage_key):
+                item_ids.append(item.id)
+        except LocalFileStorageError:
+            continue
+
+    return item_ids
+
+
+# 올린 파일은 한 번만 읽으면 된다. 주기가 아니라 아직 읽지 않았는지로 판단한다.
+def _local_due_job(company, now):
+    connection = _active_connection(company, Connection.Kind.LOCAL)
+    if connection is None:
         return None
 
-    connection = Connection.objects.filter(
-        company=company, kind=Connection.Kind.SLACK, disconnected_at__isnull=True
-    ).first()
+    item_ids = _uploaded_local_items(company, connection, now)
+    if not item_ids:
+        return None
+
+    return _enqueue(company, connection, IngestionJob.Kind.COLLECT, item_ids)
+
+
+def _slack_due_job(company, now):
+    connection = _active_connection(company, Connection.Kind.SLACK)
     if connection is None:
         return None
 
@@ -60,24 +112,40 @@ def _due_job(company, now):
         return None
 
     # 수집이 먼저다. 새 원문을 가져오면 어차피 뒤이어 처리까지 한다.
-    if _is_due(_last_job(company, IngestionJob.Kind.COLLECT), COLLECT_EVERY, now):
-        return _enqueue(company, IngestionJob.Kind.COLLECT, item_ids)
+    if _is_due(_last_job(company, IngestionJob.Kind.COLLECT, connection), COLLECT_EVERY, now):
+        return _enqueue(company, connection, IngestionJob.Kind.COLLECT, item_ids)
 
-    if not _is_due(_last_job(company, IngestionJob.Kind.PROCESS), PROCESS_EVERY, now):
+    if not _is_due(_last_job(company, IngestionJob.Kind.PROCESS, connection), PROCESS_EVERY, now):
         return None
 
     # 처리할 것이 없으면 만들지 않는다. 빈 작업이 10분마다 쌓이면 로그만 지저분해진다.
     if not has_pending_work(company):
         return None
 
-    return _enqueue(company, IngestionJob.Kind.PROCESS, item_ids)
+    return _enqueue(company, connection, IngestionJob.Kind.PROCESS, item_ids)
 
 
-# 웹훅은 원문만 저장한다. 아무도 수집 버튼을 누르지 않으면 카드도 규칙도 생기지 않는다.
+def _due_job(company, now):
+    # 이미 대기 중이거나 도는 작업이 있으면 쌓지 않는다.
+    if IngestionJob.objects.filter(
+        company=company,
+        status__in=(IngestionJob.Status.QUEUED, IngestionJob.Status.RUNNING),
+    ).exists():
+        return None
+
+    # 방금 올린 파일이 슬랙 주기 뒤로 밀리면 화면에서는 업로드가 실패한 것으로 보인다.
+    local_job = _local_due_job(company, now)
+    if local_job is not None:
+        return local_job
+
+    return _slack_due_job(company, now)
+
+
+# 웹훅은 원문만 저장하고, 업로드는 S3에서 끝난다. 큐에 넣는 것은 여기뿐이다.
 def enqueue_due_jobs(now=None):
     now = now or timezone.now()
     companies = Company.objects.filter(
-        connections__kind=Connection.Kind.SLACK,
+        connections__kind__in=SWEPT_KINDS,
         connections__disconnected_at__isnull=True,
     ).distinct()
 
