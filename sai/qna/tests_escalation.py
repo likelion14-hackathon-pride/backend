@@ -329,15 +329,20 @@ class EscalationTests(TestCase):
         self.check(escalation_id)
 
         self.client.force_authenticate(user=self.owner)
-        response = self.client.post(f'{self.base}/{escalation_id}/approve')
+        with patch('qna.services.finalize_entries') as finalize:
+            response = self.client.post(f'{self.base}/{escalation_id}/approve')
 
         self.assertEqual(response.status_code, 201)
         self.assertEqual(response.data['status'], 'APPROVED')
 
         entry = HandbookEntry.objects.get(id=response.data['proposedEntryId'])
-        self.assertEqual(entry.status, HandbookEntry.Status.DRAFT)
+        self.assertEqual(entry.status, HandbookEntry.Status.CONFIRMED)
+        self.assertIsNotNone(entry.confirmed_at)
         self.assertEqual(entry.origin, HandbookEntry.Origin.ESCALATION)
         self.assertEqual(entry.body_ko, '연차는 사전 승인 없이 쓰고 캘린더에 등록만 합니다.')
+
+        # 확정만 하고 번역·임베딩을 걸지 않으면 검색에 안 걸려 답변에 쓰이지 않는다.
+        self.assertEqual(finalize.call_args.args[0], [entry])
 
         evidence = entry.evidences.get()
         self.assertEqual(evidence.tag, HandbookEvidence.Tag.OWNER)
@@ -396,6 +401,27 @@ class EscalationTests(TestCase):
         response = self.client.get(f'{self.base}?status=SENT')
 
         self.assertEqual([i['id'] for i in response.data['items']], [escalation_id])
+
+    # 답변대기는 아직 못 보낸 것과 보내고 기다리는 것을 함께 세는 한 칸이다.
+    def test_status_filter_takes_several_values(self):
+        sent_id = self.create().data['id']
+        self.send(sent_id)
+        draft = Escalation.objects.create(
+            company=self.company, asked_by=self.member, question_en='보내지 않은 것', draft_ko='초안'
+        )
+        Escalation.objects.create(
+            company=self.company, asked_by=self.member, question_en='물린 것', draft_ko='초안',
+            status=Escalation.Status.DISMISSED,
+        )
+
+        response = self.client.get(f'{self.base}?status=DRAFT,SENT')
+
+        self.assertEqual(
+            sorted(i['id'] for i in response.data['items']), sorted([sent_id, draft.id])
+        )
+
+    def test_invalid_status_filter(self):
+        self.assertEqual(self.client.get(f'{self.base}?status=SENT,NOPE').status_code, 400)
 
     def test_outsider_cannot_list(self):
         outsider = User.objects.create_user(email='x@example.com', password='pw', display_name='X')

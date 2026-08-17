@@ -92,6 +92,23 @@ def build_lookup(company_id):
     return channels, users
 
 
+# 스레드 답글은 부모 발언을 봐야 의미가 잡힌다.
+# 분류와 초안 생성이 같은 맥락을 봐야 한쪽만 뜻을 아는 일이 없다.
+def build_parents(company_id, documents):
+    thread_refs = {document.thread_ref for document in documents if document.thread_ref}
+    if not thread_refs:
+        return {}
+
+    parent_documents = RawDocument.objects.filter(
+        company_id=company_id, external_ref__in=thread_refs
+    ).select_related('item__connection')
+
+    return {
+        (document.item_id, document.external_ref): document
+        for document in parent_documents
+    }
+
+
 def _render(document, index, channels, users, parents):
     text = normalize_document_text(document, channels, users)
     author = document.author_identity.external_handle if document.author_identity else '알수없음'
@@ -161,15 +178,8 @@ def classify_documents(company_id, documents=None):
         return 0, []
 
     channels, users = build_lookup(company_id)
-    # 스레드 답글의 부모 본문. 답글만 있는 배치에서도 맥락을 잃지 않게 미리 모아 둔다.
-    thread_refs = {d.thread_ref for d in documents if d.thread_ref}
-    parent_documents = RawDocument.objects.filter(
-        company_id=company_id, external_ref__in=thread_refs
-    ).select_related('item__connection')
-    parents = {
-        (document.item_id, document.external_ref): document
-        for document in parent_documents
-    }
+    # 답글만 있는 배치에서도 맥락을 잃지 않게 미리 모아 둔다.
+    parents = build_parents(company_id, documents)
 
     client = _get_client()
     classified = 0

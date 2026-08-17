@@ -17,6 +17,7 @@ from config.errors import (
     RateLimited,
     UpstreamError,
 )
+from handbook.finalizing import finalize_entries
 from handbook.gaps import record_gap
 from handbook.models import CompanyScope, HandbookEntry, HandbookEvidence
 from sources.models import Item
@@ -224,8 +225,11 @@ def _channel_label(company, external_id):
     return item.label if item else None
 
 
-# 대표 답변을 핸드북 초안으로 만든다. 확정은 별도 검토에서 한다.
+# 대표 답변을 핸드북 규칙으로 만든다.
 # 미리보기에서 고친 제목·영문·계층이 오면 그것으로 저장한다.
+#
+# 여기서 바로 확정한다. 승인 버튼 자체가 '핸드북에 넣겠다'는 결정이라,
+# 초안으로 두면 대표가 확인보관함에서 같은 결정을 한 번 더 하게 된다.
 def promote_to_entry(escalation, title=None, body_en=None, scope=None):
     company = escalation.company
     if escalation.status != Escalation.Status.ANSWERED or not escalation.answer_ko:
@@ -235,6 +239,7 @@ def promote_to_entry(escalation, title=None, body_en=None, scope=None):
     if scope is None:
         raise ValidationError('no scope available', code=NO_SCOPE_AVAILABLE)
 
+    now = timezone.now()
     with transaction.atomic():
         entry = HandbookEntry.objects.create(
             company=company,
@@ -243,9 +248,11 @@ def promote_to_entry(escalation, title=None, body_en=None, scope=None):
             body_ko=escalation.answer_ko,
             body_en=body_en or escalation.answer_en or None,
             original_lang='ko',
-            status=HandbookEntry.Status.DRAFT,
+            status=HandbookEntry.Status.CONFIRMED,
             origin=HandbookEntry.Origin.ESCALATION,
             confidence=HandbookEntry.Confidence.MEDIUM,
+            reviewed_at=now,
+            confirmed_at=now,
         )
         HandbookEvidence.objects.create(
             company=company,
@@ -259,6 +266,9 @@ def promote_to_entry(escalation, title=None, body_en=None, scope=None):
         escalation.proposed_entry = entry
         escalation.status = Escalation.Status.APPROVED
         escalation.save(update_fields=['proposed_entry', 'status'])
+
+    # 번역과 임베딩이 없으면 확정 상태여도 검색에 걸리지 않아 답변에 쓰이지 않는다.
+    finalize_entries([entry])
 
     return escalation
 

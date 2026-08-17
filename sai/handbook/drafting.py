@@ -1,4 +1,5 @@
 import hashlib
+import logging
 import re
 from typing import Literal
 
@@ -9,14 +10,16 @@ from openai import OpenAI, OpenAIError
 from pydantic import BaseModel
 
 from config.ai import client_options, timed_call
-from sources.classifier import build_lookup
+from sources.classifier import build_lookup, build_parents
 from sources.models import RawDocument
 from sources.text import normalize_document_text
 
 from .models import CompanyScope, HandbookEntry, HandbookEvidence
 
+logger = logging.getLogger(__name__)
+
 # 프롬프트를 고치면 올린다. 재생성 대상을 고를 때 쓴다.
-DRAFTER_VERSION = 'draft-v1'
+DRAFTER_VERSION = 'draft-v2'
 
 # 한 번에 모델에 넣는 원문 수. 한 범위 안의 규칙끼리 묶으려면 함께 봐야 한다.
 BATCH_SIZE = 40
@@ -37,9 +40,13 @@ For every rule return:
   part of it, LOW when the evidence is thin.
 - citations: which messages this rule came from.
 
+Some messages are thread replies. Their parent is shown on a "parent:" line so you can tell what
+a short reply such as "네 그렇게 하죠" is agreeing to. The parent is context only.
+
 Citation rules - these matter most:
-- quote MUST be copied character for character from that message's text. Do not paraphrase,
+- quote MUST be copied character for character from that message's "text:" line. Do not paraphrase,
   do not fix typos, do not translate, do not add quotation marks.
+- Never quote from a "parent:" line. Quote only the message you are citing.
 - Quote only the part that states the rule, not the whole message.
 - Cite every message that contributed. If two messages state the same rule, make ONE rule
   citing both.
@@ -84,16 +91,22 @@ def _resolve_scope(document, fallback):
     return document.item.scope or fallback
 
 
-def _render(document, index, channels, users):
+def _render(document, index, channels, users, parents):
     text = normalize_document_text(document, channels, users)
     author = document.author_identity.external_handle if document.author_identity else '?'
     occurred_at = document.occurred_at.strftime('%Y-%m-%d') if document.occurred_at else '?'
     source = document.item.connection.kind
 
-    return (
+    lines = [
         f'[{index}] source={source} location={document.item.label} '
-        f'author={author} at={occurred_at}\n    text: {text}'
-    )
+        f'author={author} at={occurred_at}'
+    ]
+    parent = parents.get((document.item_id, document.thread_ref))
+    if parent:
+        lines.append(f'    parent: {normalize_document_text(parent, channels, users)[:200]}')
+    lines.append(f'    text: {text}')
+
+    return '\n'.join(lines)
 
 
 # 모델이 인용을 지어내지 않았는지 원문과 대조한다.
@@ -126,15 +139,28 @@ def _evidence_tag(document):
 def _build_entry(company, scope, rule, documents, channels, users):
     verified = []
     seen_quotes = set()
+    dropped = 0
     for citation in rule.citations:
         document = documents.get(citation.index)
         if document is None:
+            dropped += 1
             continue
         quote = _verify_quote(citation.quote, document, channels, users)
+        if not quote:
+            dropped += 1
+            continue
         # 같은 문장이 여러 번 올라온 경우 원문은 여러 건이지만 근거로는 한 줄이면 된다.
-        if quote and quote not in seen_quotes:
+        if quote not in seen_quotes:
             seen_quotes.add(quote)
             verified.append((document, quote))
+
+    # 대조에 실패한 인용은 조용히 사라진다. 얼마나 버려지는지 보이지 않으면
+    # 규칙이 통째로 없어져도 모델이 원래 못 찾은 것인지 검증에서 떨어진 것인지 알 수 없다.
+    if dropped:
+        logger.warning(
+            '인용 대조 실패 company=%s scope=%s title=%s 버림=%d/%d',
+            company.id, scope.id, rule.title, dropped, len(rule.citations),
+        )
 
     # 근거가 하나도 남지 않으면 규칙 자체를 버린다. 출처 없는 규칙은 만들지 않는다.
     if not verified:
@@ -178,8 +204,11 @@ def _build_entry(company, scope, rule, documents, channels, users):
     return entry
 
 
-def _draft_batch(client, company, scope, batch, channels, users):
-    prompt = '\n'.join(_render(d, i, channels, users) for i, d in enumerate(batch))
+def _draft_batch(client, company, scope, batch, channels, users, parents):
+    prompt = '\n'.join(
+        _render(document, index, channels, users, parents)
+        for index, document in enumerate(batch)
+    )
     with timed_call(settings.OPENAI_DRAFTER_MODEL, len(batch)):
         completion = client.chat.completions.parse(
             model=settings.OPENAI_DRAFTER_MODEL,
@@ -236,6 +265,7 @@ def draft_entries(company):
         by_scope.setdefault(scope, []).append(document)
 
     channels, users = build_lookup(company.id)
+    parents = build_parents(company.id, documents)
     client = _get_client()
     entries = []
     errors = []
@@ -244,7 +274,9 @@ def draft_entries(company):
         for start in range(0, len(scope_documents), BATCH_SIZE):
             batch = scope_documents[start:start + BATCH_SIZE]
             try:
-                entries += _draft_batch(client, company, scope, batch, channels, users)
+                entries += _draft_batch(
+                    client, company, scope, batch, channels, users, parents
+                )
             except (OpenAIError, ValueError) as exc:
                 errors.append({
                     'scope': 'draft',

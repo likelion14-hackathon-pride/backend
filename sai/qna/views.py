@@ -18,7 +18,7 @@ from config.errors import (
     NOT_SENT_YET,
     field_error,
 )
-from config.filters import enum_parameter, filter_enum
+from config.filters import enum_list_parameter, filter_enum_list
 from config.pagination import (
     CURSOR_PARAMETER,
     LIMIT_PARAMETER,
@@ -56,7 +56,10 @@ from .services import (
     proposal_for,
 )
 
-STATUS_PARAMETER = enum_parameter('status', Escalation.Status)
+# 답변대기는 DRAFT(아직 못 보냄)와 SENT(보내고 답 기다리는 중)를 함께 본다.
+STATUS_PARAMETER = enum_list_parameter(
+    'status', Escalation.Status, '답변대기는 DRAFT,SENT 입니다.',
+)
 
 
 class AskView(APIView):
@@ -119,7 +122,7 @@ class EscalationListCreateView(APIView):
     def get(self, request, company_id):
         company = get_member_company(request.user, company_id)
         escalations = escalations_for(company, request.user)
-        escalations = filter_enum(escalations, request, 'status', Escalation.Status)
+        escalations = filter_enum_list(escalations, request, 'status', Escalation.Status)
 
         return paged_response(EscalationSerializer, escalations, request)
 
@@ -365,9 +368,9 @@ class EscalationApproveView(APIView):
     @swagger_auto_schema(
         operation_summary='답변을 핸드북 규칙으로 승격',
         operation_description=(
-            '대표 답변을 핸드북 초안으로 만듭니다. 다음 사람이 같은 질문을 하면 Ask SAI가 바로 답할 수 있게 됩니다. '
+            '대표 답변을 핸드북 규칙으로 만듭니다. 다음 사람이 같은 질문을 하면 Ask SAI가 바로 답할 수 있게 됩니다. '
             '상세의 proposal 을 그대로 저장하며, 미리보기에서 고친 title / ruleEn / scopeId 를 보내면 '
-            '그 값으로 저장합니다. 만들어진 항목은 DRAFT이며 확정은 별도로 해야 합니다.'
+            '그 값으로 저장합니다. 저장 즉시 확정 상태가 되며 확인보관함에는 올라가지 않습니다.'
         ),
         request_body=EscalationApproveSerializer,
         responses={

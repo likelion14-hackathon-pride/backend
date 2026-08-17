@@ -183,7 +183,11 @@ class DraftEntriesTests(TestCase):
         )
         with patch('handbook.drafting.OpenAI') as client:
             client.return_value.chat.completions.parse.return_value = completion
+            self.parse_mock = client.return_value.chat.completions.parse
             return draft_entries(self.company)
+
+    def prompt(self):
+        return self.parse_mock.call_args.kwargs['messages'][1]['content']
 
     @override_settings(OPENAI_API_KEY='test-key')
     def test_creates_draft_with_evidence(self):
@@ -208,6 +212,23 @@ class DraftEntriesTests(TestCase):
         self.assertEqual(evidence.speaker_name, '조상원')
         self.assertEqual(evidence.document_id, self.document.id)
 
+    # 답글만 보면 무엇에 동의한 것인지 알 수 없다. 분류기와 같은 맥락을 봐야 한다.
+    @override_settings(OPENAI_API_KEY='test-key')
+    def test_thread_reply_carries_its_parent(self):
+        parent = self._document('100.0', '리뷰어는 두 명으로 할까요?', classified='CONTEXT')
+        reply = self._document('100.2', '네 그렇게 하죠')
+        reply.thread_ref = parent.external_ref
+        reply.save(update_fields=['thread_ref'])
+
+        self.draft([])
+
+        self.assertIn('parent: 리뷰어는 두 명으로 할까요?', self.prompt())
+
+    def test_a_message_without_a_parent_has_no_parent_line(self):
+        self.draft([])
+
+        self.assertNotIn('parent:', self.prompt())
+
     # 모델이 지어낸 인용은 버린다. 근거 없는 규칙을 만들지 않기 위함.
     @override_settings(OPENAI_API_KEY='test-key')
     def test_fabricated_quote_is_dropped(self):
@@ -220,6 +241,21 @@ class DraftEntriesTests(TestCase):
 
         self.assertEqual(entries, [])
         self.assertFalse(HandbookEntry.objects.exists())
+
+    # 버려진 인용이 안 보이면 규칙이 사라졌을 때 모델이 못 찾은 것인지
+    # 대조에서 떨어진 것인지 구분할 수 없다.
+    @override_settings(OPENAI_API_KEY='test-key')
+    def test_dropped_citation_is_logged(self):
+        with self.assertLogs('handbook.drafting', level='WARNING') as logs:
+            self.draft([{
+                'title': '금요일 오후 배포 금지',
+                'body': '배포는 금요일 오후에 하지 않습니다.',
+                'confidence': 'HIGH',
+                'citations': [{'index': 0, 'quote': '이런 말은 원문에 없습니다'}],
+            }])
+
+        self.assertIn('인용 대조 실패', logs.output[0])
+        self.assertIn('버림=1/1', logs.output[0])
 
     # 일부만 지어낸 경우 검증을 통과한 인용만 남는다.
     @override_settings(OPENAI_API_KEY='test-key')
