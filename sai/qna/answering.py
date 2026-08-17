@@ -10,7 +10,7 @@ from openai import OpenAI, OpenAIError, RateLimitError
 from pgvector.django import CosineDistance
 from pydantic import BaseModel
 
-from config.ai import client_options, timed_call
+from config.ai import client_options, sampling_options, timed_call
 from handbook.models import CompanyScope
 from handbook.retrieval import search_rules
 from handbook.services import scopes_in_view
@@ -283,7 +283,7 @@ def _ask(client, question, lang, entries, cases, widened):
                     },
                 ],
                 response_format=AnswerResult,
-                temperature=0,
+                **sampling_options(settings.OPENAI_ANSWER_MODEL),
             )
     except RateLimitError as exc:
         raise AnswerRateLimited(_retry_after(exc)) from exc

@@ -6,7 +6,7 @@ from django.utils import timezone
 from openai import OpenAI, OpenAIError
 from pydantic import BaseModel
 
-from config.ai import client_options, timed_call
+from config.ai import client_options, sampling_options, timed_call
 
 from .classifier import build_lookup
 from .models import Chunk, RawDocument
@@ -144,7 +144,7 @@ def translate_chunks(company):
                         {'role': 'user', 'content': prompt},
                     ],
                     response_format=ChunkTranslationResult,
-                    temperature=0,
+                    **sampling_options(settings.OPENAI_TRANSLATOR_MODEL),
                 )
         except (OpenAIError, ValueError) as exc:
             errors.append({

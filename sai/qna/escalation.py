@@ -4,7 +4,7 @@ from django.utils import timezone
 from openai import OpenAI, OpenAIError
 from pydantic import BaseModel, Field
 
-from config.ai import client_options, timed_call
+from config.ai import client_options, sampling_options, timed_call
 from sources.models import Connection
 from sources.slack import SlackClient, SlackError
 from sources.text import normalize_slack_text
@@ -33,7 +33,7 @@ def draft_from_blank(blank):
                     ),
                 },
             ],
-            temperature=0,
+            **sampling_options(settings.OPENAI_TRANSLATOR_MODEL),
         )
 
     return (completion.choices[0].message.content or '').strip() or None
@@ -96,7 +96,7 @@ def translate_additions(lines):
                     },
                 ],
                 response_format=AdditionResult,
-                temperature=0,
+                **sampling_options(settings.OPENAI_TRANSLATOR_MODEL),
             )
     except (OpenAIError, ValueError) as exc:
         raise RuntimeError(f'addition_failed: {type(exc).__name__}') from exc
@@ -277,7 +277,7 @@ def judge_reply(question_en, draft_ko, reply_text):
                     },
                 ],
                 response_format=AnswerJudgement,
-                temperature=0,
+                **sampling_options(settings.OPENAI_ANSWER_MODEL),
             )
     except (OpenAIError, ValueError) as exc:
         raise RuntimeError(f'judge_failed: {type(exc).__name__}') from exc
