@@ -369,7 +369,7 @@ class CardAskView(APIView):
         serializer = CardAskSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
-        thread = open_thread(company, request.user, card.scope)
+        thread = open_thread(company, request.user, card.scope, card)
         payload = ask(
             company, request.user, thread,
             serializer.validated_data['question'],

@@ -64,8 +64,8 @@ def language_of(user):
     return user.ui_language if user.ui_language in ('ko', 'en') else 'en'
 
 
-def open_thread(company, user, scope=None):
-    return Thread.objects.create(company=company, user=user, scope=scope)
+def open_thread(company, user, scope=None, card=None):
+    return Thread.objects.create(company=company, user=user, scope=scope, card=card)
 
 
 def draft_for_blank(blank):
@@ -88,7 +88,6 @@ def korean_additions(lines):
         raise AnswerUnavailable(f'addition_failed: {type(exc).__name__}')
 
 
-# AI 답변 메시지에 저장해 둔 한국어 초안. NEEDS_OWNER 판정일 때만 채워져 있다.
 # AI 답변 메시지에 저장해 둔 한국어 초안. NEEDS_OWNER 판정일 때만 채워져 있다.
 def draft_from_message(message):
     if message.verdict not in NEEDS_OWNER:

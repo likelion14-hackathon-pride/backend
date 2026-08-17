@@ -320,6 +320,40 @@ class BoardTests(TestCase):
         self.assertIn('Find the cause of the payment failures', captured['question'])
         self.assertIn('결제 로그 좀 봐주세요', captured['question'])
 
+    @override_settings(OPENAI_API_KEY='test-key')
+    def test_card_ask_escalation_moves_ready_card_to_waiting(self):
+        card = self.card()
+        client = openai_stub(
+            verdict='NO_SOURCE', answer='', cited=(),
+            draft_ko='대표님, 어느 환경 로그를 보면 될까요?',
+        )
+        with (
+            patch('qna.answering.OpenAI', return_value=client),
+            patch('handbook.gaps.OpenAI', return_value=client),
+        ):
+            answer = self.client.post(
+                f'{self.base}/{card.id}/ask',
+                {'question': 'Which environment should I check?'},
+                format='json',
+            )
+
+        escalation = self.client.post(
+            f'/api/companies/{self.company.id}/questions',
+            {'messageId': answer.data['messageId']},
+            format='json',
+        )
+        with patch('qna.escalation.SlackClient.post_message',
+                   return_value={'ok': True, 'ts': '1786800000.000100'}):
+            self.client.post(
+                f'/api/companies/{self.company.id}/questions/{escalation.data["id"]}/send',
+                {'itemId': self.item.id},
+                format='json',
+            )
+
+        self.assertEqual(self.columns()[card.id], 'WAITING')
+        blank = Blank.objects.get(card=card)
+        self.assertEqual(blank.escalation_id, escalation.data['id'])
+
     def test_ask_requires_a_question(self):
         card = self.card()
 

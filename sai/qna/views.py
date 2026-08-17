@@ -168,7 +168,7 @@ class EscalationListCreateView(APIView):
 
         if data.get('messageId'):
             origin = get_object_or_404(
-                Message.objects.select_related('thread'),
+                Message.objects.select_related('thread', 'thread__card'),
                 id=data['messageId'], company=company, thread__user=request.user,
             )
             if hasattr(origin, 'escalation'):
@@ -178,6 +178,12 @@ class EscalationListCreateView(APIView):
             ).order_by('-id').first()
             question_en = question_en or (question.body_en or question.body_ko if question else None)
             draft_ko = draft_ko or draft_from_message(origin)
+            card = origin.thread.card
+            if card is not None and question_en and draft_ko:
+                blank = Blank.objects.create(
+                    company=company, card=card, question_en=question_en
+                )
+                scope = card.scope
 
         escalation = create_escalation(
             company, request.user, question_en, draft_ko, scope, origin, blank
