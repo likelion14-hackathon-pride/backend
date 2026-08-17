@@ -20,7 +20,7 @@ from sources.models import Chunk
 # 프롬프트를 고치면 올린다. Message.prompt_version 에 기록된다.
 PROMPT_VERSION = 'ask-v4'
 
-# 검색해서 모델에 넘길 규칙 수. 너무 많으면 모델이 엉뚱한 걸 인용한다.
+# 지식공간마다 검색해서 모델에 넘길 규칙 수. 너무 많으면 모델이 엉뚱한 걸 인용한다.
 TOP_K = 5
 
 # 코사인 거리 상한. 이보다 먼 것은 후보에서 뺀다.
@@ -162,11 +162,13 @@ def _get_client():
 # 한국어 원문과 영어판을 모두 뒤져 청크마다 더 가까운 쪽을 쓴다. 규칙(search_rules)과 같은
 # 방식이다. 한쪽만 보면 영어 질문이 한국어 벡터와 비교되어 컷오프에 걸린다.
 # 실측: 영어 질문의 평균 거리 0.752 로 상한 0.75 를 넘어 8건 중 5건이 버려졌다.
-def retrieve_cases(vector, company, scope_ids=None):
+def retrieve_cases(vector, company, scope_ids=None, include_unscoped=True):
     chunks = Chunk.objects.filter(company=company)
     if scope_ids is not None:
-        # 지식공간을 지정하지 않은 채널의 대화는 회사 전반으로 본다. 초안 생성도 같은 규칙을 쓴다.
-        chunks = chunks.filter(Q(scope_id__in=scope_ids) | Q(scope__isnull=True))
+        scope_filter = Q(scope_id__in=scope_ids)
+        if include_unscoped:
+            scope_filter |= Q(scope__isnull=True)
+        chunks = chunks.filter(scope_filter)
 
     best = {}
     for field in ('embedding', 'embedding_en'):
@@ -208,8 +210,34 @@ def embed_question(client, question):
         raise RuntimeError(f'embed_failed: {type(exc).__name__}') from exc
 
 
-# 같은 벡터를 여러 번 쓴다. 사례를 붙이고 범위를 넓히는 데 임베딩 호출이 늘지 않는다.
-def retrieve(vector, company, scope_ids=None):
+def _merge_rows(*groups):
+    seen = set()
+    rows = []
+    for group in groups:
+        for row in group:
+            if row.id in seen:
+                continue
+            seen.add(row.id)
+            rows.append(row)
+
+    return rows
+
+
+def retrieve(vector, company, scope=None):
+    company_scope_ids = scopes_in_view(company)
+    if scope is not None and scope.kind == CompanyScope.Kind.PROJECT:
+        return (
+            _merge_rows(
+                search_rules(vector, company, [scope.id], TOP_K, MAX_DISTANCE),
+                search_rules(vector, company, company_scope_ids, TOP_K, MAX_DISTANCE),
+            ),
+            _merge_rows(
+                retrieve_cases(vector, company, [scope.id], include_unscoped=False),
+                retrieve_cases(vector, company, company_scope_ids),
+            ),
+        )
+
+    scope_ids = scopes_in_view(company, scope)
     return (
         search_rules(vector, company, scope_ids, TOP_K, MAX_DISTANCE),
         retrieve_cases(vector, company, scope_ids),
@@ -252,13 +280,7 @@ def find_risk_warnings(company, *texts):
     return warnings
 
 
-WIDEN_NOTE = (
-    '\n\nNothing in the area the reader selected answers this. The material below comes from '
-    'elsewhere in the company - answer from it, and say which area it came from.'
-)
-
-
-def _ask(client, question, lang, entries, cases, widened):
+def _ask(client, question, lang, entries, cases):
     rules = '\n'.join(
         _render_rule(entry, index, lang) for index, entry in enumerate(entries)
     ) or '(no confirmed rules retrieved)'
@@ -277,7 +299,7 @@ def _ask(client, question, lang, entries, cases, widened):
                         'role': 'user',
                         'content': (
                             f'Answer in: {language}\n\n'
-                            f'Question:\n{question}{WIDEN_NOTE if widened else ""}\n\n'
+                            f'Question:\n{question}\n\n'
                             f'CONFIRMED RULES:\n{rules}\n\n'
                             f'PAST CASES:\n{past}'
                         ),
@@ -296,46 +318,18 @@ def _tokens(completion, field):
     return getattr(completion.usage, field) if completion.usage else None
 
 
-def _ids(rows):
-    return {row.id for row in rows}
-
-
 # 질문 하나에 답한다. (AnswerResult, 인용된 근거, 검색 스냅샷, 사용량) 반환.
 # 인용된 근거는 Source 목록이다. 확정 규칙일 수도 과거 대화일 수도 있다.
-#
-# 고른 범위에서 답이 안 나오면 회사 전체로 넓혀 한 번 더 묻는다.
-# 넓히지 않으면 막다른 길이 된다. 회사 전반을 골라 두고 프로젝트 이야기를 물으면
-# 답이 회사 어딘가에 있는데도 '모르겠습니다'가 나간다. 외국인 신입은 자기 질문이
-# 어느 범주에 속하는지 모르는 것이 정상이다.
-#
-# 검색 결과가 비었는지로는 판단할 수 없다. 엉뚱한 규칙이 거리 안에 몇 건 걸려 들어와도
-# 비어 있지 않기 때문이다. 모델이 답하지 못했을 때만 넓힌다.
-#
-# 아무것도 고르지 않았으면 프로젝트까지 함께 뒤진다. 회사 규칙만 보면 프로젝트가 다르게
-# 정한 규칙이 후보에 아예 없어서, 넓히기가 걸리지도 않은 채 회사 기본값이 확정 답변으로
-# 나간다. 틀린 답을 확신을 갖고 주는 쪽이 '모르겠습니다'보다 나쁘다.
 def answer_question(company, question, lang='en', scope=None):
     lang = 'en'
     client = _get_client()
     started = time.time()
 
     vector = embed_question(client, question)
-    scope_ids = scopes_in_view(company, scope) if scope is not None else None
-    entries, cases = retrieve(vector, company, scope_ids)
-    completion = _ask(client, question, lang, entries, cases, widened=False)
+    entries, cases = retrieve(vector, company, scope)
+    completion = _ask(client, question, lang, entries, cases)
     prompt_tokens = _tokens(completion, 'prompt_tokens')
     completion_tokens = _tokens(completion, 'completion_tokens')
-
-    if completion.choices[0].message.parsed.verdict == 'NO_SOURCE':
-        wider_entries, wider_cases = retrieve(vector, company)
-        # 개수로 비교하면 안 된다. 양쪽 다 상한(TOP_K)까지 차 있고 내용만 다른 경우가 흔하다.
-        if _ids(wider_entries) != _ids(entries) or _ids(wider_cases) != _ids(cases):
-            entries, cases = wider_entries, wider_cases
-            completion = _ask(client, question, lang, entries, cases, widened=True)
-            prompt_tokens = (prompt_tokens or 0) + (_tokens(completion, 'prompt_tokens') or 0)
-            completion_tokens = (
-                (completion_tokens or 0) + (_tokens(completion, 'completion_tokens') or 0)
-            )
 
     # 규칙과 사례가 번호를 나눠 쓴다. 모델이 돌려준 번호를 그대로 되짚을 수 있어야 한다.
     sources = [Source(entry=entry) for entry in entries]
