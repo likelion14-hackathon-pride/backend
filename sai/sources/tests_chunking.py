@@ -329,6 +329,34 @@ class ChunkingTests(TestCase):
         self.assertEqual(errors[0]['scope'], 'translate_chunks')
         self.assertIsNone(Chunk.objects.get().translated_at)
 
+    # 배치를 넘어 누적된 목록을 매번 넘기면 쓰기가 배치 수의 제곱으로 는다.
+    # 250건이면 250번이어야 하고, 누적하면 550번이 된다.
+    def test_each_chunk_is_written_once(self):
+        for index in range(250):
+            self.document(f'2.{index}', f'배포 규칙 {index}번입니다')
+        build_chunks(self.company)
+
+        written = []
+        real = Chunk.objects.bulk_update
+
+        def spy(objs, fields, **kwargs):
+            objs = list(objs)
+            written.append(len(objs))
+
+            return real(objs, fields, **kwargs)
+
+        with (
+            patch('sources.chunking.OpenAI') as client,
+            patch.object(Chunk.objects, 'bulk_update', spy),
+        ):
+            client.return_value.embeddings.create.side_effect = (
+                lambda **kwargs: embeddings_stub(len(kwargs['input']))
+            )
+            count, errors = embed_chunks(self.company)
+
+        self.assertEqual((count, errors), (250, []))
+        self.assertEqual(sum(written), 250)
+
     def test_embeds_both_languages(self):
         self.document('1.1', '배포는 금요일에 하지 않습니다')
         build_chunks(self.company)
