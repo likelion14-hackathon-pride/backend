@@ -47,7 +47,7 @@ class AnswerJudgement(BaseModel):
     needs_review: bool = Field(description='사람이 한 번 봐야 하는가')
     answer_ko: str = Field(description='정리한 규칙(한국어). is_answer=false면 빈 문자열')
     answer_en: str = Field(description='정리한 규칙(영어). is_answer=false면 빈 문자열')
-    title_ko: str = Field(description='핸드북에 실릴 규칙 이름. is_answer=false면 빈 문자열')
+    title_ko: str = Field(description='핸드북에 실릴 핵심 한 줄. is_answer=false면 빈 문자열')
 
 
 def _get_client():

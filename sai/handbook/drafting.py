@@ -19,7 +19,7 @@ from .models import CompanyScope, HandbookEntry, HandbookEvidence
 logger = logging.getLogger(__name__)
 
 # 프롬프트를 고치면 올린다. 재생성 대상을 고를 때 쓴다.
-DRAFTER_VERSION = 'draft-v2'
+DRAFTER_VERSION = 'draft-v3'
 
 # 한 번에 모델에 넣는 원문 수. 한 범위 안의 규칙끼리 묶으려면 함께 봐야 한다.
 BATCH_SIZE = 40
@@ -33,11 +33,11 @@ employees who need to know how this company works.
 Group related messages into ONE rule each. Produce one entry per distinct policy.
 
 For every rule return:
-- title: a short Korean noun phrase naming the rule (max 40 characters). Not a sentence.
-- title_en: the same name in English. This is what the foreign readers see in the handbook
-  list, so it must name the rule, not describe it. "금요일 오후 배포 금지" is
-  "No Friday afternoon deploys", not "Deployment is prohibited on Friday afternoons".
-  Keep channel, repository, tool and product names exactly as written.
+- title: one Korean sentence that captures the core rule from the source, under 80 characters.
+  It is shown in a handbook list, so make it concrete enough to understand without opening the
+  detail. Prefer "백엔드 배포는 AWS EC2로 진행합니다." over "배포 방식".
+- title_en: the same one-sentence summary in English, under 120 characters. Keep channel,
+  repository, tool and product names exactly as written.
 - body: the rule written in Korean as something the reader must follow. One to three sentences.
   Write the rule itself, not a summary of the conversation. No "~라고 합니다" reporting style.
 - confidence: HIGH when the messages state it explicitly and agree, MEDIUM when you had to infer

@@ -16,7 +16,7 @@ VECTOR = [0.1] * 1536
 
 
 def finalizer(translation='No deploys on Friday afternoon.',
-              title='No Friday afternoon deploys'):
+              title='Deployments do not happen on Friday afternoons.'):
     parsed = TranslationResult(
         translations=[Translation(index=0, title=title, text=translation)]
     )

@@ -22,10 +22,10 @@ body:
 - Use plain workplace English. No honorific padding, no "please be advised".
 
 title:
-- The name this rule sits under in a list. A short noun phrase, not a sentence, under 40
-  characters. "금요일 오후 배포 금지" becomes "No Friday afternoon deploys", not
-  "Deployment is prohibited on Friday afternoons".
-- Name the same thing the Korean title names. Do not describe the body instead.
+- Translate the title as a one-sentence summary of the rule, not a label. Keep it short enough
+  for a handbook list, under 120 characters.
+- Preserve the same concrete fact the Korean sentence states. "백엔드 배포는 AWS EC2로 진행합니다."
+  becomes "Backend deployments run on AWS EC2.", not "Deployment method".
 
 Both:
 - Leave these untouched: channel names (#dev), tool, repository and product names, file names,

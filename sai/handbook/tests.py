@@ -697,7 +697,7 @@ class FinalizeEntriesTests(TestCase):
         )
 
     def finalize(self, entries=None, translation='We do not deploy on Friday afternoons.',
-                 title='No Friday afternoon deploys',
+                 title='Deployments do not happen on Friday afternoons.',
                  translate_error=None, embed_error=None):
         parsed = TranslationResult(
             translations=[Translation(index=0, title=title, text=translation)]
