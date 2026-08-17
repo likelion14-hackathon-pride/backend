@@ -194,8 +194,12 @@ def connect_slack(company, bot_token, signing_secret):
         .exists()
     )
     if taken:
+        # 어느 회사가 쓰고 있는지는 알려 주지 않는다. 남의 회사 이름이 드러난다.
+        # 대신 막힌 사람이 다음에 무엇을 해야 하는지를 적는다. 연결을 끊으면 풀린다.
         raise ValidationError(
-            'workspace already connected to another company', code=SLACK_WORKSPACE_TAKEN
+            f'the {auth.get("team") or workspace_id} workspace is already connected to '
+            'another company. disconnect it there first, then connect it here',
+            code=SLACK_WORKSPACE_TAKEN,
         )
 
     connection = Connection.objects.filter(

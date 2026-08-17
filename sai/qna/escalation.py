@@ -4,8 +4,9 @@ from django.utils import timezone
 from openai import OpenAI, OpenAIError
 from pydantic import BaseModel, Field
 
+from accounts.models import Membership
 from config.ai import client_options, sampling_options, timed_call
-from sources.models import Connection
+from sources.models import Connection, Identity
 from sources.slack import SlackClient, SlackError
 from sources.text import normalize_slack_text
 
@@ -162,17 +163,69 @@ def _human_text(message):
     return (message.get('text') or '').strip() or None
 
 
+# 대표의 슬랙 계정 id. 수집 작업이 가입 이메일과 슬랙 이메일을 맞춰 이어 둔다.
+# 아직 이어지지 않았으면 빈 값이고, 그때는 작성자를 가리지 않는다.
+def _owner_slack_ids(company):
+    return set(
+        Identity.objects.filter(
+            company=company,
+            user__memberships__company=company,
+            user__memberships__role=Membership.Role.OWNER,
+            user__memberships__left_at__isnull=True,
+        ).values_list('external_user_id', flat=True)
+    )
+
+
+def _from_owner(message, owner_ids):
+    return not owner_ids or message.get('user') in owner_ids
+
+
+# 이 질문 다음에 같은 채널로 보낸 질문의 ts. 그 뒤에 오는 말은 이 질문의 답이 아니다.
+def _next_question_ts(escalation, channel_id, ts):
+    later = (
+        Escalation.objects.filter(
+            company_id=escalation.company_id,
+            slack_thread_ref__startswith=f'{channel_id}:',
+        )
+        .exclude(id=escalation.id)
+        .values_list('slack_thread_ref', flat=True)
+    )
+
+    limit = float(ts)
+    candidates = []
+    for thread_ref in later:
+        _, other_ts = parse_thread_ref(thread_ref)
+        try:
+            value = float(other_ts)
+        except (TypeError, ValueError):
+            continue
+        if value > limit:
+            candidates.append(value)
+
+    return min(candidates) if candidates else None
+
+
 # 슬랙에서 스레드 답장은 한 번 더 눌러야 해서 대부분 그냥 채널에 답한다.
-# 다음 봇 메시지(= 다른 질문)가 나오면 거기서 끊는다.
-def _channel_follow_ups(client, channel_id, ts):
+#
+# 끊는 자리는 우리가 아는 값으로 정한다. 예전에는 봇 메시지가 나오면 거기서 끊었는데,
+# 채널에 깃허브 알림 같은 다른 봇이 한 줄만 써도 그 뒤에 온 대표의 답을 못 봤다.
+#
+# 대표에게 물었으니 대표가 쓴 것만 답으로 본다. 옆에서 오간 잡담까지 주워 담으면
+# 판정이 그 잡담을 보고 답이 아니라고 하거나, 잡담을 답으로 저장한다.
+def _channel_follow_ups(client, channel_id, ts, owner_ids=(), until=None):
     history = client.channel_history(channel_id, max_messages=50)
-    after = [m for m in history if float(m['ts']) > float(ts)]
-    after.sort(key=lambda m: float(m['ts']))
+    after = [
+        message
+        for message in history
+        if float(message['ts']) > float(ts)
+        and (until is None or float(message['ts']) < until)
+    ]
+    after.sort(key=lambda message: float(message['ts']))
 
     collected = []
     for message in after:
-        if message.get('bot_id'):
-            break
+        if not _from_owner(message, owner_ids):
+            continue
         text = _human_text(message)
         if text:
             collected.append((message, text))
@@ -192,14 +245,20 @@ def fetch_reply(escalation):
 
     connection = get_slack_connection(escalation.company)
     client = SlackClient(connection.bot_token)
+    owner_ids = _owner_slack_ids(escalation.company)
 
     collected = [
         (reply, text)
         for reply in client.thread_replies(channel_id, ts)
-        if reply['ts'] != ts and (text := _human_text(reply))
+        if reply['ts'] != ts
+        and _from_owner(reply, owner_ids)
+        and (text := _human_text(reply))
     ]
     if not collected:
-        collected = _channel_follow_ups(client, channel_id, ts)
+        collected = _channel_follow_ups(
+            client, channel_id, ts, owner_ids,
+            _next_question_ts(escalation, channel_id, ts),
+        )
 
     if not collected:
         return None, None

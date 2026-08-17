@@ -60,7 +60,8 @@ CSRF_TRUSTED_ORIGINS = get_list('CSRF_ORIGINS', [])
 
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': ( # DRF의 기본 인증Authentication 방식을 JWT로 바꿉니다.
-        'rest_framework_simplejwt.authentication.JWTAuthentication',
+        # 토큰을 확인하는 김에 마지막 접속 시각도 남긴다. 접속 중 표시가 여기에 기댄다.
+        'accounts.authentication.LastSeenJWTAuthentication',
     ),
     # 기본: 인증 필수로 두고
     # 가입/로그인 뷰에서만 AllowAny로

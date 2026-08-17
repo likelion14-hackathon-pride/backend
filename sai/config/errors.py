@@ -176,6 +176,19 @@ class UpstreamError(DomainError):
     status_code = status.HTTP_503_SERVICE_UNAVAILABLE
 
 
+# 아이디나 비밀번호가 틀렸다는 뜻.
+# 폼이 덜 찬 것(400)과 상태 코드로 갈라야 화면이 '칸을 채우세요'와
+# '다시 입력하세요'를 가려 말할 수 있다.
+#
+# 없는 이메일과 틀린 비밀번호가 같은 응답이어야 한다. 다르면 이 주소가
+# 가입돼 있는지를 로그인 화면에서 확인할 수 있게 된다.
+class InvalidCredentials(DomainError):
+    status_code = status.HTTP_401_UNAUTHORIZED
+
+    def __init__(self):
+        super().__init__(INVALID_CREDENTIALS, 'email or password is incorrect')
+
+
 class RateLimited(DomainError):
     status_code = status.HTTP_429_TOO_MANY_REQUESTS
 

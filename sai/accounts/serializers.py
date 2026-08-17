@@ -2,20 +2,22 @@ from django.contrib.auth import authenticate, get_user_model
 from django.contrib.auth.password_validation import validate_password as run_password_validators
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import transaction
+from drf_yasg.utils import swagger_serializer_method
 from rest_framework import serializers
 
 from companies.models import Company
 from config.errors import (
     COMPANY_CODE_NOT_FOUND,
     EMAIL_TAKEN,
-    INVALID_CREDENTIALS,
     PROFILE_FIELD_REQUIRED,
     WEAK_PASSWORD,
+    InvalidCredentials,
 )
 from companies.utils import generate_company_code
 from handbook.services import seed_default_scopes
 
 from .models import Membership
+from .presence import is_online
 from .profile import JobRole, WorkLocation, zone_of
 
 User = get_user_model()
@@ -42,12 +44,13 @@ class SignupSerializer(serializers.Serializer):
             raise serializers.ValidationError(exc.messages, code=WEAK_PASSWORD)
         return value
 
-    def create_user(self, validated_data, ui_language):
+    def create_user(self, validated_data, ui_language, **extra):
         return User.objects.create_user(
             email=validated_data['email'],
             password=validated_data['password'],
             display_name=validated_data['displayName'].strip(),
             ui_language=ui_language,
+            **extra,
         )
 
 
@@ -63,7 +66,13 @@ class OwnerSignupSerializer(SignupSerializer):
         )
         # 핸드북 항목은 범위 없이 만들 수 없으므로 회사 전반 규칙 범위를 함께 만든다.
         seed_default_scopes(company)
-        user = self.create_user(validated_data, 'ko')
+        # 팀장은 초기 설정 화면을 거치지 않고 곧장 Day 0 으로 간다. 여기서 위치를 정해 두지 않으면
+        # work_location 이 비어 시차 화면에 팀장만 위치도 시각도 뜨지 않는다.
+        user = self.create_user(
+            validated_data, 'ko',
+            work_location=WorkLocation.SEOUL,
+            timezone=zone_of(WorkLocation.SEOUL),
+        )
         return Membership.objects.create(
             user=user, company=company, role=Membership.Role.OWNER
         )
@@ -93,27 +102,23 @@ class AuthSerializer(serializers.Serializer):
     password = serializers.CharField(required=True, write_only=True)
 
     def validate(self, attrs):
-        # 비밀번호 검증
+        # 비밀번호 검증. 없는 이메일도, 잠긴 계정도 여기서 None 이 된다.
         user = authenticate(
             request=self.context.get('request'),
             username=attrs['email'].lower().strip(),
             password=attrs['password'],
         )
         if user is None:
-            raise serializers.ValidationError(
-                'email or password is incorrect', code=INVALID_CREDENTIALS
-            )
+            raise InvalidCredentials()
 
         membership = (
             Membership.objects.select_related('company')
             .filter(user=user, left_at__isnull=True)
             .first()
         )
-        # 소속이 없거나 퇴사한 경우.
+        # 소속이 없거나 퇴사한 경우. 비밀번호가 맞아도 들여보내지 않는다.
         if membership is None:
-            raise serializers.ValidationError(
-                'email or password is incorrect', code=INVALID_CREDENTIALS
-            )
+            raise InvalidCredentials()
 
         attrs['membership'] = membership
         return attrs
@@ -124,10 +129,20 @@ class UserSerializer(serializers.ModelSerializer):
     locale = serializers.CharField(source='ui_language', read_only=True)
     location = serializers.CharField(source='work_location', read_only=True)
     role = serializers.CharField(source='job_role', read_only=True)
+    # 지금 서비스를 켜 두었는지. 화면의 초록 점이 이 값을 본다.
+    online = serializers.SerializerMethodField()
+    lastSeenAt = serializers.DateTimeField(source='last_seen_at', read_only=True)
 
     class Meta:
         model = User
-        fields = ['id', 'email', 'name', 'locale', 'location', 'role', 'timezone']
+        fields = [
+            'id', 'email', 'name', 'locale', 'location', 'role', 'timezone',
+            'online', 'lastSeenAt',
+        ]
+
+    @swagger_serializer_method(serializer_or_field=serializers.BooleanField)
+    def get_online(self, obj):
+        return is_online(obj)
 
 
 # 근무 위치와 담당 역할. 가입 직후 초기 설정 화면과 설정 모달이 같은 값을 쓴다.

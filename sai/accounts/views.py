@@ -165,12 +165,17 @@ class AuthView(APIView):
 
     @swagger_auto_schema(
         operation_summary='로그인',
-        operation_description='비밀번호가 틀렸거나 소속이 없으면 모두 invalid_credentials로 응답합니다.',
+        operation_description=(
+            '없는 이메일이든 틀린 비밀번호든 소속이 없는 계정이든 모두 401 invalid_credentials 로 '
+            '응답합니다. 가입 여부가 드러나면 안 되기 때문입니다. '
+            '칸이 비었거나 이메일 형식이 아니면 400 이며 error.field 에 어느 칸인지 담깁니다.'
+        ),
         request_body=AuthSerializer,
         consumes=FORM_AND_JSON,
         responses={
             200: AUTH_RESPONSE,
-            400: '잘못된 요청 (invalid_credentials)',
+            400: '입력값 오류 (error.field 에 email 또는 password)',
+            401: '인증 실패 (invalid_credentials)',
             429: '요청 한도 초과 (rate_limited)',
         },
         tags=['Auth'],
