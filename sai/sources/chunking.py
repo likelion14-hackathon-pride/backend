@@ -164,7 +164,9 @@ def translate_chunks(company):
             chunk.translated_at = now
             translated.append(chunk)
 
-    Chunk.objects.bulk_update(translated, ['text_en', 'translated_at'])
+    Chunk.objects.bulk_update(
+        translated, ['text_en', 'translated_at'], batch_size=TRANSLATE_BATCH_SIZE * 10
+    )
 
     return len(translated), errors
 
@@ -223,15 +225,21 @@ def embed_chunks(company):
             continue
 
         now = timezone.now()
+        # 청크 하나가 한국어와 영어 두 목표로 갈라져 같은 배치에 두 번 들어올 수 있다.
+        # 이 배치에서 손댄 것만 쓴다. 누적분을 매번 넘기면 쓰기가 배치 수의 제곱으로 는다.
+        touched = {}
         for (chunk, field, _), item in zip(batch, response.data):
             setattr(chunk, field, item.embedding)
             chunk.embedding_model = settings.OPENAI_EMBEDDING_MODEL
             chunk.embedded_at = now
-            embedded.add(chunk)
+            touched[chunk.id] = chunk
 
         Chunk.objects.bulk_update(
-            embedded, ['embedding', 'embedding_en', 'embedding_model', 'embedded_at']
+            touched.values(),
+            ['embedding', 'embedding_en', 'embedding_model', 'embedded_at'],
+            batch_size=BATCH_SIZE,
         )
+        embedded.update(touched)
 
     return len(embedded), errors
 
