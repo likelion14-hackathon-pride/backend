@@ -1,3 +1,4 @@
+import re
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -7,7 +8,7 @@ from django.utils import timezone
 from companies.models import Company
 from handbook.models import CompanyScope
 
-from .chunking import build_chunks, embed_chunks, sync_chunks
+from .chunking import build_chunks, embed_chunks, sync_chunks, translate_chunks
 from .models import Chunk, Connection, Identity, Item, RawDocument
 from .text import redact_secrets
 
@@ -16,6 +17,16 @@ VECTOR = [0.1] * 1536
 
 def embeddings_stub(count):
     return SimpleNamespace(data=[SimpleNamespace(embedding=VECTOR) for _ in range(count)])
+
+
+# 번역 요청에 실린 인덱스를 그대로 되돌려준다. 배치가 쪼개져도 짝이 맞는지 볼 수 있다.
+def translations_stub(prompt):
+    indexes = [int(found) for found in re.findall(r'^\[(\d+)\]$', prompt, re.M)]
+    parsed = SimpleNamespace(
+        translations=[SimpleNamespace(index=index, text=f'EN-{index}') for index in indexes]
+    )
+
+    return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(parsed=parsed))])
 
 
 class RedactSecretsTests(SimpleTestCase):
@@ -95,6 +106,13 @@ class ChunkingTests(TestCase):
                 lambda **kwargs: embeddings_stub(len(kwargs['input']))
             )
             return embed_chunks(self.company)
+
+    def translate(self):
+        with patch('sources.chunking.OpenAI') as client:
+            client.return_value.chat.completions.parse.side_effect = (
+                lambda **kwargs: translations_stub(kwargs['messages'][1]['content'])
+            )
+            return translate_chunks(self.company)
 
     # --- 청크 생성 ---
 
@@ -237,10 +255,102 @@ class ChunkingTests(TestCase):
             client.return_value.embeddings.create.side_effect = (
                 lambda **kwargs: embeddings_stub(len(kwargs['input']))
             )
+            client.return_value.chat.completions.parse.side_effect = (
+                lambda **kwargs: translations_stub(kwargs['messages'][1]['content'])
+            )
             count, errors = sync_chunks(self.company)
 
+        chunk = Chunk.objects.get()
+        self.assertEqual(errors, [])
+        self.assertEqual(count, 1)
+        self.assertIsNotNone(chunk.embedded_at)
+        self.assertIsNotNone(chunk.translated_at)
+        self.assertIsNotNone(chunk.embedding_en)
+
+    # --- 번역 ---
+
+    # 원문은 대부분 한국어인데 질문은 영어로 들어온다. 영어판이 없으면 교차언어 거리가
+    # 컷오프(0.75)를 넘어 사례가 통째로 버려진다.
+    def test_translates_korean_chunks(self):
+        self.document('1.1', '배포는 금요일에 하지 않습니다')
+        build_chunks(self.company)
+
+        count, errors = self.translate()
+
+        chunk = Chunk.objects.get()
         self.assertEqual((count, errors), (1, []))
-        self.assertIsNotNone(Chunk.objects.get().embedded_at)
+        self.assertEqual(chunk.text_en, 'EN-0')
+        self.assertIsNotNone(chunk.translated_at)
+
+    # 영어로 쓰인 청크는 원문이 곧 영어다. 번역할 것이 없다.
+    def test_english_chunks_are_not_translated(self):
+        self.document('1.1', 'We do not deploy on Fridays')
+        build_chunks(self.company)
+
+        count, _ = self.translate()
+
+        self.assertEqual(count, 0)
+        self.assertIsNone(Chunk.objects.get().text_en)
+
+    def test_does_not_retranslate(self):
+        self.document('1.1', '배포는 금요일에 하지 않습니다')
+        build_chunks(self.company)
+        self.translate()
+
+        count, _ = self.translate()
+
+        self.assertEqual(count, 0)
+
+    def test_edited_text_clears_translation(self):
+        document = self.document('1.1', '배포는 금요일에 하지 않습니다')
+        build_chunks(self.company)
+        self.translate()
+
+        document.raw_text = '배포는 금요일 오후에만 하지 않습니다'
+        document.save()
+        build_chunks(self.company)
+
+        chunk = Chunk.objects.get()
+        self.assertIsNone(chunk.text_en)
+        self.assertIsNone(chunk.translated_at)
+        self.assertIsNone(chunk.embedding_en)
+
+    def test_translate_failure_is_reported(self):
+        from openai import OpenAIError
+
+        self.document('1.1', '배포는 금요일에 하지 않습니다')
+        build_chunks(self.company)
+
+        with patch('sources.chunking.OpenAI') as client:
+            client.return_value.chat.completions.parse.side_effect = OpenAIError('down')
+            count, errors = translate_chunks(self.company)
+
+        self.assertEqual(count, 0)
+        self.assertEqual(errors[0]['scope'], 'translate_chunks')
+        self.assertIsNone(Chunk.objects.get().translated_at)
+
+    def test_embeds_both_languages(self):
+        self.document('1.1', '배포는 금요일에 하지 않습니다')
+        build_chunks(self.company)
+        self.translate()
+
+        self.embed()
+
+        chunk = Chunk.objects.get()
+        self.assertEqual(len(chunk.embedding), 1536)
+        self.assertEqual(len(chunk.embedding_en), 1536)
+
+    # 이미 임베딩을 마친 청크에 번역이 뒤늦게 붙는 경우. 여기서 다시 잡지 않으면
+    # text_en 은 있는데 영어 벡터가 없어 영어 질문에 여전히 걸리지 않는다.
+    def test_translation_added_later_gets_embedded(self):
+        self.document('1.1', '배포는 금요일에 하지 않습니다')
+        build_chunks(self.company)
+        self.embed()
+        self.translate()
+
+        self.embed()
+
+        self.assertIsNotNone(Chunk.objects.get().embedding_en)
 
     def test_other_company_chunks_untouched(self):
         other = Company.objects.create(name='다른회사', code='TESTCODE2')

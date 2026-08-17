@@ -11,13 +11,14 @@ from pgvector.django import CosineDistance
 from pydantic import BaseModel
 
 from config.ai import client_options, timed_call
+from handbook.models import CompanyScope
 from handbook.retrieval import search_rules
 from handbook.services import scopes_in_view
 from policy.models import RiskKeyword
 from sources.models import Chunk
 
 # 프롬프트를 고치면 올린다. Message.prompt_version 에 기록된다.
-PROMPT_VERSION = 'ask-v2'
+PROMPT_VERSION = 'ask-v3'
 
 # 검색해서 모델에 넘길 규칙 수. 너무 많으면 모델이 엉뚱한 걸 인용한다.
 TOP_K = 5
@@ -156,22 +157,32 @@ def _get_client():
 
 
 # 같은 말이 여러 번 올라온 경우 한 번만 쓴다. 같은 문장이 두 줄 뜨면 근거가 빈약해 보인다.
+#
+# 한국어 원문과 영어판을 모두 뒤져 청크마다 더 가까운 쪽을 쓴다. 규칙(search_rules)과 같은
+# 방식이다. 한쪽만 보면 영어 질문이 한국어 벡터와 비교되어 컷오프에 걸린다.
+# 실측: 영어 질문의 평균 거리 0.752 로 상한 0.75 를 넘어 8건 중 5건이 버려졌다.
 def retrieve_cases(vector, company, scope_ids=None):
-    chunks = Chunk.objects.filter(company=company, embedding__isnull=False)
+    chunks = Chunk.objects.filter(company=company)
     if scope_ids is not None:
         # 지식공간을 지정하지 않은 채널의 대화는 회사 전반으로 본다. 초안 생성도 같은 규칙을 쓴다.
         chunks = chunks.filter(Q(scope_id__in=scope_ids) | Q(scope__isnull=True))
 
-    rows = (
-        chunks.annotate(distance=CosineDistance('embedding', vector))
-        .filter(distance__lte=CASE_MAX_DISTANCE)
-        .select_related('document', 'document__item', 'document__author_identity')
-        .order_by('distance')[: MAX_CASES * 3]
-    )
+    best = {}
+    for field in ('embedding', 'embedding_en'):
+        rows = (
+            chunks.filter(**{f'{field}__isnull': False})
+            .annotate(distance=CosineDistance(field, vector))
+            .filter(distance__lte=CASE_MAX_DISTANCE)
+            .select_related('document', 'document__item', 'document__author_identity')
+            .order_by('distance')[: MAX_CASES * 3]
+        )
+        for chunk in rows:
+            if chunk.id not in best or chunk.distance < best[chunk.id].distance:
+                best[chunk.id] = chunk
 
     seen = set()
     cases = []
-    for chunk in rows:
+    for chunk in sorted(best.values(), key=lambda chunk: chunk.distance):
         if chunk.text in seen:
             continue
         seen.add(chunk.text)
@@ -204,10 +215,13 @@ def retrieve(vector, company, scope_ids=None):
     )
 
 
+# 공간 이름만으로는 회사 전반인지 프로젝트인지 알 수 없다. 어느 쪽인지 모르면
+# '프로젝트 규칙이 회사 규칙 위에 얹힌다'는 지시를 지킬 방법이 없다.
 def _render_rule(entry, index, lang):
     body = (entry.body_en if lang == 'en' else entry.body_ko) or entry.body_ko or entry.body_en
+    kind = 'company-wide' if entry.scope.kind == CompanyScope.Kind.COMPANY else 'project'
 
-    return f'[{index}] scope={entry.scope.name} title={entry.title}\n    {body}'
+    return f'[{index}] scope={entry.scope.name} ({kind}) title={entry.title}\n    {body}'
 
 
 def _render_case(chunk, index):
@@ -295,12 +309,16 @@ def _ids(rows):
 #
 # 검색 결과가 비었는지로는 판단할 수 없다. 엉뚱한 규칙이 거리 안에 몇 건 걸려 들어와도
 # 비어 있지 않기 때문이다. 모델이 답하지 못했을 때만 넓힌다.
+#
+# 아무것도 고르지 않았으면 프로젝트까지 함께 뒤진다. 회사 규칙만 보면 프로젝트가 다르게
+# 정한 규칙이 후보에 아예 없어서, 넓히기가 걸리지도 않은 채 회사 기본값이 확정 답변으로
+# 나간다. 틀린 답을 확신을 갖고 주는 쪽이 '모르겠습니다'보다 나쁘다.
 def answer_question(company, question, lang='en', scope=None):
     client = _get_client()
     started = time.time()
 
     vector = embed_question(client, question)
-    scope_ids = scopes_in_view(company, scope)
+    scope_ids = scopes_in_view(company, scope) if scope is not None else None
     entries, cases = retrieve(vector, company, scope_ids)
     completion = _ask(client, question, lang, entries, cases, widened=False)
     prompt_tokens = _tokens(completion, 'prompt_tokens')
