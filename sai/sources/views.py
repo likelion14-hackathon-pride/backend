@@ -802,7 +802,9 @@ class IngestionJobListCreateView(APIView):
             reason = 'no matching item' if requested_ids else 'no item registered'
             raise ValidationError(reason, code=NO_INGESTION_TARGET)
 
-        job = IngestionJob.objects.create(company=company, item_ids=item_ids)
+        job = IngestionJob.objects.create(
+            company=company, connection=connection, item_ids=item_ids
+        )
 
         # 수집 한 번에 LLM 호출이 수십 번 나간다. 요청 안에서 처리하면 타임아웃이다.
         # 워커(manage.py run_jobs)가 큐에서 꺼내 처리하고, 클라이언트는 진행률을 폴링한다.
