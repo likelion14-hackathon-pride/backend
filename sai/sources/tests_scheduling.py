@@ -94,7 +94,29 @@ class SchedulingTests(TestCase):
         self.assertTrue(has_pending_work(self.company))
 
         entry.embedded_at = self.now
-        entry.save(update_fields=['embedded_at'])
+        entry.title_en = 'Merge approval requirements'
+        entry.save(update_fields=['embedded_at', 'title_en'])
+
+        self.assertFalse(has_pending_work(self.company))
+
+    def test_confirmed_but_missing_english_title_is_pending(self):
+        self.settled_document()
+        scope = CompanyScope.objects.create(
+            company=self.company, kind=CompanyScope.Kind.COMPANY,
+            area_key=CompanyScope.AreaKey.COMPANY, name='Company',
+        )
+        entry = HandbookEntry.objects.create(
+            company=self.company, scope=scope, title='머지 승인 조건',
+            body_ko='책임자 1인 이상의 승인이 필요합니다.',
+            status=HandbookEntry.Status.CONFIRMED,
+            origin=HandbookEntry.Origin.ONBOARDING,
+            embedded_at=self.now,
+        )
+
+        self.assertTrue(has_pending_work(self.company))
+
+        entry.title_en = 'Merge approval requirements'
+        entry.save(update_fields=['title_en'])
 
         self.assertFalse(has_pending_work(self.company))
 

@@ -3,6 +3,7 @@ from datetime import datetime, timezone as dt_timezone
 
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ImproperlyConfigured
+from django.db.models import Q
 from django.utils import timezone
 
 from cards.generation import GENERATOR_VERSION, generate_cards
@@ -17,14 +18,14 @@ from .models import Identity, IngestionJob, Item, RawDocument
 from .slack import SlackClient, SlackError
 
 
-# 확정됐는데 아직 검색되지 않는 규칙.
+# 확정됐는데 아직 검색되지 않거나 영어 제목이 없는 규칙.
 # 확정 시점에 번역/임베딩을 걸지만 OpenAI가 죽어 있거나 Day 0 완료를 누르지 않으면 비어 있다.
 # 그대로 두면 외국인 직원은 영어를 못 읽고 Ask SAI는 찾지 못한다.
 def unfinished_entries(company):
     return list(
         live_entries(company).filter(
+            Q(embedded_at__isnull=True) | Q(title_en__isnull=True),
             status=HandbookEntry.Status.CONFIRMED,
-            embedded_at__isnull=True,
         )
     )
 
@@ -47,8 +48,8 @@ def has_pending_work(company):
         return True
 
     if live_entries(company).filter(
+        Q(embedded_at__isnull=True) | Q(title_en__isnull=True),
         status=HandbookEntry.Status.CONFIRMED,
-        embedded_at__isnull=True,
     ).exists():
         return True
 

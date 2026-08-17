@@ -15,8 +15,11 @@ from .retrieval import search_rules
 VECTOR = [0.1] * 1536
 
 
-def finalizer(translation='No deploys on Friday afternoon.'):
-    parsed = TranslationResult(translations=[Translation(index=0, text=translation)])
+def finalizer(translation='No deploys on Friday afternoon.',
+              title='No Friday afternoon deploys'):
+    parsed = TranslationResult(
+        translations=[Translation(index=0, title=title, text=translation)]
+    )
 
     return SimpleNamespace(
         chat=SimpleNamespace(completions=SimpleNamespace(

@@ -57,8 +57,8 @@ from .serializers import (
     RepositorySerializer,
     SlackConnectionCreateSerializer,
 )
+from . import services as source_services
 from .services import (
-    add_channel,
     add_repository,
     clear_connection_error,
     connect_github,
@@ -460,7 +460,7 @@ class SourceChannelListView(APIView):
 
         # SlackError / GitHubError 는 DomainError 라서 밖에서 받은 코드가
         # 그대로 봉투의 code 가 된다. 여기서 옮겨 담지 않는다.
-        item = add_channel(connection, serializer.validated_data['externalId'])
+        item = source_services.add_channel(connection, serializer.validated_data['externalId'])
 
         clear_connection_error(connection)
         response_serializer = ChannelSerializer(item)

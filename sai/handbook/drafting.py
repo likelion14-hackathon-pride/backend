@@ -34,6 +34,10 @@ Group related messages into ONE rule each. Produce one entry per distinct policy
 
 For every rule return:
 - title: a short Korean noun phrase naming the rule (max 40 characters). Not a sentence.
+- title_en: the same name in English. This is what the foreign readers see in the handbook
+  list, so it must name the rule, not describe it. "금요일 오후 배포 금지" is
+  "No Friday afternoon deploys", not "Deployment is prohibited on Friday afternoons".
+  Keep channel, repository, tool and product names exactly as written.
 - body: the rule written in Korean as something the reader must follow. One to three sentences.
   Write the rule itself, not a summary of the conversation. No "~라고 합니다" reporting style.
 - confidence: HIGH when the messages state it explicitly and agree, MEDIUM when you had to infer
@@ -63,6 +67,7 @@ class DraftCitation(BaseModel):
 
 class DraftRule(BaseModel):
     title: str
+    title_en: str
     body: str
     confidence: Literal['HIGH', 'MEDIUM', 'LOW']
     citations: list[DraftCitation]
@@ -175,6 +180,7 @@ def _build_entry(company, scope, rule, documents, channels, users):
     entry = existing or HandbookEntry(company=company, dedupe_key=dedupe_key)
     entry.scope = scope
     entry.title = rule.title[:200]
+    entry.title_en = (rule.title_en or '')[:200] or None
     entry.body_ko = rule.body
     entry.original_lang = 'ko'
     entry.status = HandbookEntry.Status.DRAFT

@@ -14,18 +14,28 @@ BATCH_SIZE = 20
 TRANSLATE_PROMPT = """You translate company handbook rules between Korean and English.
 
 The readers are foreign employees at a Korean startup. They must be able to follow the rule
-without knowing Korean.
+without knowing Korean. Every item has a title and a body. Return both.
 
+body:
 - Translate the rule itself. Keep it as an instruction the reader must follow.
 - Keep it the same length and structure. Do not add explanation, do not summarise.
-- Leave these untouched: channel names (#dev), tool and product names, file names,
-  code, URLs, numbers, times, and weekday names' meaning.
 - Use plain workplace English. No honorific padding, no "please be advised".
-- Return one translation per index, in the same order you received them."""
+
+title:
+- The name this rule sits under in a list. A short noun phrase, not a sentence, under 40
+  characters. "금요일 오후 배포 금지" becomes "No Friday afternoon deploys", not
+  "Deployment is prohibited on Friday afternoons".
+- Name the same thing the Korean title names. Do not describe the body instead.
+
+Both:
+- Leave these untouched: channel names (#dev), tool, repository and product names, file names,
+  code, URLs, numbers, times, and weekday names' meaning. "payment-api" stays "payment-api".
+- Return one item per index, in the same order you received them."""
 
 
 class Translation(BaseModel):
     index: int
+    title: str
     text: str
 
 
@@ -44,14 +54,32 @@ def _source_body(entry):
     return entry.body_ko if entry.original_lang == 'ko' else entry.body_en
 
 
-def _needs_translation(entry):
+def _needs_body(entry):
     target = entry.body_en if entry.original_lang == 'ko' else entry.body_ko
 
     return bool(_source_body(entry)) and not target
 
 
-# 원문 언어의 반대쪽 본문을 채운다.
+def _needs_translation(entry):
+    return _needs_body(entry) or not entry.title_en
+
+
+# 원문이 영어인 항목은 제목이 이미 영어다. 빈 항목(BLANK)이 여기 해당한다.
+def _copy_english_titles(entries):
+    copied = [
+        entry for entry in entries
+        if not entry.title_en and entry.original_lang == 'en' and entry.title
+    ]
+    for entry in copied:
+        entry.title_en = entry.title
+    HandbookEntry.objects.bulk_update(copied, ['title_en'])
+
+    return copied
+
+
+# 원문 언어의 반대쪽 본문과 영어 제목을 채운다.
 def _translate(client, entries):
+    _copy_english_titles(entries)
     pending = [entry for entry in entries if _needs_translation(entry)]
     if not pending:
         return []
@@ -60,7 +88,9 @@ def _translate(client, entries):
     for start in range(0, len(pending), BATCH_SIZE):
         batch = pending[start:start + BATCH_SIZE]
         prompt = '\n\n'.join(
-            f'[{index}] from={entry.original_lang}\n{_source_body(entry)}'
+            f'[{index}] from={entry.original_lang}\n'
+            f'title: {entry.title}\n'
+            f'body: {_source_body(entry)}'
             for index, entry in enumerate(batch)
         )
         with timed_call(settings.OPENAI_TRANSLATOR_MODEL, len(batch)):
@@ -73,20 +103,32 @@ def _translate(client, entries):
                 response_format=TranslationResult,
                 **sampling_options(settings.OPENAI_TRANSLATOR_MODEL),
             )
-        by_index = {t.index: t.text for t in completion.choices[0].message.parsed.translations}
+        by_index = {t.index: t for t in completion.choices[0].message.parsed.translations}
 
         for index, entry in enumerate(batch):
-            text = by_index.get(index)
-            if not text:
+            result = by_index.get(index)
+            if result is None:
                 continue
-            if entry.original_lang == 'ko':
-                entry.body_en = text
-            else:
-                entry.body_ko = text
-            entry.translated_at = timezone.now()
-            translated.append(entry)
 
-    HandbookEntry.objects.bulk_update(translated, ['body_ko', 'body_en', 'translated_at'])
+            changed = False
+            # 이미 있는 값은 덮지 않는다. 대표가 고쳐 둔 문장을 번역본이 되돌리면 안 된다.
+            if result.text and _needs_body(entry):
+                if entry.original_lang == 'ko':
+                    entry.body_en = result.text
+                else:
+                    entry.body_ko = result.text
+                entry.translated_at = timezone.now()
+                changed = True
+            if result.title and not entry.title_en:
+                entry.title_en = result.title[:200]
+                changed = True
+
+            if changed:
+                translated.append(entry)
+
+    HandbookEntry.objects.bulk_update(
+        translated, ['title_en', 'body_ko', 'body_en', 'translated_at']
+    )
 
     return translated
 
