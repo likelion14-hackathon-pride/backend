@@ -115,6 +115,8 @@ def entry_source(entry):
 
 class HandbookEntrySerializer(serializers.ModelSerializer):
     companyId = serializers.IntegerField(source='company_id', read_only=True)
+    # 팀원 화면은 titleEn 을 쓴다. 아직 번역되지 않았으면 null 이므로 title 로 떨어뜨린다.
+    titleEn = serializers.CharField(source='title_en', read_only=True, allow_null=True)
     scopeId = serializers.IntegerField(source='scope_id', read_only=True)
     scopeKind = serializers.CharField(source='scope.kind', read_only=True)
     scopeName = serializers.CharField(source='scope.name', read_only=True)
@@ -137,6 +139,7 @@ class HandbookEntrySerializer(serializers.ModelSerializer):
             'id',
             'companyId',
             'title',
+            'titleEn',
             'scopeId',
             'scopeKind',
             'scopeName',
@@ -188,6 +191,7 @@ class HandbookEntryUpdateSerializer(serializers.ModelSerializer):
             entry=instance,
             before={
                 'title': instance.title,
+                'title_en': instance.title_en,
                 'body_ko': instance.body_ko,
                 'body_en': instance.body_en,
                 'scope_id': instance.scope_id,
@@ -200,6 +204,11 @@ class HandbookEntryUpdateSerializer(serializers.ModelSerializer):
         source_field = 'body_ko' if instance.original_lang == 'ko' else 'body_en'
         if source_field in validated_data and validated_data[source_field] != getattr(instance, source_field):
             mark_stale(instance)
+
+        # 제목을 고치면 영어 제목은 다른 규칙의 이름이 된다. 비워 두면 다음 수집이 다시 만든다.
+        if 'title' in validated_data and validated_data['title'] != instance.title:
+            instance.title_en = None
+            validated_data['title_en'] = None
 
         return super().update(instance, validated_data)
 

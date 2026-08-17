@@ -1,5 +1,5 @@
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from django.test import TestCase, override_settings
 from rest_framework.test import APIClient
@@ -13,6 +13,7 @@ from .answering import (
     PROMPT_VERSION,
     AnswerRateLimited,
     AnswerResult,
+    answer_question,
     find_risk_warnings,
 )
 from .models import Citation, Message, Thread
@@ -104,6 +105,40 @@ class AskTests(TestCase):
         # 화면 언어가 en인 사용자에게는 영어 칸에 저장한다.
         self.assertEqual(messages[0].body_en, 'Can I deploy on Friday?')
         self.assertIsNone(messages[0].body_ko)
+
+    def test_korean_locale_still_gets_english_answer(self):
+        self.member.ui_language = 'ko'
+        self.member.save(update_fields=['ui_language'])
+
+        response = self.ask(answer='Deployments are blocked on Friday afternoons.')
+
+        thread = Thread.objects.get(id=response.data['threadId'])
+        messages = Message.objects.filter(thread=thread).order_by('id')
+        self.assertEqual(response.data['answer'], 'Deployments are blocked on Friday afternoons.')
+        self.assertEqual(messages[0].body_ko, 'Can I deploy on Friday?')
+        self.assertIsNone(messages[0].body_en)
+        self.assertEqual(messages[1].body_en, 'Deployments are blocked on Friday afternoons.')
+        self.assertIsNone(messages[1].body_ko)
+
+    def test_answer_generation_ignores_requested_korean(self):
+        parse = Mock(return_value=SimpleNamespace(
+            choices=[SimpleNamespace(message=SimpleNamespace(parsed=AnswerResult(
+                verdict='GROUNDED',
+                answer='Deployments are blocked on Friday afternoons.',
+                cited_indexes=[0],
+                draft_ko='',
+            )))],
+            usage=SimpleNamespace(prompt_tokens=120, completion_tokens=40),
+        ))
+        client = openai_stub()
+        client.chat.completions.parse = parse
+
+        with patch('qna.answering.OpenAI', return_value=client):
+            answer_question(self.company, '금요일에 배포해도 되나요?', 'ko')
+
+        prompt = parse.call_args.kwargs['messages'][1]['content']
+
+        self.assertIn('Answer in: English', prompt)
 
     def test_records_usage_and_retrieval(self):
         response = self.ask()

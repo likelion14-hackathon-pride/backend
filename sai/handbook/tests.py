@@ -177,7 +177,10 @@ class DraftEntriesTests(TestCase):
         )
 
     def draft(self, rules):
-        parsed = DraftResult(rules=[DraftRule(**rule) for rule in rules])
+        # title_en 은 대부분의 테스트가 신경 쓰지 않는다. 안 주면 채워서 넘긴다.
+        parsed = DraftResult(rules=[
+            DraftRule(**{'title_en': f'EN: {rule["title"]}', **rule}) for rule in rules
+        ])
         completion = SimpleNamespace(
             choices=[SimpleNamespace(message=SimpleNamespace(parsed=parsed))]
         )
@@ -694,8 +697,11 @@ class FinalizeEntriesTests(TestCase):
         )
 
     def finalize(self, entries=None, translation='We do not deploy on Friday afternoons.',
+                 title='Deployments do not happen on Friday afternoons.',
                  translate_error=None, embed_error=None):
-        parsed = TranslationResult(translations=[Translation(index=0, text=translation)])
+        parsed = TranslationResult(
+            translations=[Translation(index=0, title=title, text=translation)]
+        )
         chat = SimpleNamespace(
             choices=[SimpleNamespace(message=SimpleNamespace(parsed=parsed))]
         )

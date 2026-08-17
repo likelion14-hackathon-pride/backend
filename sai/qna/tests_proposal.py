@@ -45,7 +45,7 @@ class ProposalTests(TestCase):
         self.client.force_authenticate(user=self.owner)
         self.base = f'/api/companies/{self.company.id}/questions'
 
-    def answered(self, scope=None, title='payment-api PR 리뷰어'):
+    def answered(self, scope=None, title='payment-api PR은 지훈님을 리뷰어로 지정합니다.'):
         return Escalation.objects.create(
             company=self.company, asked_by=self.member, scope=scope,
             question_en='Who should I assign as the reviewer?',
@@ -73,7 +73,7 @@ class ProposalTests(TestCase):
     def test_an_answered_question_shows_what_will_be_saved(self):
         proposal = self.detail(self.answered(scope=self.project))['proposal']
 
-        self.assertEqual(proposal['title'], 'payment-api PR 리뷰어')
+        self.assertEqual(proposal['title'], 'payment-api PR은 지훈님을 리뷰어로 지정합니다.')
         self.assertEqual(proposal['bodyKo'], '결제 쪽은 지훈님을 리뷰어로 넣어주세요.')
         self.assertEqual(proposal['scopeName'], 'payment-api')
         self.assertEqual(proposal['scopeKind'], 'PROJECT')
@@ -109,7 +109,7 @@ class ProposalTests(TestCase):
 
         self.assertEqual(response.status_code, 201)
         entry = HandbookEntry.objects.get()
-        self.assertEqual(entry.title, 'payment-api PR 리뷰어')
+        self.assertEqual(entry.title, 'payment-api PR은 지훈님을 리뷰어로 지정합니다.')
         self.assertEqual(entry.scope, self.project)
         self.assertEqual(entry.status, HandbookEntry.Status.CONFIRMED)
 
@@ -128,9 +128,9 @@ class ProposalTests(TestCase):
     def test_approving_takes_the_edited_title(self):
         escalation = self.answered()
 
-        self.approve(escalation, {'title': '리뷰어 지정 규칙'})
+        self.approve(escalation, {'title': 'PR 리뷰어는 대표가 지정합니다.'})
 
-        self.assertEqual(HandbookEntry.objects.get().title, '리뷰어 지정 규칙')
+        self.assertEqual(HandbookEntry.objects.get().title, 'PR 리뷰어는 대표가 지정합니다.')
 
     def test_approving_takes_the_edited_english(self):
         escalation = self.answered()

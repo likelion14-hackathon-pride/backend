@@ -22,13 +22,13 @@ answer_ko - when is_answer is true: the answer restated as a clear rule in Korea
 answer_en - the same in plain workplace English, for the employee to read.
   When is_answer is false: empty string.
 
-title_ko - a short Korean name for this rule, the way it would sit in a handbook list.
-  A noun phrase, not a sentence and not a question. Under 40 characters.
-  Name what the rule settles, including the project or area when the reply is specific to one.
+title_ko - one Korean sentence that captures the core rule for a handbook list.
+  It must be concrete enough to understand without opening the detail. Under 80 characters.
+  State what the rule settles, including the project or area when the reply is specific to one.
   Copy project, repository, channel and tool names exactly as written. Never translate them:
   "payment-api" stays "payment-api", not "결제-api".
-  Good: "payment-api PR 리뷰어", "긴급 배포 예외 조건", "연차 사용 일수"
-  Bad: "PR 리뷰어는 누구인가요?", "지훈님을 리뷰어로 지정합니다", "규칙"
+  Good: "payment-api PR은 지훈님을 리뷰어로 지정합니다.", "긴급 배포는 대표 승인 후 진행합니다."
+  Bad: "PR 리뷰어는 누구인가요?", "payment-api PR 리뷰어", "규칙"
   When is_answer is false: empty string."""
 
 

@@ -215,7 +215,8 @@ class DeletedEntryRedraftTests(TestCase):
 
     def draft(self):
         parsed = DraftResult(rules=[DraftRule(
-            title='금요일 오후 배포 금지',
+            title='금요일 오후에는 배포하지 않습니다.',
+            title_en='Deployments do not happen on Friday afternoons.',
             body='배포는 금요일 오후에 하지 않습니다.',
             confidence='HIGH',
             citations=[{

@@ -64,6 +64,7 @@ class HandbookEntry(models.Model):
     company = models.ForeignKey('companies.Company', on_delete=models.CASCADE, related_name='handbook_entries')
     scope = models.ForeignKey(CompanyScope, on_delete=models.CASCADE, related_name='handbook_entries')
     title = models.CharField(max_length=200)
+    title_en = models.CharField(max_length=200, null=True, blank=True)
     body_ko = models.TextField(null=True, blank=True)
     body_en = models.TextField(null=True, blank=True)
     original_lang = models.CharField(max_length=2, default='ko')
