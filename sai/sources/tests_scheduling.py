@@ -242,6 +242,118 @@ class SchedulingTests(TestCase):
         self.assertEqual(enqueue_due_jobs(self.now), [])
 
 
+# 깃헙 웹훅은 등록 이후의 변경만 보낸다. 레포에 이미 쌓여 있는 README·이슈·PR 은
+# 아무도 읽지 않아 규칙도 카드도 생기지 않았다.
+class GithubSchedulingTests(TestCase):
+    def setUp(self):
+        self.company = Company.objects.create(name='에코랩', code='TESTCODE4')
+        self.connection = Connection.objects.create(
+            company=self.company, kind=Connection.Kind.GITHUB,
+            github_app_id='1', github_private_key='pem',
+        )
+        self.now = timezone.now()
+
+    def repository(self, external_id='9001', **extra):
+        return Item.objects.create(
+            company=self.company, connection=self.connection,
+            external_id=external_id, label=f'pride/{external_id}', **extra,
+        )
+
+    def job(self, kind, created_ago, status=IngestionJob.Status.SUCCEEDED, item_ids=None):
+        job = IngestionJob.objects.create(
+            company=self.company, connection=self.connection, kind=kind,
+            item_ids=item_ids if item_ids is not None else [], status=status,
+        )
+        IngestionJob.objects.filter(id=job.id).update(created_at=self.now - created_ago)
+
+        return job
+
+    def test_newly_added_repository_is_collected(self):
+        item = self.repository()
+
+        jobs = enqueue_due_jobs(self.now)
+
+        self.assertEqual(len(jobs), 1)
+        self.assertEqual(jobs[0].kind, IngestionJob.Kind.COLLECT)
+        self.assertEqual(jobs[0].item_ids, [item.id])
+        self.assertEqual(jobs[0].connection_id, self.connection.id)
+
+    # 최초 수집은 주기를 기다리지 않는다. 방금 수집을 돌린 직후 레포를 담아도 바로 읽는다.
+    def test_new_repository_does_not_wait_for_the_interval(self):
+        synced = self.repository('9001', last_synced_at=self.now)
+        self.job(IngestionJob.Kind.COLLECT, timedelta(minutes=5), item_ids=[synced.id])
+        fresh = self.repository('9002')
+
+        jobs = enqueue_due_jobs(self.now)
+
+        self.assertEqual(len(jobs), 1)
+        self.assertEqual(jobs[0].item_ids, [fresh.id])
+
+    def test_collected_repository_is_not_repeated(self):
+        item = self.repository(last_synced_at=self.now)
+        self.job(IngestionJob.Kind.COLLECT, timedelta(minutes=5), item_ids=[item.id])
+
+        self.assertEqual(enqueue_due_jobs(self.now), [])
+
+    # 최초 수집이 실패한 레포가 60초마다 되살아나면 깃헙 한도만 태운다.
+    def test_failed_first_collect_waits_before_retry(self):
+        item = self.repository()
+        self.job(
+            IngestionJob.Kind.COLLECT, timedelta(minutes=5),
+            status=IngestionJob.Status.FAILED, item_ids=[item.id],
+        )
+
+        self.assertEqual(enqueue_due_jobs(self.now), [])
+        self.assertEqual(len(enqueue_due_jobs(self.now + RETRY_AFTER + timedelta(minutes=1))), 1)
+
+    # 웹훅 설정을 건너뛰면 이 주기 말고는 갱신될 길이 없다.
+    def test_collect_is_repeated_after_the_interval(self):
+        item = self.repository(last_synced_at=self.now)
+        self.job(IngestionJob.Kind.COLLECT, COLLECT_EVERY + timedelta(minutes=1), item_ids=[item.id])
+
+        jobs = enqueue_due_jobs(self.now)
+
+        self.assertEqual(len(jobs), 1)
+        self.assertEqual(jobs[0].kind, IngestionJob.Kind.COLLECT)
+        self.assertEqual(jobs[0].item_ids, [item.id])
+
+    # 슬랙 없이 깃헙만 쓰는 회사는 처리 작업이 도는 경로가 아예 없었다.
+    def test_pending_work_is_processed_without_slack(self):
+        item = self.repository(last_synced_at=self.now)
+        self.job(IngestionJob.Kind.COLLECT, timedelta(hours=1), item_ids=[item.id])
+        RawDocument.objects.create(
+            company=self.company, item=item, external_ref='readme',
+            raw_text='배포 전 리뷰를 받습니다', content_hash='a' * 64,
+            occurred_at=self.now,
+        )
+
+        jobs = enqueue_due_jobs(self.now)
+
+        self.assertEqual(len(jobs), 1)
+        self.assertEqual(jobs[0].kind, IngestionJob.Kind.PROCESS)
+
+    def test_nothing_pending_means_no_job(self):
+        item = self.repository(last_synced_at=self.now)
+        self.job(IngestionJob.Kind.COLLECT, timedelta(hours=1), item_ids=[item.id])
+
+        self.assertEqual(enqueue_due_jobs(self.now), [])
+
+    def test_company_without_repositories_is_skipped(self):
+        self.assertEqual(enqueue_due_jobs(self.now), [])
+
+    def test_removed_repository_is_skipped(self):
+        self.repository(removed_at=self.now)
+
+        self.assertEqual(enqueue_due_jobs(self.now), [])
+
+    def test_disconnected_github_is_skipped(self):
+        self.repository()
+        self.connection.disconnected_at = self.now
+        self.connection.save()
+
+        self.assertEqual(enqueue_due_jobs(self.now), [])
+
+
 # 업로드는 브라우저가 S3로 직접 한다. 서버는 완료 통보를 받지 못하므로
 # 올라온 파일을 찾아 큐에 넣는 것은 이 스윕뿐이다.
 class LocalFileSchedulingTests(TestCase):

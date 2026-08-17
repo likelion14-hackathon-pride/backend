@@ -19,7 +19,7 @@ RETRY_AFTER = timedelta(hours=1)
 
 FAILED_STATUSES = (IngestionJob.Status.FAILED, IngestionJob.Status.PARTIAL)
 
-SWEPT_KINDS = (Connection.Kind.SLACK, Connection.Kind.LOCAL)
+SWEPT_KINDS = (Connection.Kind.SLACK, Connection.Kind.GITHUB, Connection.Kind.LOCAL)
 
 
 def _last_job(company, kind, connection):
@@ -62,13 +62,17 @@ def _attempted_recently(company, item_id, now):
     return last is not None and last.created_at + RETRY_AFTER > now
 
 
+def _live_items(connection):
+    return Item.objects.filter(connection=connection, removed_at__isnull=True)
+
+
+def _never_synced(connection):
+    return _live_items(connection).filter(last_synced_at__isnull=True)
+
+
 def _uploaded_local_items(company, connection, now):
     pending = (
-        Item.objects.filter(
-            connection=connection,
-            removed_at__isnull=True,
-            last_synced_at__isnull=True,
-        )
+        _never_synced(connection)
         .exclude(storage_key__isnull=True)
         .exclude(storage_key='')
     )
@@ -99,15 +103,43 @@ def _local_due_job(company, now):
     return _enqueue(company, connection, IngestionJob.Kind.COLLECT, item_ids)
 
 
+def _github_due_job(company, now):
+    connection = _active_connection(company, Connection.Kind.GITHUB)
+    if connection is None:
+        return None
+
+    item_ids = list(_live_items(connection).values_list('id', flat=True))
+    if not item_ids:
+        return None
+
+    # 웹훅은 등록한 뒤에 생긴 변경만 알려 준다. 방금 담은 레포의 README·이슈·PR 은 여기서 읽는다.
+    fresh_ids = [
+        item_id
+        for item_id in _never_synced(connection).values_list('id', flat=True)
+        if not _attempted_recently(company, item_id, now)
+    ]
+    if fresh_ids:
+        return _enqueue(company, connection, IngestionJob.Kind.COLLECT, fresh_ids)
+
+    # 웹훅 설정을 건너뛴 회사에는 이 주기가 유일한 갱신 경로다.
+    if _is_due(_last_job(company, IngestionJob.Kind.COLLECT, connection), COLLECT_EVERY, now):
+        return _enqueue(company, connection, IngestionJob.Kind.COLLECT, item_ids)
+
+    if not _is_due(_last_job(company, IngestionJob.Kind.PROCESS, connection), PROCESS_EVERY, now):
+        return None
+
+    if not has_pending_work(company):
+        return None
+
+    return _enqueue(company, connection, IngestionJob.Kind.PROCESS, item_ids)
+
+
 def _slack_due_job(company, now):
     connection = _active_connection(company, Connection.Kind.SLACK)
     if connection is None:
         return None
 
-    item_ids = list(
-        Item.objects.filter(connection=connection, removed_at__isnull=True)
-        .values_list('id', flat=True)
-    )
+    item_ids = list(_live_items(connection).values_list('id', flat=True))
     if not item_ids:
         return None
 
@@ -137,6 +169,10 @@ def _due_job(company, now):
     local_job = _local_due_job(company, now)
     if local_job is not None:
         return local_job
+
+    github_job = _github_due_job(company, now)
+    if github_job is not None:
+        return github_job
 
     return _slack_due_job(company, now)
 
