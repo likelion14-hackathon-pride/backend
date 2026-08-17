@@ -173,6 +173,9 @@ class IngestionJob(models.Model):
         PROCESS = 'PROCESS'  # 이미 있는 원문만 처리한다
 
     company = models.ForeignKey('companies.Company', on_delete=models.CASCADE, related_name='ingestion_jobs')
+    # 한 작업은 한 연결만 다룬다(worker.run_job 의 mixed_source_connections).
+    # 이게 없으면 깃헙 웹훅이 만든 작업이 슬랙 수집 주기까지 미룬다.
+    connection = models.ForeignKey(Connection, on_delete=models.SET_NULL, null=True, blank=True, related_name='ingestion_jobs')
     kind = models.CharField(max_length=7, choices=Kind.choices, default=Kind.COLLECT)
     status = models.CharField(max_length=10, choices=Status.choices, default=Status.QUEUED)
     progress = models.SmallIntegerField(default=0)

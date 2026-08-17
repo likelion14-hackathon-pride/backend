@@ -81,6 +81,7 @@ def handle_github_event(event_name, data):
 
     return IngestionJob.objects.create(
         company=item.company,
+        connection=item.connection,
         kind=IngestionJob.Kind.COLLECT,
         item_ids=[item.id],
     )
