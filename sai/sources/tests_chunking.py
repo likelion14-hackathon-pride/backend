@@ -2,7 +2,9 @@ import re
 from types import SimpleNamespace
 from unittest.mock import patch
 
+from django.db import connection
 from django.test import SimpleTestCase, TestCase, override_settings
+from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 
 from companies.models import Company
@@ -314,6 +316,23 @@ class ChunkingTests(TestCase):
         self.assertIsNone(chunk.text_en)
         self.assertIsNone(chunk.translated_at)
         self.assertIsNone(chunk.embedding_en)
+
+    # 벡터를 읽지 않으려고 미뤄 둔 필드를 뒤에서 다시 만지면 청크 수만큼 쿼리가 는다.
+    # 메모리를 아끼려다 쿼리를 늘리면 남는 것이 없다.
+    def test_translate_does_not_refetch_deferred_fields(self):
+        for index in range(30):
+            self.document(f'3.{index}', f'배포 규칙 {index}번입니다')
+        build_chunks(self.company)
+
+        with patch('sources.chunking.OpenAI') as client:
+            client.return_value.chat.completions.parse.side_effect = (
+                lambda **kwargs: translations_stub(kwargs['messages'][1]['content'])
+            )
+            with CaptureQueriesContext(connection) as captured:
+                count, _ = translate_chunks(self.company)
+
+        self.assertEqual(count, 30)
+        self.assertLess(len(captured.captured_queries), 10)
 
     def test_translate_failure_is_reported(self):
         from openai import OpenAIError
