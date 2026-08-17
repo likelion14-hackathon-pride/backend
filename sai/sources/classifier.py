@@ -5,7 +5,7 @@ from django.core.exceptions import ImproperlyConfigured
 from openai import OpenAI, OpenAIError
 from pydantic import BaseModel
 
-from config.ai import client_options, timed_call
+from config.ai import client_options, sampling_options, timed_call
 
 from .models import Identity, Item, RawDocument
 from .text import normalize_document_text
@@ -146,7 +146,7 @@ def _classify_batch(client, documents, channels, users, parents):
                 {'role': 'user', 'content': prompt},
             ],
             response_format=ClassificationResult,
-            temperature=0,
+            **sampling_options(settings.OPENAI_CLASSIFIER_MODEL),
         )
     result = completion.choices[0].message.parsed
 

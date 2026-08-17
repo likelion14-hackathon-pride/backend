@@ -10,7 +10,7 @@ from openai import OpenAI, OpenAIError
 from pgvector.django import CosineDistance
 from pydantic import BaseModel, Field
 
-from config.ai import client_options, timed_call
+from config.ai import client_options, sampling_options, timed_call
 from handbook.retrieval import search_rules
 from handbook.services import scopes_in_view
 from sources.classifier import build_lookup
@@ -144,7 +144,7 @@ def _judge_batch(client, batch, channels, users):
                 {'role': 'user', 'content': prompt},
             ],
             response_format=JudgementResult,
-            temperature=0,
+            **sampling_options(settings.OPENAI_CLASSIFIER_MODEL),
         )
 
     # 대상이 비면 지시가 아니다. 프롬프트에도 적었지만 여기서 한 번 더 막는다.
@@ -412,7 +412,7 @@ def _build_card(client, company, document, channels, users):
                 {'role': 'user', 'content': user_content},
             ],
             response_format=CardDraft,
-            temperature=0,
+            **sampling_options(settings.OPENAI_DRAFTER_MODEL),
         )
     draft = completion.choices[0].message.parsed
     if not draft.purpose.strip():

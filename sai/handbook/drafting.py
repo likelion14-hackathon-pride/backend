@@ -9,7 +9,7 @@ from django.db import transaction
 from openai import OpenAI, OpenAIError
 from pydantic import BaseModel
 
-from config.ai import client_options, timed_call
+from config.ai import client_options, sampling_options, timed_call
 from sources.classifier import build_lookup, build_parents
 from sources.models import RawDocument
 from sources.text import normalize_document_text
@@ -217,7 +217,7 @@ def _draft_batch(client, company, scope, batch, channels, users, parents):
                 {'role': 'user', 'content': prompt},
             ],
             response_format=DraftResult,
-            temperature=0,
+            **sampling_options(settings.OPENAI_DRAFTER_MODEL),
         )
     result = completion.choices[0].message.parsed
     documents = dict(enumerate(batch))

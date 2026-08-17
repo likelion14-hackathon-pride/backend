@@ -25,6 +25,22 @@ def client_options(**overrides):
     }
 
 
+# 추론 모델은 샘플링을 스스로 고정한다. temperature 를 함께 보내면
+# 'only the default (1) value is supported' 로 400 이 떨어져 호출 자체가 실패한다.
+# 모델 이름으로 가르는 이유는, 어느 모델을 쓸지가 secrets.json 에서 정해져
+# 코드가 미리 알 수 없기 때문이다.
+FIXED_SAMPLING_MODELS = ('gpt-5', 'o1', 'o3', 'o4')
+
+
+# chat.completions 호출에 붙일 샘플링 인자.
+# 모델이 받지 않으면 아무것도 붙이지 않는다.
+def sampling_options(model, temperature=0):
+    if (model or '').startswith(FIXED_SAMPLING_MODELS):
+        return {}
+
+    return {'temperature': temperature}
+
+
 # 호출 한 건이 얼마나 걸렸는지 남긴다.
 # 실패해도 남겨야 한다. 타임아웃으로 죽은 호출이야말로 알고 싶은 것이기 때문이다.
 @contextmanager
