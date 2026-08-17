@@ -9,7 +9,14 @@ from rest_framework.views import APIView
 
 from companies.access import get_member_company, get_owner_company
 from config.errors import CANNOT_APPROVE_BLANK, ENTRY_NOT_CONFIRMED
-from config.filters import enum_parameter, enum_value, filter_enum, filter_int
+from config.filters import (
+    enum_list_parameter,
+    enum_parameter,
+    enum_value,
+    filter_enum,
+    filter_enum_list,
+    filter_int,
+)
 from config.pagination import (
     CURSOR_PARAMETER,
     LIMIT_PARAMETER,
@@ -49,7 +56,15 @@ KIND_PARAMETER = enum_parameter('kind', CompanyScope.Kind)
 STATUS_PARAMETER = enum_parameter('status', HandbookEntry.Status)
 REVIEW_STATUS_PARAMETER = enum_parameter(
     'reviewStatus', HandbookEntry.ReviewStatus,
-    'PENDING은 아직 보지 않은 초안, HELD는 보고 미뤄 둔 초안입니다.',
+    'PENDING은 아직 보지 않은 초안, HELD는 보고 미뤄 둔 초안입니다. '
+    '내용이 없는 BLANK 항목은 승인할 수 없으므로 어느 쪽에도 들지 않습니다. '
+    'status=BLANK 로 따로 조회하세요.',
+)
+# 확인보관함은 소스에서 뽑은 것만 본다. 대표 답변(ESCALATION)이나 직접 등록(DIRECT_ENTRY)이
+# 같은 목록에 섞이면 대표가 이미 한 결정을 다시 하게 된다.
+ORIGIN_PARAMETER = enum_list_parameter(
+    'origin', HandbookEntry.Origin,
+    '항목이 만들어진 경로입니다. 확인보관함은 SLACK,GITHUB,FILE 입니다.',
 )
 
 
@@ -61,6 +76,7 @@ class HandbookEntryListCreateView(APIView):
             SCOPE_KIND_PARAMETER,
             STATUS_PARAMETER,
             REVIEW_STATUS_PARAMETER,
+            ORIGIN_PARAMETER,
             CURSOR_PARAMETER,
             LIMIT_PARAMETER,
         ],
@@ -79,6 +95,7 @@ class HandbookEntryListCreateView(APIView):
         entries = filter_enum(entries, request, 'scopeKind', CompanyScope.Kind, 'scope__kind')
         entries = filter_int(entries, request, 'scopeId', 'scope_id')
         entries = filter_enum(entries, request, 'status', HandbookEntry.Status)
+        entries = filter_enum_list(entries, request, 'origin', HandbookEntry.Origin)
 
         review_status = enum_value(request, 'reviewStatus', HandbookEntry.ReviewStatus)
         if review_status:

@@ -71,6 +71,9 @@ class Escalation(models.Model):
     status = models.CharField(max_length=10, choices=Status.choices, default=Status.DRAFT)
     sent_at = models.DateTimeField(null=True, blank=True)
     slack_thread_ref = models.CharField(max_length=200, null=True, blank=True)
+    # 슬랙에 답장이 달렸다고 웹훅이 표시해 둔 시각. 회수는 워커가 한다.
+    # 웹훅은 3초 안에 끝나야 해서 슬랙 조회와 AI 판정을 그 자리에서 할 수 없다.
+    reply_pending_at = models.DateTimeField(null=True, blank=True)
     answered_at = models.DateTimeField(null=True, blank=True)
     # 질문자가 답을 확인한 시각. 이게 없으면 카드가 Answered 열에 계속 남는다.
     acknowledged_at = models.DateTimeField(null=True, blank=True)

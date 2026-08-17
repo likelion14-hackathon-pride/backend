@@ -401,10 +401,11 @@ class HandbookReviewTests(TestCase):
         self.client.force_authenticate(user=self.owner)
         self.base = f'/api/companies/{self.company.id}/handbook/entries'
 
-    def _entry(self, title, status=HandbookEntry.Status.DRAFT):
+    def _entry(self, title, status=HandbookEntry.Status.DRAFT,
+               origin=HandbookEntry.Origin.SLACK):
         return HandbookEntry.objects.create(
             company=self.company, scope=self.scope, title=title,
-            body_ko='본문', status=status, origin=HandbookEntry.Origin.SLACK,
+            body_ko='본문', status=status, origin=origin,
         )
 
     # --- 근거 조회 ---
@@ -513,6 +514,51 @@ class HandbookReviewTests(TestCase):
 
     def test_invalid_review_status_filter(self):
         response = self.client.get(f'{self.base}?reviewStatus=NOPE')
+
+        self.assertEqual(response.status_code, 400)
+
+    # 승인할 수 없는 항목이 검토 큐에 뜨면 대표는 누를 수 없는 줄만 계속 본다.
+    def test_pending_filter_excludes_blank(self):
+        blank = self._entry('테스트 정책', status=HandbookEntry.Status.BLANK)
+
+        response = self.client.get(f'{self.base}?reviewStatus=PENDING')
+
+        self.assertNotIn(blank.id, [item['id'] for item in response.data['items']])
+
+    def test_blank_is_still_listed_by_status(self):
+        blank = self._entry('테스트 정책', status=HandbookEntry.Status.BLANK)
+
+        response = self.client.get(f'{self.base}?status=BLANK')
+
+        self.assertEqual([item['id'] for item in response.data['items']], [blank.id])
+
+    # --- 확인보관함 ---
+
+    def test_origin_filter(self):
+        answered = self._entry('대표 답변', origin=HandbookEntry.Origin.ESCALATION)
+
+        response = self.client.get(f'{self.base}?origin=ESCALATION')
+
+        self.assertEqual([item['id'] for item in response.data['items']], [answered.id])
+
+    # 확인보관함은 소스에서 뽑은 것만 본다. 대표가 이미 승인한 답변은 여기 오면 안 된다.
+    def test_source_origins_exclude_answers_and_gaps(self):
+        github = self._entry('레포 규칙', origin=HandbookEntry.Origin.GITHUB)
+        self._entry('대표 답변', origin=HandbookEntry.Origin.ESCALATION)
+        self._entry('빈 항목', status=HandbookEntry.Status.BLANK,
+                    origin=HandbookEntry.Origin.ESCALATION)
+
+        response = self.client.get(
+            f'{self.base}?reviewStatus=PENDING&origin=SLACK,GITHUB,FILE'
+        )
+
+        self.assertEqual(
+            sorted(item['id'] for item in response.data['items']),
+            sorted([self.entry.id, github.id]),
+        )
+
+    def test_invalid_origin_filter(self):
+        response = self.client.get(f'{self.base}?origin=SLACK,NOPE')
 
         self.assertEqual(response.status_code, 400)
 

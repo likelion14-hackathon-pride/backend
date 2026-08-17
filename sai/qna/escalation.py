@@ -9,6 +9,7 @@ from sources.models import Connection
 from sources.slack import SlackClient, SlackError
 from sources.text import normalize_slack_text
 
+from .models import Escalation
 from .prompts import ADDITION_PROMPT, BLANK_PROMPT, JUDGE_PROMPT
 
 
@@ -207,6 +208,54 @@ def fetch_reply(escalation):
     joined = '\n'.join(normalize_slack_text(text) for _, text in collected)
 
     return last_message, joined
+
+
+def _latest_sent_before(escalations, ts):
+    try:
+        limit = float(ts)
+    except (TypeError, ValueError):
+        return None
+
+    latest = None
+    latest_ts = None
+    for escalation in escalations:
+        _, sent_ts = parse_thread_ref(escalation.slack_thread_ref)
+        try:
+            value = float(sent_ts)
+        except (TypeError, ValueError):
+            continue
+        if value < limit and (latest_ts is None or value > latest_ts):
+            latest, latest_ts = escalation, value
+
+    return latest
+
+
+# 웹훅이 받은 메시지가 어느 확인 질문의 답장인지 가려 표시만 해 둔다.
+# 스레드 답글이면 부모 ts 가 곧 질문이고, 채널에 그냥 쓴 경우에는 그 채널에서
+# 마지막으로 보낸 질문의 답으로 본다. fetch_reply 가 답장을 줍는 규칙과 같다.
+def mark_reply_pending(company_id, channel_id, ts, thread_ts=None):
+    if not channel_id or not ts:
+        return None
+
+    sent = Escalation.objects.filter(
+        company_id=company_id,
+        status=Escalation.Status.SENT,
+        slack_thread_ref__startswith=f'{channel_id}:',
+    )
+
+    if thread_ts:
+        escalation = sent.filter(
+            slack_thread_ref=make_thread_ref(channel_id, thread_ts)
+        ).first()
+    else:
+        escalation = _latest_sent_before(sent, ts)
+
+    if escalation is None:
+        return None
+
+    Escalation.objects.filter(id=escalation.id).update(reply_pending_at=timezone.now())
+
+    return escalation
 
 
 # 대표 답장이 실제로 답이 되는지 판정하고, 되면 양쪽 언어로 정리한다.

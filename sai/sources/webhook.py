@@ -5,6 +5,8 @@ import time
 
 from django.conf import settings
 
+from qna.escalation import mark_reply_pending
+
 from .ingestion import is_collectable, save_document
 from .models import Connection, Identity, Item
 from .slack import SlackClient, SlackError
@@ -119,17 +121,21 @@ def handle_event(connection, event):
         return None
 
     thread_ts = event.get('thread_ts')
+    # 슬랙은 최상위 메시지에도 thread_ts를 채워 보낼 때가 있다. 자기 자신은 부모가 아니다.
+    parent_ts = thread_ts if thread_ts and thread_ts != event['ts'] else None
     save_document(
         item=item,
         message=event,
         author_identity=resolve_identity(connection, event),
         workspace_url=get_workspace_url(connection),
-        # 슬랙은 최상위 메시지에도 thread_ts를 채워 보낼 때가 있다. 자기 자신은 부모가 아니다.
-        thread_ref=thread_ts if thread_ts and thread_ts != event['ts'] else None,
+        thread_ref=parent_ts,
     )
 
     Item.objects.filter(id=item.id).update(
         item_count=item.documents.count(),
     )
+
+    # 대표가 확인 질문에 답장했을 수 있다. 표시만 남기고 회수는 워커에 맡긴다.
+    mark_reply_pending(connection.company_id, item.external_id, event['ts'], parent_ts)
 
     return item

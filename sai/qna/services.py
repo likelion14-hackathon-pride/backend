@@ -1,3 +1,6 @@
+import logging
+from datetime import timedelta
+
 from django.core.exceptions import ImproperlyConfigured
 from django.db import transaction
 from django.utils import timezone
@@ -17,6 +20,7 @@ from config.errors import (
 from handbook.gaps import record_gap
 from handbook.models import CompanyScope, HandbookEntry, HandbookEvidence
 from sources.models import Item
+from sources.slack import SlackError
 
 from .answering import (
     PROMPT_VERSION,
@@ -33,8 +37,18 @@ from .escalation import (
 )
 from .models import Citation, Escalation, Message, Thread
 
+logger = logging.getLogger(__name__)
+
 # 근거가 없거나 판단이 필요한 경우는 대표 확인이 필요하다는 뜻이다.
 NEEDS_OWNER = {'NO_SOURCE', 'NEEDS_DECISION'}
+
+# 한 바퀴에 회수할 답장 수. 건당 슬랙 조회와 AI 판정이 붙으므로,
+# 워커의 스케줄링 한 바퀴(60초)를 넘기지 않을 만큼만 잡는다. 밀린 것은 다음 바퀴가 가져간다.
+PENDING_ANSWER_LIMIT = 5
+
+# 이보다 오래 회수되지 않은 표시는 버린다. 채널에서 봇이 빠졌거나 스레드가 지워진 경우
+# 계속 재시도하면 슬랙을 매분 부르게 된다. 이때는 화면의 '답장 확인' 버튼이 남는다.
+PENDING_ANSWER_MAX_AGE = timedelta(hours=6)
 
 
 # AI가 답을 만들지 못한 경우. 설정 누락이든 OpenAI 오류든 사용자가 할 수 있는 일은 같다.
@@ -139,6 +153,35 @@ def collect_answer(escalation):
         )
 
     return escalation
+
+
+# 웹훅이 표시해 둔 답장을 회수한다. 워커가 주기적으로 부른다.
+# 대표가 슬랙에 답해도 아무도 check-answer 를 누르지 않으면 질문이 답변대기에 남기 때문이다.
+def collect_pending_answers(now=None):
+    now = now or timezone.now()
+    escalations = list(
+        Escalation.objects.filter(
+            status=Escalation.Status.SENT,
+            reply_pending_at__isnull=False,
+            reply_pending_at__gte=now - PENDING_ANSWER_MAX_AGE,
+        ).select_related('company').order_by('reply_pending_at')[:PENDING_ANSWER_LIMIT]
+    )
+
+    collected = 0
+    for escalation in escalations:
+        try:
+            collect_answer(escalation)
+        except (SlackError, AnswerUnavailable) as exc:
+            # 표시를 남겨 두면 다음 바퀴에 다시 시도한다. 일시적인 장애가 대부분이다.
+            logger.warning(
+                '답장 회수 실패 escalation=%s code=%s', escalation.id, type(exc).__name__
+            )
+            continue
+
+        Escalation.objects.filter(id=escalation.id).update(reply_pending_at=None)
+        collected += 1
+
+    return collected
 
 
 def default_scope(escalation):
