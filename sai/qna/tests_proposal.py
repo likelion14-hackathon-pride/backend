@@ -1,3 +1,5 @@
+from unittest.mock import patch
+
 from django.test import TestCase
 from django.utils import timezone
 from rest_framework.test import APIClient
@@ -60,9 +62,11 @@ class ProposalTests(TestCase):
         return self.client.get(f'{self.base}/{escalation.id}').data
 
     def approve(self, escalation, payload=None):
-        return self.client.post(
-            f'{self.base}/{escalation.id}/approve', payload or {}, format='json'
-        )
+        # 번역·임베딩은 별도로 검증한다. 여기서 풀어 두면 실제 OpenAI를 부른다.
+        with patch('qna.services.finalize_entries'):
+            return self.client.post(
+                f'{self.base}/{escalation.id}/approve', payload or {}, format='json'
+            )
 
     # --- 미리보기 ---
 
@@ -107,7 +111,18 @@ class ProposalTests(TestCase):
         entry = HandbookEntry.objects.get()
         self.assertEqual(entry.title, 'payment-api PR 리뷰어')
         self.assertEqual(entry.scope, self.project)
-        self.assertEqual(entry.status, HandbookEntry.Status.DRAFT)
+        self.assertEqual(entry.status, HandbookEntry.Status.CONFIRMED)
+
+    # 승인 버튼이 곧 '핸드북에 넣겠다'는 결정이다. 확인보관함에서 또 승인하게 두면
+    # 대표는 같은 결정을 두 번 한다.
+    def test_approved_answer_does_not_wait_in_the_review_queue(self):
+        self.approve(self.answered())
+
+        response = self.client.get(
+            f'/api/companies/{self.company.id}/handbook/entries?reviewStatus=PENDING'
+        )
+
+        self.assertEqual(response.data['items'], [])
 
     # 미리보기에서 고친 값으로 저장할 수 있어야 한다.
     def test_approving_takes_the_edited_title(self):
