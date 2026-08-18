@@ -39,6 +39,8 @@ CASE_MAX_DISTANCE = 0.75
 
 # 본문에 섞여 나오는 [0], [1][2] 같은 인용 표시.
 CITATION_MARKER = re.compile(r'\s*\[\d+\](?:\s*\[\d+\])*')
+ENGLISH_TEXT = re.compile(r'[A-Za-z]')
+KOREAN_TEXT = re.compile(r'[가-힣]')
 
 SYSTEM_PROMPT = """You answer questions about a company's internal rules.
 
@@ -97,6 +99,11 @@ OUT_OF_SCOPE_ANSWER = (
     'This does not appear to be related to this team\'s rules. '
     'It was not sent to the company owner.'
 )
+
+RISK_NOTES = {
+    RiskKeyword.Level.CAUTION: 'Proceed carefully and check with the company owner if needed.',
+    RiskKeyword.Level.DANGER: 'Check with the company owner before proceeding.',
+}
 
 CITATION_JUDGE_PROMPT = """You validate citations for an answer about company rules.
 
@@ -345,6 +352,30 @@ def _judge_citations(client, question, answer, cited):
     return [source for index, source in enumerate(cited) if index in supported]
 
 
+def _has_english(text):
+    return bool(ENGLISH_TEXT.search(text or ''))
+
+
+def _is_english_display(text):
+    return _has_english(text) and not KOREAN_TEXT.search(text)
+
+
+def _risk_keyword_label(keyword):
+    words = list(keyword.aliases or []) + [keyword.word]
+    for word in words:
+        if _is_english_display(word):
+            return word
+
+    return 'Sensitive action'
+
+
+def _risk_note(keyword):
+    if _is_english_display(keyword.note):
+        return keyword.note
+
+    return RISK_NOTES.get(keyword.level, RISK_NOTES[RiskKeyword.Level.CAUTION])
+
+
 # 질문과 답변에 회사가 등록한 위험 키워드가 들어 있으면 안내 문구를 함께 돌려준다.
 def find_risk_warnings(company, *texts):
     haystack = ' '.join(t for t in texts if t).lower()
@@ -354,9 +385,9 @@ def find_risk_warnings(company, *texts):
         words = [keyword.word] + list(keyword.aliases or [])
         if any(word and word.lower() in haystack for word in words):
             warnings.append({
-                'keyword': keyword.word,
+                'keyword': _risk_keyword_label(keyword),
                 'level': keyword.level,
-                'note': keyword.note,
+                'note': _risk_note(keyword),
             })
 
     return warnings
