@@ -417,7 +417,16 @@ class CardUpdateSerializer(serializers.Serializer):
     def update(self, instance, validated_data):
         fields = []
         if 'status' in validated_data:
-            instance.status = validated_data['status']
+            target = validated_data['status']
+
+            if target == InstructionCard.Status.DONE:
+                instance.previous_column = instance.column
+                fields.append('previous_column')
+            elif instance.status == InstructionCard.Status.DONE:
+                instance.previous_column = None
+                fields.append('previous_column')
+
+            instance.status = target
             fields.append('status')
         if 'assigneeId' in validated_data:
             instance.assignee = validated_data['assigneeId']
