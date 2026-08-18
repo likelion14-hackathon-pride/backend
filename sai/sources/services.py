@@ -10,7 +10,7 @@ from config.errors import GITHUB_INSTALLATION_TAKEN, SLACK_WORKSPACE_TAKEN
 
 from .models import Connection, Item
 from .github import GitHubClient, GitHubError
-from .local_files import create_download_url, create_upload_target, delete_file
+from .local_files import create_download_url, create_upload_target, delete_file, upload_file
 from .slack import SlackClient, SlackError
 
 
@@ -323,6 +323,29 @@ def create_local_file(company, file_name, mime_type, byte_size, scope=None):
     )
 
     return item, upload_target
+
+
+def create_uploaded_local_file(company, file_obj, file_name, mime_type, byte_size, scope=None):
+    connection = get_local_connection(company)
+    external_id = str(uuid.uuid4())
+    suffix = Path(file_name).suffix.lower()
+    storage_key = f'companies/{company.id}/local/{external_id}{suffix}'
+
+    upload_file(storage_key, file_obj, mime_type)
+
+    item = Item.objects.create(
+        company=company,
+        connection=connection,
+        external_id=external_id,
+        label=file_name,
+        storage_key=storage_key,
+        mime_type=mime_type,
+        byte_size=byte_size,
+        scope=scope,
+        is_scope_confirmed=scope is not None,
+    )
+
+    return item
 
 
 def open_local_file(item):

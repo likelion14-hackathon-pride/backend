@@ -152,9 +152,10 @@ class RepositoryScopeUpdateSerializer(ChannelScopeUpdateSerializer):
 
 # 로컬 파일 업로드 메타데이터
 class LocalFileUploadCreateSerializer(serializers.Serializer):
-    fileName = serializers.CharField(max_length=200, trim_whitespace=True)
-    mimeType = serializers.CharField(max_length=100, trim_whitespace=True)
-    size = serializers.IntegerField(min_value=1, max_value=LOCAL_FILE_MAX_SIZE)
+    file = serializers.FileField(required=False, write_only=True)
+    fileName = serializers.CharField(max_length=200, trim_whitespace=True, required=False)
+    mimeType = serializers.CharField(max_length=100, trim_whitespace=True, required=False)
+    size = serializers.IntegerField(min_value=1, max_value=LOCAL_FILE_MAX_SIZE, required=False)
     scopeId = serializers.PrimaryKeyRelatedField(
         source='scope',
         queryset=CompanyScope.objects.all(),
@@ -173,6 +174,17 @@ class LocalFileUploadCreateSerializer(serializers.Serializer):
         return value
 
     def validate(self, attrs):
+        uploaded = attrs.get('file')
+        if uploaded is not None:
+            attrs['fileName'] = attrs.get('fileName') or uploaded.name
+            attrs['mimeType'] = attrs.get('mimeType') or uploaded.content_type
+            attrs['size'] = attrs.get('size') or uploaded.size
+
+        for field in ('fileName', 'mimeType', 'size'):
+            if field not in attrs:
+                raise serializers.ValidationError({field: 'this field is required'})
+
+        attrs['fileName'] = self.validate_fileName(attrs['fileName'])
         extension = Path(attrs['fileName']).suffix.lower()
         if attrs['mimeType'] not in LOCAL_FILE_MIME_TYPES[extension]:
             raise field_error(
@@ -256,7 +268,8 @@ class LocalFileListSerializer(serializers.Serializer):
 
 class LocalFileUploadResultSerializer(serializers.Serializer):
     sourceFile = LocalFileSerializer(read_only=True)
-    uploadTarget = serializers.URLField(read_only=True)
+    uploadTarget = serializers.URLField(read_only=True, allow_null=True)
+    ingestionJob = serializers.DictField(read_only=True, allow_null=True)
 
 
 class IngestionJobSerializer(serializers.ModelSerializer):
