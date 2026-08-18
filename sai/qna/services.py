@@ -1,4 +1,5 @@
 import logging
+import re
 from datetime import timedelta
 
 from django.core.exceptions import ImproperlyConfigured
@@ -50,6 +51,19 @@ PENDING_ANSWER_LIMIT = 5
 # 이보다 오래 회수되지 않은 표시는 버린다. 채널에서 봇이 빠졌거나 스레드가 지워진 경우
 # 계속 재시도하면 슬랙을 매분 부르게 된다. 이때는 화면의 '답장 확인' 버튼이 남는다.
 PENDING_ANSWER_MAX_AGE = timedelta(hours=6)
+
+QUESTION_OR_REQUEST = (
+    '?',
+    '인가요',
+    '나요',
+    '까요',
+    '습니까',
+    '부탁드립니다',
+    '부탁합니다',
+    '확인 부탁',
+    '확인 요청',
+    '알려주세요',
+)
 
 
 # AI가 답을 만들지 못한 경우. 설정 누락이든 OpenAI 오류든 사용자가 할 수 있는 일은 같다.
@@ -143,6 +157,45 @@ def ensure_waiting_card(escalation):
     return card
 
 
+def _looks_like_question_or_request(text):
+    text = (text or '').strip()
+    if not text:
+        return False
+
+    return any(marker in text for marker in QUESTION_OR_REQUEST)
+
+
+def _title_from_answer(answer):
+    answer = (answer or '').strip()
+    if not answer:
+        return None
+
+    first = re.split(r'[\n.!?]', answer, maxsplit=1)[0].strip()
+    if not first or _looks_like_question_or_request(first):
+        return None
+
+    return first[:80]
+
+
+def _clean_proposed_title(title, answer):
+    title = (title or '').strip()
+    if title and not _looks_like_question_or_request(title):
+        return title[:200]
+
+    return _title_from_answer(answer)
+
+
+def _reject_as_bad_answer(escalation):
+    escalation.answer_is_answer = False
+    escalation.answer_reason = (
+        '답변이 질문이나 확인 요청 형태로 정리되어 규칙으로 저장하지 않았습니다.'
+    )
+    escalation.answer_needs_review = True
+    escalation.save(update_fields=['answer_is_answer', 'answer_reason', 'answer_needs_review'])
+
+    return escalation
+
+
 # 대표 답장을 회수해 판정한다. 아직 답이 없으면 아무것도 바꾸지 않는다.
 def collect_answer(escalation):
     # SlackError 는 DomainError 라서 그대로 두면 봉투까지 올라간다.
@@ -156,15 +209,24 @@ def collect_answer(escalation):
     except (ImproperlyConfigured, RuntimeError) as exc:
         raise AnswerUnavailable(str(exc))
 
-    escalation.answer_is_answer = judgement.is_answer
     escalation.answer_reason = judgement.reason[:200]
     escalation.answer_needs_review = judgement.needs_review
     if judgement.is_answer:
+        if _looks_like_question_or_request(judgement.answer_ko):
+            return _reject_as_bad_answer(escalation)
+
+        title = _clean_proposed_title(judgement.title_ko, judgement.answer_ko)
+        if not title:
+            escalation.answer_needs_review = True
+
+        escalation.answer_is_answer = True
         escalation.answer_ko = judgement.answer_ko
         escalation.answer_en = judgement.answer_en
-        escalation.proposed_title = (judgement.title_ko or '')[:200] or None
+        escalation.proposed_title = title
         escalation.answered_at = timezone.now()
         escalation.status = Escalation.Status.ANSWERED
+    else:
+        escalation.answer_is_answer = False
     escalation.save()
 
     # 카드에서 올라온 질문이면 카드에도 답을 채운다.
@@ -216,7 +278,10 @@ def default_scope(escalation):
 
 
 def _proposed_title(escalation):
-    return escalation.proposed_title or (escalation.question_en or '')[:200]
+    return (
+        _clean_proposed_title(escalation.proposed_title, escalation.answer_ko)
+        or '대표 답변을 확인해 규칙으로 저장합니다.'
+    )
 
 
 # 승인 버튼을 누르기 전에 어떤 규칙이 어디에 저장될지 보여 준다.
@@ -256,6 +321,8 @@ def _channel_label(company, external_id):
 def promote_to_entry(escalation, title=None, body_en=None, scope=None):
     company = escalation.company
     if escalation.status != Escalation.Status.ANSWERED or not escalation.answer_ko:
+        raise ValidationError('no answer to promote', code=NO_ANSWER_TO_PROMOTE)
+    if _looks_like_question_or_request(escalation.answer_ko):
         raise ValidationError('no answer to promote', code=NO_ANSWER_TO_PROMOTE)
 
     scope = scope or default_scope(escalation)

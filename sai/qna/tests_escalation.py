@@ -259,6 +259,23 @@ class EscalationTests(TestCase):
         self.assertEqual(response.data['answerReason'], '확인해보겠다는 말만 있습니다.')
         self.assertIsNone(response.data['answerKo'])
 
+    def test_question_shaped_summary_is_not_saved_as_an_answer(self):
+        escalation_id = self.create().data['id']
+        self.send(escalation_id)
+
+        response = self.check(
+            escalation_id,
+            verdict=judgement(
+                answer_ko='연차는 며칠인가요?',
+                answer_en='How many vacation days do I get?',
+                title_ko='연차는 며칠인가요?',
+            ),
+        )
+
+        self.assertEqual(response.data['status'], 'SENT')
+        self.assertFalse(response.data['answerIsAnswer'])
+        self.assertIsNone(response.data['answerKo'])
+
     def test_no_reply_yet_keeps_status(self):
         escalation_id = self.create().data['id']
         self.send(escalation_id)

@@ -17,7 +17,9 @@ needs_review - true when the reply is ambiguous, only partly answers, or you had
 
 answer_ko - when is_answer is true: the answer restated as a clear rule in Korean. Keep the
   owner's meaning exactly. Copy numbers, dates and names as written. Never add a condition
-  the owner did not state. When is_answer is false: empty string.
+  the owner did not state. Write only the conclusion from the owner's reply, not the employee's
+  question and not the Slack request SAI sent. It must be a declarative rule or answer, not a
+  question, request, or "확인 부탁드립니다" sentence. When is_answer is false: empty string.
 
 answer_en - the same in plain workplace English, for the employee to read.
   When is_answer is false: empty string.
@@ -28,7 +30,9 @@ title_ko - one Korean sentence that captures the core rule for a handbook list.
   Copy project, repository, channel and tool names exactly as written. Never translate them:
   "payment-api" stays "payment-api", not "결제-api".
   Good: "payment-api PR은 지훈님을 리뷰어로 지정합니다.", "긴급 배포는 대표 승인 후 진행합니다."
-  Bad: "PR 리뷰어는 누구인가요?", "payment-api PR 리뷰어", "규칙"
+  Bad: "PR 리뷰어는 누구인가요?", "payment-api PR 리뷰어", "규칙", "대표님께 확인하세요."
+  Never use the employee's question as the title. If the owner did not give a rule-like answer,
+  set is_answer=false instead of turning the question into a title.
   When is_answer is false: empty string."""
 
 

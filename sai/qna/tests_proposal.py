@@ -94,11 +94,16 @@ class ProposalTests(TestCase):
 
         self.assertIsNone(self.detail(pending)['proposal'])
 
-    # 판정이 제목을 못 만든 옛 질문은 영어 질문을 제목으로 쓴다.
-    def test_a_missing_title_falls_back_to_the_question(self):
+    # 판정이 제목을 못 만든 옛 질문도 질문문을 제목으로 쓰지 않는다.
+    def test_a_missing_title_falls_back_to_the_answer(self):
         proposal = self.detail(self.answered(title=None))['proposal']
 
-        self.assertEqual(proposal['title'], 'Who should I assign as the reviewer?')
+        self.assertEqual(proposal['title'], '결제 쪽은 지훈님을 리뷰어로 넣어주세요')
+
+    def test_a_question_title_falls_back_to_the_answer(self):
+        proposal = self.detail(self.answered(title='PR 리뷰어는 누구인가요?'))['proposal']
+
+        self.assertEqual(proposal['title'], '결제 쪽은 지훈님을 리뷰어로 넣어주세요')
 
     # --- 승인 ---
 
@@ -165,6 +170,16 @@ class ProposalTests(TestCase):
         )
 
         self.assertEqual(self.approve(pending).status_code, 400)
+
+    def test_a_question_shaped_answer_cannot_be_approved(self):
+        escalation = self.answered()
+        escalation.answer_ko = 'PR 리뷰어는 누구인가요?'
+        escalation.save(update_fields=['answer_ko'])
+
+        response = self.approve(escalation)
+
+        self.assertEqual(response.status_code, 400)
+        self.assertFalse(HandbookEntry.objects.exists())
 
     def test_member_cannot_approve(self):
         self.client.force_authenticate(user=self.member)
