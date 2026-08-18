@@ -12,6 +12,11 @@ from .models import Question
 DAY0_SOURCE = 'Day 0 기본 규칙'
 
 
+# 핸드북 목록만 보아도 규칙을 알 수 있도록 답변 문장을 제목으로 쓴다.
+def _rule_title(text):
+    return ' '.join(text.split())[:200]
+
+
 # 답을 붙일 회사 전반 범위가 서버에 없다. 기본 범위 시딩이 빠진 상태다.
 # 대표가 입력을 고쳐서 넘길 수 있는 일이 아니라 400 이 아니라 503 으로 낸다.
 class ScopeUnavailable(UpstreamError):
@@ -64,7 +69,8 @@ def build_entry(company, spec, answer, scope):
         dedupe_key=_dedupe_key(target, spec.key),
         defaults={
             'scope': target,
-            'title': spec.title[:200],
+            'title': _rule_title(body_ko),
+            'title_en': _rule_title(body_en) if body_en else None,
             'body_ko': body_ko,
             'body_en': body_en or None,
             'original_lang': 'ko',
