@@ -6,7 +6,8 @@ from django.utils import timezone
 from handbook.models import HandbookEntry
 from handbook.queries import live_entries, scopes_with_counts
 from qna.models import Escalation, Message
-from sources.models import RawDocument
+from sources.models import Identity, Item, RawDocument
+from sources.text import normalize_document_text
 
 from .models import InstructionCard
 from .queries import cards_for
@@ -53,6 +54,25 @@ def _read_today(company, user, since):
     }
 
 
+def _document_text(company, document):
+    if document is None:
+        return None
+    if document.item.connection.kind != 'SLACK':
+        return document.raw_text
+
+    channels = dict(
+        Item.objects.filter(company=company, connection=document.item.connection)
+        .values_list('external_id', 'label')
+    )
+    users = dict(
+        Identity.objects.filter(company=company, connection=document.item.connection)
+        .exclude(external_handle__isnull=True)
+        .values_list('external_user_id', 'external_handle')
+    )
+
+    return normalize_document_text(document, channels, users)
+
+
 # 아직 아무도 열어 보지 않은 지시. read_at 은 카드에 하나뿐이라 회사 기준이다.
 def _unread(company):
     cards = (
@@ -67,7 +87,7 @@ def _unread(company):
         'latest': latest and {
             'cardId': latest.id,
             'purpose': latest.purpose_en or latest.purpose,
-            'text': latest.document.raw_text if latest.document else None,
+            'text': _document_text(company, latest.document),
             'requestedBy': (
                 latest.document.author_identity.external_handle
                 if latest.document and latest.document.author_identity else None

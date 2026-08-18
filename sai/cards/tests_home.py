@@ -9,7 +9,7 @@ from accounts.models import Membership, User
 from companies.models import Company
 from handbook.models import CompanyScope, HandbookEntry
 from qna.models import Escalation, Message, Thread
-from sources.models import Connection, Item, RawDocument
+from sources.models import Connection, Identity, Item, RawDocument
 
 from .models import InstructionCard
 
@@ -41,17 +41,17 @@ class HomeTests(TestCase):
         self.client.force_authenticate(user=self.member)
         self.url = f'/api/companies/{self.company.id}/home'
 
-    def document(self, ref='1.1', occurred_at=None):
+    def document(self, ref='1.1', occurred_at=None, raw_text='결제 쪽 이거 좀 봐주세요'):
         return RawDocument.objects.create(
             company=self.company, item=self.item, external_ref=ref,
-            raw_text='결제 쪽 이거 좀 봐주세요', content_hash=ref.ljust(64, '0'),
+            raw_text=raw_text, content_hash=ref.ljust(64, '0'),
             occurred_at=occurred_at or timezone.now(),
         )
 
-    def card(self, ref='1.1', occurred_at=None, **extra):
+    def card(self, ref='1.1', occurred_at=None, raw_text='결제 쪽 이거 좀 봐주세요', **extra):
         return InstructionCard.objects.create(
             company=self.company, scope=self.project,
-            document=self.document(ref, occurred_at),
+            document=self.document(ref, occurred_at, raw_text),
             purpose='결제 실패 로그의 원인을 파악한다',
             purpose_en='Find the cause of the payment failures', **extra,
         )
@@ -154,6 +154,17 @@ class HomeTests(TestCase):
         self.assertEqual(unread['count'], 2)
         self.assertEqual(unread['latest']['cardId'], newest.id)
         self.assertEqual(unread['latest']['text'], '결제 쪽 이거 좀 봐주세요')
+
+    def test_unread_normalizes_slack_mentions(self):
+        Identity.objects.create(
+            company=self.company, connection=self.item.connection,
+            external_user_id='U001', external_handle='홍길동',
+        )
+        self.card(ref='c.3', raw_text='<@U001> 급한 건 아닌데 시간 되실 때 봐주세요')
+
+        text = self.get()['unread']['latest']['text']
+
+        self.assertEqual(text, '@홍길동 급한 건 아닌데 시간 되실 때 봐주세요')
 
     def test_read_cards_drop_out(self):
         card = self.card()
