@@ -69,6 +69,9 @@ class ToneEvidenceSerializer(serializers.ModelSerializer):
 class CardSerializer(serializers.ModelSerializer):
     # 보드 열. cards_for() 가 계산해 붙인다.
     column = serializers.CharField(read_only=True)
+    previousColumn = serializers.CharField(
+        source='previous_column', read_only=True, allow_null=True
+    )
     assigneeId = serializers.IntegerField(source='assignee_id', read_only=True)
     assigneeName = serializers.CharField(source='assignee.display_name', read_only=True, default=None)
     scopeId = serializers.IntegerField(source='scope_id', read_only=True)
@@ -101,6 +104,7 @@ class CardSerializer(serializers.ModelSerializer):
         fields = [
             'id',
             'column',
+            'previousColumn',
             'status',
             'purpose',
             'purposeEn',
