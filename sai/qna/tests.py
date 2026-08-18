@@ -13,6 +13,7 @@ from .answering import (
     PROMPT_VERSION,
     AnswerRateLimited,
     AnswerResult,
+    CitationJudgeResult,
     answer_question,
     find_risk_warnings,
 )
@@ -201,6 +202,64 @@ class AskTests(TestCase):
 
         citation = Citation.objects.get(message_id=response.data['messageId'])
         self.assertEqual(citation.entry_id, self.entry.id)
+
+    def test_unrelated_citation_is_dropped(self):
+        weaker = [0.1] * 1200 + [-0.1] * 336
+        HandbookEntry.objects.create(
+            company=self.company, scope=self.company_scope, title='연차 캘린더 등록',
+            body_ko='연차는 팀 캘린더에 등록합니다.',
+            body_en='Register annual leave on the team calendar.',
+            status=HandbookEntry.Status.CONFIRMED, origin=HandbookEntry.Origin.SLACK,
+            embedding_ko=weaker, embedding_en=weaker,
+        )
+        answer = AnswerResult(
+            verdict='GROUNDED',
+            answer=(
+                'Use Vercel to deploy the frontend. The backend must be deployed using EC2. '
+                'Do not deploy immediately before a weekend or holiday, including Friday afternoon.'
+            ),
+            cited_indexes=[0, 1],
+            draft_ko='',
+        )
+        judge = CitationJudgeResult(supported_indexes=[0])
+        parse = Mock(side_effect=[
+            SimpleNamespace(
+                choices=[SimpleNamespace(message=SimpleNamespace(parsed=answer))],
+                usage=SimpleNamespace(prompt_tokens=120, completion_tokens=40),
+            ),
+            SimpleNamespace(
+                choices=[SimpleNamespace(message=SimpleNamespace(parsed=judge))],
+                usage=SimpleNamespace(prompt_tokens=20, completion_tokens=5),
+            ),
+        ])
+        client = openai_stub()
+        client.chat.completions.parse = parse
+
+        with (
+            patch('qna.answering.OpenAI', return_value=client),
+            patch('handbook.gaps.OpenAI', return_value=client),
+        ):
+            response = self.client.post(
+                self.url,
+                {'question': 'when i deploy, can i use vercel?'},
+                format='json',
+            )
+
+        titles = [citation['title'] for citation in response.data['citations']]
+        self.assertIn('금요일 오후 배포 금지', titles)
+        self.assertNotIn('연차 캘린더 등록', titles)
+        self.assertEqual(parse.call_count, 2)
+
+    def test_korean_only_rule_can_still_be_cited(self):
+        self.entry.body_en = None
+        self.entry.save(update_fields=['body_en'])
+
+        response = self.ask(
+            question='Can I deploy on Friday?',
+            answer='Do not deploy on Friday afternoon.',
+        )
+
+        self.assertEqual(response.data['citations'][0]['title'], '금요일 오후 배포 금지')
 
     # --- 근거 없음 ---
 
