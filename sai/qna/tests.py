@@ -14,6 +14,7 @@ from .answering import (
     AnswerRateLimited,
     AnswerResult,
     CitationJudgeResult,
+    OUT_OF_SCOPE_ANSWER,
     answer_question,
     find_risk_warnings,
 )
@@ -308,7 +309,7 @@ class AskTests(TestCase):
         response = self.ask(verdict='OUT_OF_SCOPE', answer='', cited=())
 
         self.assertEqual(response.data['resultType'], 'ANSWERED')
-        self.assertIsNone(response.data['answer'])
+        self.assertEqual(response.data['answer'], OUT_OF_SCOPE_ANSWER)
 
     # --- 빈 항목 ---
 
