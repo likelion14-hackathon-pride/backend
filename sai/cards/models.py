@@ -44,6 +44,10 @@ class InstructionCard(models.Model):
     tone_note = models.TextField(null=True, blank=True)
     tone_note_en = models.TextField(null=True, blank=True)
     status = models.CharField(max_length=12, choices=Status.choices, default=Status.READY)
+    # 완료 직전에 있던 보드 열. DONE 카드의 상세 화면을 구분할 때 사용한다.
+    previous_column = models.CharField(
+        max_length=12, choices=Column.choices, null=True, blank=True
+    )
     read_at = models.DateTimeField(null=True, blank=True)
     # 같은 요청을 슬랙에 여러 번 올리면 카드도 여러 장이 된다.
     # 원문마다 카드를 남기되, 처음 것만 목록에 보여 주고 나머지는 여기로 묶는다.
