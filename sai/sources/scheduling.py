@@ -143,6 +143,14 @@ def _slack_due_job(company, now):
     if not item_ids:
         return None
 
+    fresh_ids = [
+        item_id
+        for item_id in _never_synced(connection).values_list('id', flat=True)
+        if not _attempted_recently(company, item_id, now)
+    ]
+    if fresh_ids:
+        return _enqueue(company, connection, IngestionJob.Kind.COLLECT, fresh_ids)
+
     # 수집이 먼저다. 새 원문을 가져오면 어차피 뒤이어 처리까지 한다.
     if _is_due(_last_job(company, IngestionJob.Kind.COLLECT, connection), COLLECT_EVERY, now):
         return _enqueue(company, connection, IngestionJob.Kind.COLLECT, item_ids)
