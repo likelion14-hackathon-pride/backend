@@ -19,7 +19,7 @@ from .models import CompanyScope, HandbookEntry, HandbookEvidence
 logger = logging.getLogger(__name__)
 
 # 프롬프트를 고치면 올린다. 재생성 대상을 고를 때 쓴다.
-DRAFTER_VERSION = 'draft-v4'
+DRAFTER_VERSION = 'draft-v5'
 
 # 한 번에 모델에 넣는 원문 수. 한 범위 안의 규칙끼리 묶으려면 함께 봐야 한다.
 BATCH_SIZE = 40
@@ -40,6 +40,9 @@ For every rule return:
   detail. Prefer "백엔드 배포는 AWS EC2로 진행합니다." over "배포 방식".
 - title_en: the same one-sentence summary in English, under 120 characters. Keep channel,
   repository, tool and product names exactly as written.
+- area_key: only when the source is an uploaded local file assigned to company-wide rules.
+  Choose the best company category from the category list in the prompt. Leave it null for
+  project sources, Slack, and GitHub.
 - body: the rule written in Korean as something the reader must follow. One to three sentences.
   Write the rule itself, not a summary of the conversation. No "~라고 합니다" reporting style.
   Include the specific condition, exception, owner, channel, tool, deadline, or approval count
@@ -64,6 +67,8 @@ Citation rules - these matter most:
 Quality bar
 - Do not turn a one-time request into a policy.
 - Do not turn a proposal into a rule unless the thread shows it was accepted.
+- For uploaded files, ignore tables of contents, section headings, examples, questions, and
+  explanatory background unless the text itself clearly states a reusable rule.
 - Do not create broad rules from narrow examples. Preserve the actual scope.
 - Prefer one precise rule over several overlapping rules.
 - Never invent a rule that is not in the messages. Producing fewer, well-supported rules is better
@@ -78,6 +83,7 @@ class DraftCitation(BaseModel):
 class DraftRule(BaseModel):
     title: str
     title_en: str
+    area_key: Literal['COMPANY', 'PEOPLE', 'PRODUCT_ENG', 'SECURITY'] | None = None
     body: str
     confidence: Literal['HIGH', 'MEDIUM', 'LOW']
     citations: list[DraftCitation]
@@ -98,6 +104,30 @@ def _dedupe_key(scope_id, title):
     normalized = re.sub(r'\s+', ' ', title).strip().lower()
 
     return hashlib.sha256(f'{scope_id}:{normalized}'.encode()).hexdigest()
+
+
+def _company_categories(company):
+    return list(
+        CompanyScope.objects.filter(
+            company=company,
+            kind=CompanyScope.Kind.COMPANY,
+        ).order_by('id')
+    )
+
+
+def _scope_prompt(company, scope):
+    if scope.kind == CompanyScope.Kind.PROJECT:
+        return f'Target knowledge space: project "{scope.name}". Leave area_key null.'
+
+    categories = '\n'.join(
+        f'- {category.area_key}: {category.name} - {category.description or ""}'
+        for category in _company_categories(company)
+    )
+    return (
+        'Target knowledge space: company-wide rules.\n'
+        'For uploaded local files only, choose area_key from these company categories:\n'
+        f'{categories}'
+    )
 
 
 # 채널에 연결된 지식공간을 쓰고, 없으면 회사 전반 규칙으로 보낸다.
@@ -151,6 +181,27 @@ def _evidence_tag(document):
     return HandbookEvidence.Tag.SLACK
 
 
+def _evidence_permalink(document):
+    if document.item.connection.kind == 'LOCAL':
+        return f'/api/companies/{document.company_id}/source-files/{document.item_id}/open'
+
+    return document.permalink
+
+
+def _rule_scope(company, fallback, rule):
+    if fallback.kind != CompanyScope.Kind.COMPANY or not rule.area_key:
+        return fallback
+
+    return (
+        CompanyScope.objects.filter(
+            company=company,
+            kind=CompanyScope.Kind.COMPANY,
+            area_key=rule.area_key,
+        ).first()
+        or fallback
+    )
+
+
 def _build_entry(company, scope, rule, documents, channels, users):
     if rule.confidence == HandbookEntry.Confidence.LOW:
         return None
@@ -184,6 +235,7 @@ def _build_entry(company, scope, rule, documents, channels, users):
     if not verified:
         return None
 
+    scope = _rule_scope(company, scope, rule)
     dedupe_key = _dedupe_key(scope.id, rule.title)
     existing = HandbookEntry.objects.filter(company=company, dedupe_key=dedupe_key).first()
     # 대표가 이미 확정하거나 보관한 항목은 건드리지 않는다.
@@ -214,7 +266,7 @@ def _build_entry(company, scope, rule, documents, channels, users):
             speaker_name=(
                 document.author_identity.external_handle if document.author_identity else None
             ),
-            permalink=document.permalink,
+            permalink=_evidence_permalink(document),
             occurred_at=document.occurred_at,
         )
         for document, quote in verified
@@ -224,7 +276,7 @@ def _build_entry(company, scope, rule, documents, channels, users):
 
 
 def _draft_batch(client, company, scope, batch, channels, users, parents):
-    prompt = '\n'.join(
+    prompt = _scope_prompt(company, scope) + '\n\n' + '\n'.join(
         _render(document, index, channels, users, parents)
         for index, document in enumerate(batch)
     )

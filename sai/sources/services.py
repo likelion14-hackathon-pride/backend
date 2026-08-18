@@ -10,7 +10,7 @@ from config.errors import GITHUB_INSTALLATION_TAKEN, SLACK_WORKSPACE_TAKEN
 
 from .models import Connection, Item
 from .github import GitHubClient, GitHubError
-from .local_files import create_upload_target, delete_file
+from .local_files import create_download_url, create_upload_target, delete_file
 from .slack import SlackClient, SlackError
 
 
@@ -303,7 +303,7 @@ def get_local_connection(company):
     )
 
 
-def create_local_file(company, file_name, mime_type, byte_size):
+def create_local_file(company, file_name, mime_type, byte_size, scope=None):
     connection = get_local_connection(company)
     external_id = str(uuid.uuid4())
     suffix = Path(file_name).suffix.lower()
@@ -318,9 +318,18 @@ def create_local_file(company, file_name, mime_type, byte_size):
         storage_key=storage_key,
         mime_type=mime_type,
         byte_size=byte_size,
+        scope=scope,
+        is_scope_confirmed=scope is not None,
     )
 
     return item, upload_target
+
+
+def open_local_file(item):
+    if not item.storage_key:
+        raise ValidationError('file metadata missing')
+
+    return create_download_url(item.storage_key, item.label)
 
 
 def remove_local_file(item):

@@ -215,6 +215,72 @@ class DraftEntriesTests(TestCase):
         self.assertEqual(evidence.speaker_name, '조상원')
         self.assertEqual(evidence.document_id, self.document.id)
 
+    @override_settings(OPENAI_API_KEY='test-key')
+    def test_local_file_draft_uses_ai_selected_company_category(self):
+        RawDocument.objects.all().delete()
+        local_connection = Connection.objects.create(
+            company=self.company, kind=Connection.Kind.LOCAL
+        )
+        company_scope = CompanyScope.objects.get(
+            company=self.company, area_key=CompanyScope.AreaKey.COMPANY
+        )
+        item = Item.objects.create(
+            company=self.company,
+            connection=local_connection,
+            external_id='file-1',
+            label='개발규칙.pdf',
+            scope=company_scope,
+        )
+        document = self._document(
+            'file:file-1:0',
+            '백엔드 배포는 AWS EC2로 진행합니다.',
+            item=item,
+        )
+
+        entries, errors = self.draft([{
+            'title': '백엔드 배포는 AWS EC2로 진행합니다.',
+            'area_key': 'PRODUCT_ENG',
+            'body': '백엔드 배포는 AWS EC2로 진행합니다.',
+            'confidence': 'HIGH',
+            'citations': [{'index': 0, 'quote': '백엔드 배포는 AWS EC2로 진행합니다.'}],
+        }])
+
+        self.assertEqual(errors, [])
+        entry = entries[0]
+        self.assertEqual(entry.origin, HandbookEntry.Origin.FILE)
+        self.assertEqual(entry.scope.area_key, CompanyScope.AreaKey.PRODUCT_ENG)
+        evidence = entry.evidences.get()
+        self.assertEqual(evidence.tag, HandbookEvidence.Tag.FILE)
+        self.assertEqual(evidence.source_label, '개발규칙.pdf')
+        self.assertEqual(
+            evidence.permalink,
+            f'/api/companies/{self.company.id}/source-files/{item.id}/open',
+        )
+        self.assertEqual(evidence.document_id, document.id)
+
+    @override_settings(OPENAI_API_KEY='test-key')
+    def test_company_file_prompt_lists_categories(self):
+        RawDocument.objects.all().delete()
+        local_connection = Connection.objects.create(
+            company=self.company, kind=Connection.Kind.LOCAL
+        )
+        company_scope = CompanyScope.objects.get(
+            company=self.company, area_key=CompanyScope.AreaKey.COMPANY
+        )
+        item = Item.objects.create(
+            company=self.company,
+            connection=local_connection,
+            external_id='file-1',
+            label='개발규칙.pdf',
+            scope=company_scope,
+        )
+        self._document('file:file-1:0', '백엔드 배포는 AWS EC2로 진행합니다.', item=item)
+
+        self.draft([])
+
+        self.assertIn('Target knowledge space: company-wide rules.', self.prompt())
+        self.assertIn('PRODUCT_ENG: Product / Engineering', self.prompt())
+
     # 답글만 보면 무엇에 동의한 것인지 알 수 없다. 분류기와 같은 맥락을 봐야 한다.
     @override_settings(OPENAI_API_KEY='test-key')
     def test_thread_reply_carries_its_parent(self):

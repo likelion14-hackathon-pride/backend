@@ -1,3 +1,5 @@
+from urllib.parse import quote
+
 import boto3
 from botocore.exceptions import BotoCoreError, ClientError
 from django.conf import settings
@@ -6,6 +8,7 @@ from config.errors import STORAGE_UNAVAILABLE, UpstreamError
 
 
 UPLOAD_URL_EXPIRES = 15 * 60
+DOWNLOAD_URL_EXPIRES = 5 * 60
 LOCAL_FILE_MAX_SIZE = 20 * 1024 * 1024
 
 
@@ -28,6 +31,28 @@ def create_upload_target(storage_key, mime_type):
                 'ContentType': mime_type,
             },
             ExpiresIn=UPLOAD_URL_EXPIRES,
+        )
+    except (BotoCoreError, ClientError) as exc:
+        raise LocalFileStorageError(STORAGE_UNAVAILABLE) from exc
+
+
+def create_download_url(storage_key, file_name=None):
+    client = boto3.client('s3', region_name=settings.AWS_S3_REGION_NAME)
+    params = {
+        'Bucket': settings.AWS_STORAGE_BUCKET_NAME,
+        'Key': storage_key,
+    }
+    if file_name:
+        encoded = quote(file_name)
+        params['ResponseContentDisposition'] = (
+            f'inline; filename="{encoded}"; filename*=UTF-8\'\'{encoded}'
+        )
+
+    try:
+        return client.generate_presigned_url(
+            'get_object',
+            Params=params,
+            ExpiresIn=DOWNLOAD_URL_EXPIRES,
         )
     except (BotoCoreError, ClientError) as exc:
         raise LocalFileStorageError(STORAGE_UNAVAILABLE) from exc

@@ -155,6 +155,12 @@ class LocalFileUploadCreateSerializer(serializers.Serializer):
     fileName = serializers.CharField(max_length=200, trim_whitespace=True)
     mimeType = serializers.CharField(max_length=100, trim_whitespace=True)
     size = serializers.IntegerField(min_value=1, max_value=LOCAL_FILE_MAX_SIZE)
+    scopeId = serializers.PrimaryKeyRelatedField(
+        source='scope',
+        queryset=CompanyScope.objects.all(),
+        required=False,
+        allow_null=True,
+    )
 
     def validate_fileName(self, value):
         if Path(value).name != value:
@@ -172,6 +178,9 @@ class LocalFileUploadCreateSerializer(serializers.Serializer):
             raise field_error(
                 'mimeType', 'mime type does not match file extension', MIME_TYPE_MISMATCH
             )
+        scope = attrs.get('scope')
+        if scope is not None and scope.company_id != self.context['company'].id:
+            raise field_error('scopeId', 'scope not found', SCOPE_NOT_FOUND)
 
         return attrs
 
@@ -180,11 +189,33 @@ class LocalFileSerializer(serializers.ModelSerializer):
     fileName = serializers.CharField(source='label', read_only=True)
     mimeType = serializers.CharField(source='mime_type', read_only=True)
     size = serializers.IntegerField(source='byte_size', read_only=True)
+    scopeId = serializers.IntegerField(source='scope_id', read_only=True)
+    scopeName = serializers.CharField(source='scope.name', read_only=True, default=None)
+    scopeKind = serializers.CharField(source='scope.kind', read_only=True, default=None)
+    isScopeConfirmed = serializers.BooleanField(source='is_scope_confirmed', read_only=True)
+    originalFileUrl = serializers.SerializerMethodField()
     status = serializers.SerializerMethodField()
 
     class Meta:
         model = Item
-        fields = ['id', 'fileName', 'mimeType', 'size', 'status']
+        fields = [
+            'id',
+            'fileName',
+            'mimeType',
+            'size',
+            'scopeId',
+            'scopeName',
+            'scopeKind',
+            'isScopeConfirmed',
+            'originalFileUrl',
+            'status',
+        ]
+
+    def get_originalFileUrl(self, obj):
+        if not obj.storage_key:
+            return None
+
+        return f'/api/companies/{obj.company_id}/source-files/{obj.id}/open'
 
     def get_status(self, obj):
         latest_job = (
@@ -280,6 +311,18 @@ class IngestionJobCreateSerializer(serializers.Serializer):
             '생략하면 해당 소스에 등록된 전체 Item이 대상입니다.'
         ),
     )
+    scopeId = serializers.PrimaryKeyRelatedField(
+        source='scope',
+        queryset=CompanyScope.objects.all(),
+        required=False,
+        allow_null=True,
+    )
+
+    def validate_scopeId(self, value):
+        if value is not None and value.company_id != self.context['company'].id:
+            raise serializers.ValidationError('scope not found', code=SCOPE_NOT_FOUND)
+
+        return value
 
 
 # 토큰과 시그닝 시크릿은 어떤 경우에도 응답에 넣지 않는다.
