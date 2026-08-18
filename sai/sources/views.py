@@ -6,7 +6,12 @@ from django.db.models import F
 from django.shortcuts import get_object_or_404
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_POST
-from django.http import JsonResponse, HttpResponseBadRequest, HttpResponseForbidden
+from django.http import (
+    JsonResponse,
+    HttpResponseBadRequest,
+    HttpResponseForbidden,
+    HttpResponseRedirect,
+)
 from drf_yasg import openapi
 from drf_yasg.utils import swagger_auto_schema
 from rest_framework import status
@@ -24,6 +29,7 @@ from config.pagination import (
     page_response,
     paged_response,
 )
+from handbook.models import CompanyScope
 
 from .models import Connection, IngestionJob, Item
 from .queries import channels_for, connections_for, extracted_counts, messages_in
@@ -67,6 +73,7 @@ from .services import (
     disconnect,
     list_available_channels,
     list_available_repositories,
+    open_local_file,
     remove_channel,
     remove_local_file,
     remove_repository,
@@ -85,6 +92,26 @@ from .webhook import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _company_file_scope(company):
+    return CompanyScope.objects.filter(
+        company=company,
+        kind=CompanyScope.Kind.COMPANY,
+        area_key=CompanyScope.AreaKey.COMPANY,
+    ).first()
+
+
+def _local_file_scope(company, scope):
+    scope = scope or _company_file_scope(company)
+    if scope is None:
+        raise ValidationError('company scope not found', code=NO_INGESTION_TARGET)
+    if scope.kind == CompanyScope.Kind.PROJECT:
+        return scope
+    if scope.kind == CompanyScope.Kind.COMPANY and scope.area_key == CompanyScope.AreaKey.COMPANY:
+        return scope
+
+    raise ValidationError({'scopeId': 'select company-wide or a project'})
 
 
 # GitHub 웹훅은 로그인 없이 호출되므로 서명이 맞는 요청만 받는다.
@@ -348,7 +375,7 @@ class SourceFileListCreateView(APIView):
             connection__kind=Connection.Kind.LOCAL,
             connection__disconnected_at__isnull=True,
             removed_at__isnull=True,
-        )
+        ).select_related('scope')
 
         return paged_response(LocalFileSerializer, files, request)
 
@@ -369,14 +396,18 @@ class SourceFileListCreateView(APIView):
     )
     def post(self, request, company_id):
         company = get_owner_company(request.user, company_id)
-        serializer = LocalFileUploadCreateSerializer(data=request.data)
+        serializer = LocalFileUploadCreateSerializer(
+            data=request.data, context={'company': company}
+        )
         serializer.is_valid(raise_exception=True)
+        scope = _local_file_scope(company, serializer.validated_data.get('scope'))
 
         item, upload_target = create_local_file(
             company,
             serializer.validated_data['fileName'],
             serializer.validated_data['mimeType'],
             serializer.validated_data['size'],
+            scope=scope,
         )
         response_serializer = LocalFileUploadResultSerializer({
             'sourceFile': item,
@@ -414,6 +445,35 @@ class SourceFileDetailView(APIView):
         remove_local_file(item)
 
         return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class SourceFileOpenView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    @swagger_auto_schema(
+        operation_summary='로컬 파일 원본 열기',
+        operation_description=(
+            '권한을 확인한 뒤 짧게 만료되는 S3 원본 파일 URL로 이동합니다.'
+        ),
+        responses={
+            302: 'S3 presigned URL로 이동',
+            401: '인증되지 않음',
+            403: '회사 접근 권한 없음',
+            404: '회사 또는 파일을 찾을 수 없음',
+        },
+        tags=['Source'],
+    )
+    def get(self, request, company_id, item_id):
+        company = get_member_company(request.user, company_id)
+        item = get_object_or_404(
+            Item,
+            id=item_id,
+            company=company,
+            connection__kind=Connection.Kind.LOCAL,
+            removed_at__isnull=True,
+        )
+
+        return HttpResponseRedirect(open_local_file(item))
 
 
 class SourceChannelListView(APIView):
@@ -782,7 +842,9 @@ class IngestionJobListCreateView(APIView):
     )
     def post(self, request, company_id):
         company = get_owner_company(request.user, company_id)
-        serializer = IngestionJobCreateSerializer(data=request.data)
+        serializer = IngestionJobCreateSerializer(
+            data=request.data, context={'company': company}
+        )
         serializer.is_valid(raise_exception=True)
         provider = serializer.validated_data['provider']
         connection = get_object_or_404(
@@ -801,6 +863,10 @@ class IngestionJobListCreateView(APIView):
         if not item_ids:
             reason = 'no matching item' if requested_ids else 'no item registered'
             raise ValidationError(reason, code=NO_INGESTION_TARGET)
+
+        if provider == Connection.Kind.LOCAL:
+            scope = _local_file_scope(company, serializer.validated_data.get('scope'))
+            items.update(scope=scope, is_scope_confirmed=True)
 
         job = IngestionJob.objects.create(
             company=company, connection=connection, item_ids=item_ids

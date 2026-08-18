@@ -851,6 +851,111 @@ class IngestionTests(TestCase):
         self.classify_mock.assert_not_called()
 
 
+class LocalFileIngestionApiTests(TestCase):
+    def setUp(self):
+        self.company = Company.objects.create(name='에코랩', code='TESTCODE2')
+        self.owner = User.objects.create_user(
+            email='owner@example.com', password='pw', display_name='대표'
+        )
+        Membership.objects.create(
+            user=self.owner, company=self.company, role=Membership.Role.OWNER
+        )
+        self.member = User.objects.create_user(
+            email='member@example.com', password='pw', display_name='팀원'
+        )
+        Membership.objects.create(
+            user=self.member, company=self.company, role=Membership.Role.MEMBER
+        )
+        self.company_scope = CompanyScope.objects.create(
+            company=self.company,
+            kind=CompanyScope.Kind.COMPANY,
+            area_key=CompanyScope.AreaKey.COMPANY,
+            name='Company',
+        )
+        self.people_scope = CompanyScope.objects.create(
+            company=self.company,
+            kind=CompanyScope.Kind.COMPANY,
+            area_key=CompanyScope.AreaKey.PEOPLE,
+            name='People',
+        )
+        self.project = CompanyScope.objects.create(
+            company=self.company,
+            kind=CompanyScope.Kind.PROJECT,
+            name='payment-api',
+        )
+        self.connection = Connection.objects.create(
+            company=self.company, kind=Connection.Kind.LOCAL
+        )
+        self.item = Item.objects.create(
+            company=self.company,
+            connection=self.connection,
+            external_id='file-1',
+            label='개발규칙.pdf',
+            storage_key='companies/1/local/file-1.pdf',
+            mime_type='application/pdf',
+            byte_size=100,
+        )
+        self.client = APIClient()
+        self.client.force_authenticate(user=self.owner)
+        self.url = f'/api/companies/{self.company.id}/ingestion-jobs'
+
+    def test_local_collect_sets_selected_project_scope(self):
+        response = self.client.post(
+            self.url,
+            {
+                'provider': 'LOCAL',
+                'itemIds': [self.item.id],
+                'scopeId': self.project.id,
+            },
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 202)
+        self.item.refresh_from_db()
+        self.assertEqual(self.item.scope, self.project)
+        self.assertTrue(self.item.is_scope_confirmed)
+
+    def test_local_collect_without_scope_uses_company_wide(self):
+        response = self.client.post(
+            self.url,
+            {'provider': 'LOCAL', 'itemIds': [self.item.id]},
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 202)
+        self.item.refresh_from_db()
+        self.assertEqual(self.item.scope, self.company_scope)
+
+    def test_local_collect_rejects_company_category_scope(self):
+        response = self.client.post(
+            self.url,
+            {
+                'provider': 'LOCAL',
+                'itemIds': [self.item.id],
+                'scopeId': self.people_scope.id,
+            },
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.item.refresh_from_db()
+        self.assertIsNone(self.item.scope)
+
+    def test_local_file_open_redirects_to_presigned_url(self):
+        self.client.force_authenticate(user=self.member)
+        with patch(
+            'sources.services.create_download_url',
+            return_value='https://s3.example.com/file',
+        ) as presign:
+            response = self.client.get(
+                f'/api/companies/{self.company.id}/source-files/{self.item.id}/open'
+            )
+
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response['Location'], 'https://s3.example.com/file')
+        presign.assert_called_once_with(self.item.storage_key, self.item.label)
+
+
 class NormalizeSlackTextTests(SimpleTestCase):
     CHANNELS = {'C001': '#dev'}
     USERS = {'U001': '조상원'}

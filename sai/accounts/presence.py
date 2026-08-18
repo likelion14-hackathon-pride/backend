@@ -27,8 +27,12 @@ def _company_is_working(company, now):
 
 def is_online(user, now=None, company=None):
     now = now or timezone.now()
-    if company is not None and company.working_hours_enabled:
-        return _company_is_working(company, now)
+    if (
+        company is not None
+        and company.working_hours_enabled
+        and _company_is_working(company, now)
+    ):
+        return True
 
     if user is None or user.last_seen_at is None:
         return False
