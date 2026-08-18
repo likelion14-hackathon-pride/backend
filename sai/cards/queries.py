@@ -27,7 +27,8 @@ def cards_for(company):
     return (
         InstructionCard.objects.filter(company=company)
         .select_related(
-            'assignee', 'scope', 'document', 'document__item', 'document__author_identity'
+            'assignee', 'scope', 'document', 'document__item',
+            'document__item__connection', 'document__author_identity'
         )
         .annotate(
             duplicate_count=Count('duplicates', distinct=True),
