@@ -99,9 +99,10 @@ class OnboardingQuestionTests(TestCase):
         response = self.answer('fq16', spec.choices[0].label)
 
         self.assertEqual(response.status_code, 200)
-        entry = self.entry('머지 승인 조건')
+        entry = self.entry(spec.choices[0].body_ko)
         self.assertEqual(entry.status, HandbookEntry.Status.CONFIRMED)
         self.assertEqual(entry.origin, HandbookEntry.Origin.ONBOARDING)
+        self.assertEqual(entry.title_en, spec.choices[0].body_en)
         self.assertEqual(entry.body_ko, spec.choices[0].body_ko)
         self.assertEqual(entry.body_en, spec.choices[0].body_en)
 
@@ -110,19 +111,22 @@ class OnboardingQuestionTests(TestCase):
         self.answer('fq16', questions.find('fq16').choices[0].label)
         self.answer('fq10', questions.find('fq10').choices[0].label)
 
-        self.assertEqual(self.entry('머지 승인 조건').scope.area_key, 'PRODUCT_ENG')
-        self.assertEqual(self.entry('연차와 병가').scope.area_key, 'PEOPLE')
+        merge = questions.find('fq16').choices[0]
+        leave = questions.find('fq10').choices[0]
+        self.assertEqual(self.entry(merge.body_ko).scope.area_key, 'PRODUCT_ENG')
+        self.assertEqual(self.entry(leave.body_ko).scope.area_key, 'PEOPLE')
 
     def test_ai_question_goes_to_security(self):
-        self.answer('fq14', questions.find('fq14').choices[1].label)
+        choice = questions.find('fq14').choices[1]
+        self.answer('fq14', choice.label)
 
-        self.assertEqual(self.entry('AI 코딩 도구 사용').scope.area_key, 'SECURITY')
+        self.assertEqual(self.entry(choice.body_ko).scope.area_key, 'SECURITY')
 
     # 직접 입력한 답은 미리 쓸 수 없다. 영어는 확정 시 번역이 채운다.
     def test_free_text_answer_has_no_english_yet(self):
         self.answer('fq1', '원격 개발팀이 사수 없이도 같은 기준으로 판단하게 만든다')
 
-        entry = self.entry('우리가 푸는 문제')
+        entry = self.entry('원격 개발팀이 사수 없이도 같은 기준으로 판단하게 만든다')
         self.assertEqual(entry.body_ko, '원격 개발팀이 사수 없이도 같은 기준으로 판단하게 만든다')
         self.assertIsNone(entry.body_en)
         self.assertIsNone(entry.translated_at)
@@ -131,7 +135,7 @@ class OnboardingQuestionTests(TestCase):
     def test_edited_choice_is_treated_as_free_text(self):
         self.answer('fq16', '리드 2명 승인 후 병합합니다')
 
-        entry = self.entry('머지 승인 조건')
+        entry = self.entry('리드 2명 승인 후 병합합니다')
         self.assertEqual(entry.body_ko, '리드 2명 승인 후 병합합니다')
         self.assertIsNone(entry.body_en)
 
@@ -141,7 +145,7 @@ class OnboardingQuestionTests(TestCase):
         self.answer('fq16', spec.choices[1].label)
 
         self.assertEqual(HandbookEntry.objects.filter(company=self.company).count(), 1)
-        self.assertEqual(self.entry('머지 승인 조건').body_ko, spec.choices[1].body_ko)
+        self.assertEqual(self.entry(spec.choices[1].body_ko).body_ko, spec.choices[1].body_ko)
         self.assertEqual(Question.objects.count(), 1)
 
     # --- 출처 ---
@@ -152,7 +156,7 @@ class OnboardingQuestionTests(TestCase):
         spec = questions.find('fq16')
         self.answer('fq16', spec.choices[0].label)
 
-        evidence = HandbookEvidence.objects.get(entry=self.entry('머지 승인 조건'))
+        evidence = HandbookEvidence.objects.get(entry=self.entry(spec.choices[0].body_ko))
         self.assertEqual(evidence.tag, HandbookEvidence.Tag.OWNER)
         self.assertEqual(evidence.source_label, DAY0_SOURCE)
         self.assertEqual(evidence.quote, spec.choices[0].body_ko)
@@ -172,7 +176,8 @@ class OnboardingQuestionTests(TestCase):
         listed = self.client.get(
             f'/api/companies/{self.company.id}/handbook/entries'
         ).data['items']
-        source = next(i['source'] for i in listed if i['title'] == '머지 승인 조건')
+        title = questions.find('fq16').choices[0].body_ko
+        source = next(i['source'] for i in listed if i['title'] == title)
 
         self.assertEqual(source['label'], DAY0_SOURCE)
         self.assertEqual(source['tag'], 'OWNER')
@@ -197,7 +202,7 @@ class OnboardingQuestionTests(TestCase):
     # 남겨 두면 화면이 그 id 로 규칙을 열다 404 를 받는다.
     def test_a_deleted_rule_is_not_reported_as_the_created_entry(self):
         self.answer('fq16', questions.find('fq16').choices[0].label)
-        entry = self.entry('머지 승인 조건')
+        entry = self.entry(questions.find('fq16').choices[0].body_ko)
         entry.deleted_at = timezone.now()
         entry.save(update_fields=['deleted_at'])
 
@@ -213,7 +218,7 @@ class OnboardingQuestionTests(TestCase):
         spec = questions.find('pq7')
         self.answer('pq7', spec.choices[0].label, scope=self.project)
 
-        self.assertEqual(self.entry('일정 산정 방식').scope, self.project)
+        self.assertEqual(self.entry(spec.choices[0].body_ko).scope, self.project)
 
     # 같은 질문을 프로젝트마다 따로 답할 수 있어야 한다.
     def test_same_question_answered_per_project(self):
