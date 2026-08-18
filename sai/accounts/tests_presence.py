@@ -1,4 +1,5 @@
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone as dt_timezone
+from unittest.mock import patch
 
 from django.core.cache import cache
 from django.test import TestCase
@@ -85,6 +86,8 @@ class PresenceTests(TestCase):
     def test_the_member_list_shows_who_is_online(self):
         self.member.last_seen_at = timezone.now()
         self.member.save(update_fields=['last_seen_at'])
+        self.company.working_hours_enabled = False
+        self.company.save(update_fields=['working_hours_enabled'])
         self.client.force_authenticate(user=self.owner)
 
         response = self.client.get(f'/api/companies/{self.company.id}/members')
@@ -93,10 +96,32 @@ class PresenceTests(TestCase):
         self.assertTrue(by_id[self.member.id]['online'])
         self.assertIsNotNone(by_id[self.member.id]['lastSeenAt'])
 
+    def test_member_list_marks_everyone_online_during_working_hours(self):
+        self.client.force_authenticate(user=self.owner)
+        now = datetime(2026, 8, 18, 1, 0, tzinfo=dt_timezone.utc)
+
+        with patch('accounts.presence.timezone.now', return_value=now):
+            response = self.client.get(f'/api/companies/{self.company.id}/members')
+
+        by_id = {item['user']['id']: item['user'] for item in response.data['items']}
+        self.assertTrue(by_id[self.owner.id]['online'])
+        self.assertTrue(by_id[self.member.id]['online'])
+
+    def test_me_is_online_during_working_hours_without_recent_visit(self):
+        self.client.force_authenticate(user=self.owner)
+        now = datetime(2026, 8, 18, 1, 0, tzinfo=dt_timezone.utc)
+
+        with patch('accounts.presence.timezone.now', return_value=now):
+            response = self.client.get('/api/me')
+
+        self.assertTrue(response.data['user']['online'])
+
     def test_a_member_who_never_visited_is_not_online(self):
         self.client.force_authenticate(user=self.owner)
+        now = datetime(2026, 8, 18, 14, 0, tzinfo=dt_timezone.utc)
 
-        response = self.client.get(f'/api/companies/{self.company.id}/members')
+        with patch('accounts.presence.timezone.now', return_value=now):
+            response = self.client.get(f'/api/companies/{self.company.id}/members')
 
         by_id = {item['user']['id']: item['user'] for item in response.data['items']}
         self.assertFalse(by_id[self.member.id]['online'])

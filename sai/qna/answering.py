@@ -377,7 +377,7 @@ def _risk_note(keyword):
 
 
 # 질문과 답변에 회사가 등록한 위험 키워드가 들어 있으면 안내 문구를 함께 돌려준다.
-def find_risk_warnings(company, *texts):
+def find_risk_warnings(company, *texts, english=False):
     haystack = ' '.join(t for t in texts if t).lower()
     warnings = []
 
@@ -385,9 +385,9 @@ def find_risk_warnings(company, *texts):
         words = [keyword.word] + list(keyword.aliases or [])
         if any(word and word.lower() in haystack for word in words):
             warnings.append({
-                'keyword': _risk_keyword_label(keyword),
+                'keyword': _risk_keyword_label(keyword) if english else keyword.word,
                 'level': keyword.level,
-                'note': _risk_note(keyword),
+                'note': _risk_note(keyword) if english else keyword.note,
             })
 
     return warnings

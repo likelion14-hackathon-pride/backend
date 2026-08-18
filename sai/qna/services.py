@@ -331,6 +331,6 @@ def _ask(company, user, thread, question, scope, context):
         'answer': result.answer or None,
         'draftKo': result.draft_ko or None,
         'citations': [source.payload() for source in cited],
-        'warnings': find_risk_warnings(company, question, result.answer),
+        'warnings': find_risk_warnings(company, question, result.answer, english=True),
         'latencyMs': usage['latencyMs'],
     }

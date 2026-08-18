@@ -235,7 +235,7 @@ class MeView(APIView):
 
         return Response(
             {
-                'user': UserSerializer(user).data,
+                'user': UserSerializer(user, context={'company': membership.company}).data,
                 'membership': MembershipSerializer(membership).data,
                 'company': CompanySerializer(membership.company).data,
             },
