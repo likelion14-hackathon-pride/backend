@@ -50,6 +50,8 @@ class SchedulingTests(TestCase):
             kind=kind, item_ids=[self.item.id], status=status,
         )
         IngestionJob.objects.filter(id=job.id).update(created_at=self.now - created_ago)
+        if kind == IngestionJob.Kind.COLLECT and status == IngestionJob.Status.SUCCEEDED:
+            Item.objects.filter(id=self.item.id).update(last_synced_at=self.now - created_ago)
 
         return job
 
@@ -174,6 +176,41 @@ class SchedulingTests(TestCase):
         self.job(IngestionJob.Kind.COLLECT, timedelta(minutes=5))
 
         self.assertEqual(enqueue_due_jobs(self.now), [])
+
+    # 최초 수집은 주기를 기다리지 않는다. 방금 수집을 돌린 직후 채널을 담아도 바로 읽는다.
+    def test_new_channel_does_not_wait_for_the_interval(self):
+        self.item.last_synced_at = self.now
+        self.item.save(update_fields=['last_synced_at'])
+        self.job(IngestionJob.Kind.COLLECT, timedelta(minutes=5))
+        fresh = Item.objects.create(
+            company=self.company, connection=self.connection,
+            external_id='C002', label='#new',
+        )
+
+        jobs = enqueue_due_jobs(self.now)
+
+        self.assertEqual(len(jobs), 1)
+        self.assertEqual(jobs[0].kind, IngestionJob.Kind.COLLECT)
+        self.assertEqual(jobs[0].item_ids, [fresh.id])
+
+    # 최초 수집이 실패한 채널이 60초마다 되살아나면 슬랙과 OpenAI 한도만 태운다.
+    def test_failed_first_channel_collect_waits_before_retry(self):
+        self.item.last_synced_at = self.now
+        self.item.save(update_fields=['last_synced_at'])
+        fresh = Item.objects.create(
+            company=self.company, connection=self.connection,
+            external_id='C002', label='#new',
+        )
+        IngestionJob.objects.create(
+            company=self.company, connection=self.connection,
+            kind=IngestionJob.Kind.COLLECT, item_ids=[fresh.id],
+            status=IngestionJob.Status.FAILED,
+        )
+
+        self.assertEqual(enqueue_due_jobs(self.now), [])
+        self.assertEqual(
+            len(enqueue_due_jobs(self.now + RETRY_AFTER + timedelta(minutes=1))), 1
+        )
 
     # 깃헙 웹훅도 COLLECT 를 만든다. 소스를 구분하지 않으면 푸시 한 번에
     # 슬랙 수집이 12시간 밀린다.
