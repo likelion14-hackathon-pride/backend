@@ -5,6 +5,7 @@ from django.utils import timezone
 from rest_framework.test import APIClient
 
 from accounts.models import Membership, User
+from cards.models import Blank, InstructionCard
 from companies.models import Company
 from handbook.models import CompanyScope, HandbookEntry, HandbookEvidence
 from sources.models import Connection, Identity, Item
@@ -181,6 +182,38 @@ class EscalationTests(TestCase):
         text = post.call_args[0][1]
         self.assertIn('Alex', text)
         self.assertIn('대표님, 연차는 며칠인지 확인 부탁드립니다.', text)
+
+    def test_send_from_general_ask_creates_waiting_card(self):
+        escalation_id = self.create().data['id']
+
+        self.send(escalation_id)
+
+        card = InstructionCard.objects.get()
+        self.assertIsNone(card.document)
+        self.assertEqual(card.assignee, self.member)
+        self.assertEqual(card.purpose_en, 'How many vacation days do I get?')
+        self.assertEqual(card.status, InstructionCard.Status.IN_PROGRESS)
+
+        blank = Blank.objects.get(card=card)
+        self.assertEqual(blank.escalation_id, escalation_id)
+
+        response = self.client.get(f'/api/companies/{self.company.id}/cards')
+        self.assertEqual(response.data['items'][0]['column'], InstructionCard.Column.WAITING)
+
+    def test_send_from_card_ask_does_not_create_an_extra_card(self):
+        card = InstructionCard.objects.create(
+            company=self.company, scope=self.scope, assignee=self.member,
+            purpose='로그를 확인한다', purpose_en='Check the logs',
+        )
+        self.thread.card = card
+        self.thread.scope = self.scope
+        self.thread.save(update_fields=['card', 'scope'])
+        escalation_id = self.create().data['id']
+
+        self.send(escalation_id)
+
+        self.assertEqual(InstructionCard.objects.count(), 1)
+        self.assertEqual(Blank.objects.get().card, card)
 
     def test_cannot_send_twice(self):
         escalation_id = self.create().data['id']

@@ -7,7 +7,7 @@ from django.utils import timezone
 from openai import OpenAIError
 from rest_framework.exceptions import ValidationError
 
-from cards.models import Blank
+from cards.models import Blank, InstructionCard
 from config.errors import (
     AI_UNAVAILABLE,
     DRAFT_REQUIRED,
@@ -117,6 +117,30 @@ def create_escalation(company, user, question_en, draft_ko, scope=None, origin=N
             blank.save(update_fields=['escalation'])
 
     return escalation
+
+
+def ensure_waiting_card(escalation):
+    if escalation.card_blanks.exists():
+        return None
+    if escalation.origin_message is None or escalation.origin_message.thread.card_id:
+        return None
+
+    card = InstructionCard.objects.create(
+        company=escalation.company,
+        scope=escalation.scope,
+        assignee=escalation.asked_by,
+        purpose=escalation.draft_ko,
+        purpose_en=escalation.question_en,
+        status=InstructionCard.Status.IN_PROGRESS,
+    )
+    Blank.objects.create(
+        company=escalation.company,
+        card=card,
+        question_en=escalation.question_en,
+        escalation=escalation,
+    )
+
+    return card
 
 
 # 대표 답장을 회수해 판정한다. 아직 답이 없으면 아무것도 바꾸지 않는다.
