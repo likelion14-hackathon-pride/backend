@@ -142,7 +142,7 @@ class UserSerializer(serializers.ModelSerializer):
 
     @swagger_serializer_method(serializer_or_field=serializers.BooleanField)
     def get_online(self, obj):
-        return is_online(obj)
+        return is_online(obj, company=self.context.get('company'))
 
 
 # 근무 위치와 담당 역할. 가입 직후 초기 설정 화면과 설정 모달이 같은 값을 쓴다.
@@ -198,7 +198,7 @@ class MembershipSerializer(serializers.ModelSerializer):
     userId = serializers.IntegerField(source='user_id', read_only=True)
     companyId = serializers.IntegerField(source='company_id', read_only=True)
     status = serializers.SerializerMethodField()
-    user = UserSerializer(read_only=True)
+    user = serializers.SerializerMethodField()
     slackHandle = serializers.SerializerMethodField()
 
     class Meta:
@@ -209,6 +209,9 @@ class MembershipSerializer(serializers.ModelSerializer):
         if obj.left_at:
             return 'LEFT'
         return 'ACTIVE'
+
+    def get_user(self, obj):
+        return UserSerializer(obj.user, context={'company': obj.company}).data
 
     # 연결된 슬랙 계정 표시명. null이면 아직 매칭되지 않은 것이다.
     # 슬랙 이메일과 가입 이메일이 같아야 수집 작업이 이어 준다.
