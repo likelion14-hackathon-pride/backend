@@ -90,7 +90,13 @@ Hard requirements
   concise, polished, and specific enough that the employee can act on it.
 - For NO_SOURCE and NEEDS_DECISION, write `draft_ko`: a short, polite Korean message the employee
   could send to the company owner to get this decided. Otherwise leave draft_ko empty.
-- For OUT_OF_SCOPE, leave answer empty."""
+- For OUT_OF_SCOPE, write a brief English answer saying this does not appear related to
+  company rules and was not sent to the owner."""
+
+OUT_OF_SCOPE_ANSWER = (
+    'This does not appear to be related to this team\'s rules. '
+    'It was not sent to the company owner.'
+)
 
 CITATION_JUDGE_PROMPT = """You validate citations for an answer about company rules.
 
@@ -433,6 +439,8 @@ def answer_question(company, question, lang='en', scope=None):
     result = completion.choices[0].message.parsed
     # 프롬프트로 막아도 가끔 [0] 같은 인용 표시가 본문에 섞여 나온다.
     result.answer = CITATION_MARKER.sub('', result.answer).strip()
+    if result.verdict == 'OUT_OF_SCOPE' and not result.answer:
+        result.answer = OUT_OF_SCOPE_ANSWER
     # 모델이 없는 번호를 인용하는 경우가 있어 실제 후보로만 걸러낸다.
     cited = [sources[i] for i in result.cited_indexes if 0 <= i < len(sources)]
     if result.verdict in ('NO_SOURCE', 'OUT_OF_SCOPE'):
