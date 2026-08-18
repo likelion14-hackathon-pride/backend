@@ -406,8 +406,26 @@ class AskTests(TestCase):
 
         response = self.ask(question='Can I connect to the production db?')
 
-        self.assertEqual(response.data['warnings'][0]['keyword'], '프로덕션 DB')
+        self.assertEqual(response.data['warnings'][0]['keyword'], 'production db')
         self.assertEqual(response.data['warnings'][0]['level'], 'DANGER')
+        self.assertEqual(
+            response.data['warnings'][0]['note'],
+            'Check with the company owner before proceeding.',
+        )
+
+    def test_risk_warning_uses_english_alias_and_note(self):
+        RiskKeyword.objects.create(
+            company=self.company, word='롤백', aliases=['rollback'],
+            note='대표님께 먼저 확인하세요.', level=RiskKeyword.Level.DANGER,
+        )
+
+        response = self.ask(question='Can I rollback?')
+
+        self.assertEqual(response.data['warnings'][0]['keyword'], 'rollback')
+        self.assertEqual(
+            response.data['warnings'][0]['note'],
+            'Check with the company owner before proceeding.',
+        )
 
     def test_no_warning_when_keyword_absent(self):
         RiskKeyword.objects.create(
