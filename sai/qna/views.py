@@ -51,6 +51,7 @@ from .services import (
     draft_for_blank,
     draft_from_message,
     korean_additions,
+    ensure_waiting_card,
     open_thread,
     promote_to_entry,
     proposal_for,
@@ -335,6 +336,7 @@ class EscalationSendView(APIView):
         additions = korean_additions(serializer.validated_data.get('extraEn'))
         # SlackError 는 DomainError 라서 슬랙이 돌려준 코드가 그대로 봉투의 code 가 된다.
         escalation = send_to_slack(escalation, item, additions)
+        ensure_waiting_card(escalation)
 
         return Response(EscalationSerializer(escalation).data, status=status.HTTP_200_OK)
 
