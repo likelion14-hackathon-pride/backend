@@ -1,5 +1,6 @@
 import re
 import time
+import logging
 from dataclasses import dataclass
 from typing import Literal
 
@@ -16,6 +17,8 @@ from handbook.retrieval import search_rules
 from handbook.services import scopes_in_view
 from policy.models import RiskKeyword
 from sources.models import Chunk
+
+logger = logging.getLogger(__name__)
 
 # 프롬프트를 고치면 올린다. Message.prompt_version 에 기록된다.
 PROMPT_VERSION = 'ask-v5'
@@ -89,6 +92,14 @@ Hard requirements
   could send to the company owner to get this decided. Otherwise leave draft_ko empty.
 - For OUT_OF_SCOPE, leave answer empty."""
 
+CITATION_JUDGE_PROMPT = """You validate citations for an answer about company rules.
+
+Keep only candidate sources that directly support at least one concrete claim in the answer.
+Drop sources that are merely adjacent, broadly related, about a similar schedule/calendar topic,
+or useful background but not needed to justify the answer.
+
+Return only the indexes of supported candidates. Do not add new citations."""
+
 
 # OpenAI 사용량 한도에 걸린 경우. 잠시 뒤 다시 시도하면 되는 상황이라
 # 서버 장애와 구분해서 알려 준다.
@@ -154,6 +165,10 @@ class AnswerResult(BaseModel):
     answer: str
     cited_indexes: list[int]
     draft_ko: str
+
+
+class CitationJudgeResult(BaseModel):
+    supported_indexes: list[int]
 
 
 # 사용자가 화면에서 기다리는 요청이다.
@@ -273,6 +288,57 @@ def _render_case(chunk, index):
     return f'[{index}] {author} in {document.item.label}, {when}\n    {chunk.text}'
 
 
+def _citation_text(source, index):
+    if source.entry:
+        entry = source.entry
+        body = entry.body_en or entry.body_ko or ''
+        kind = 'company-wide' if entry.scope.kind == CompanyScope.Kind.COMPANY else 'project'
+        return f'[{index}] rule scope={entry.scope.name} ({kind}) title={entry.title}\n{body}'
+
+    chunk = source.chunk
+    document = chunk.document
+    return f'[{index}] case channel={document.item.label}\n{chunk.text_en or chunk.text}'
+
+
+def _judge_citations(client, question, answer, cited):
+    if not cited or not answer:
+        return []
+    if len(cited) == 1:
+        return cited
+
+    candidates = '\n\n'.join(
+        _citation_text(source, index) for index, source in enumerate(cited)
+    )
+    try:
+        with timed_call(settings.OPENAI_CLASSIFIER_MODEL):
+            completion = client.chat.completions.parse(
+                model=settings.OPENAI_CLASSIFIER_MODEL,
+                messages=[
+                    {'role': 'system', 'content': CITATION_JUDGE_PROMPT},
+                    {
+                        'role': 'user',
+                        'content': (
+                            f'Question:\n{question}\n\n'
+                            f'Answer:\n{answer}\n\n'
+                            f'Candidate sources:\n{candidates}'
+                        ),
+                    },
+                ],
+                response_format=CitationJudgeResult,
+                **generation_options(
+                    settings.OPENAI_CLASSIFIER_MODEL,
+                    reasoning_effort=settings.OPENAI_CLASSIFIER_REASONING_EFFORT,
+                    verbosity=settings.OPENAI_CLASSIFIER_VERBOSITY,
+                ),
+            )
+        supported = set(completion.choices[0].message.parsed.supported_indexes)
+    except (OpenAIError, ValueError, RuntimeError, AttributeError) as exc:
+        logger.warning('citation judge failed: %s', type(exc).__name__)
+        return cited
+
+    return [source for index, source in enumerate(cited) if index in supported]
+
+
 # 질문과 답변에 회사가 등록한 위험 키워드가 들어 있으면 안내 문구를 함께 돌려준다.
 def find_risk_warnings(company, *texts):
     haystack = ' '.join(t for t in texts if t).lower()
@@ -375,6 +441,7 @@ def answer_question(company, question, lang='en', scope=None):
         cited = [source for source in cited if source.entry]
     elif result.verdict == 'GROUNDED_BY_CASES':
         cited = [source for source in cited if source.chunk]
+    cited = _judge_citations(client, question, result.answer, cited)
     usage = {
         'model': settings.OPENAI_ANSWER_MODEL,
         'promptTokens': prompt_tokens,
