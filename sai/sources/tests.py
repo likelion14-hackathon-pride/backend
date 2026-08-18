@@ -2,6 +2,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from django.core.exceptions import ImproperlyConfigured
+from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import SimpleTestCase, TestCase, override_settings
 from django.utils import timezone
 from rest_framework.test import APIClient
@@ -940,6 +941,29 @@ class LocalFileIngestionApiTests(TestCase):
         self.assertEqual(response.status_code, 400)
         self.item.refresh_from_db()
         self.assertIsNone(self.item.scope)
+
+    def test_direct_upload_stores_file_and_queues_collection(self):
+        file_obj = SimpleUploadedFile(
+            'dev-rules.txt',
+            '백엔드 배포는 AWS EC2로 진행합니다.'.encode(),
+            content_type='text/plain',
+        )
+
+        with patch('sources.services.upload_file') as upload:
+            response = self.client.post(
+                f'/api/companies/{self.company.id}/source-files',
+                {'file': file_obj, 'scopeId': self.project.id},
+                format='multipart',
+            )
+
+        self.assertEqual(response.status_code, 201)
+        item = Item.objects.get(id=response.data['sourceFile']['id'])
+        self.assertEqual(item.scope, self.project)
+        self.assertTrue(item.is_scope_confirmed)
+        self.assertIsNone(response.data['uploadTarget'])
+        self.assertEqual(response.data['ingestionJob']['kind'], IngestionJob.Kind.COLLECT)
+        self.assertEqual(response.data['ingestionJob']['itemIds'], [item.id])
+        upload.assert_called_once()
 
     def test_local_file_open_redirects_to_presigned_url(self):
         self.client.force_authenticate(user=self.member)

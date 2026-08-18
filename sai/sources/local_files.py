@@ -36,6 +36,20 @@ def create_upload_target(storage_key, mime_type):
         raise LocalFileStorageError(STORAGE_UNAVAILABLE) from exc
 
 
+def upload_file(storage_key, file_obj, mime_type):
+    client = boto3.client('s3', region_name=settings.AWS_S3_REGION_NAME)
+
+    try:
+        client.put_object(
+            Bucket=settings.AWS_STORAGE_BUCKET_NAME,
+            Key=storage_key,
+            Body=file_obj,
+            ContentType=mime_type,
+        )
+    except (BotoCoreError, ClientError) as exc:
+        raise LocalFileStorageError(STORAGE_UNAVAILABLE) from exc
+
+
 def create_download_url(storage_key, file_name=None):
     client = boto3.client('s3', region_name=settings.AWS_S3_REGION_NAME)
     params = {

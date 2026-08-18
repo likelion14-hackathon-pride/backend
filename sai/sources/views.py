@@ -70,6 +70,7 @@ from .services import (
     connect_github,
     connect_slack,
     create_local_file,
+    create_uploaded_local_file,
     disconnect,
     list_available_channels,
     list_available_repositories,
@@ -380,10 +381,12 @@ class SourceFileListCreateView(APIView):
         return paged_response(LocalFileSerializer, files, request)
 
     @swagger_auto_schema(
-        operation_summary='로컬 파일 업로드 메타 생성',
+        operation_summary='로컬 파일 업로드',
         operation_description=(
-            '파일 정보를 저장하고 S3에 직접 업로드할 수 있는 15분 유효 URL을 반환합니다.'
+            'multipart file 이 있으면 서버가 S3에 저장하고 즉시 LOCAL 수집 작업을 큐에 넣습니다. '
+            'file 없이 메타데이터만 보내면 기존처럼 S3 직접 업로드용 15분 유효 URL을 반환합니다.'
         ),
+        consumes=['multipart/form-data', 'application/json'],
         request_body=LocalFileUploadCreateSerializer,
         responses={
             201: LocalFileUploadResultSerializer(),
@@ -401,6 +404,33 @@ class SourceFileListCreateView(APIView):
         )
         serializer.is_valid(raise_exception=True)
         scope = _local_file_scope(company, serializer.validated_data.get('scope'))
+        uploaded = serializer.validated_data.get('file')
+
+        if uploaded is not None:
+            item = create_uploaded_local_file(
+                company,
+                uploaded,
+                serializer.validated_data['fileName'],
+                serializer.validated_data['mimeType'],
+                serializer.validated_data['size'],
+                scope=scope,
+            )
+            job = IngestionJob.objects.create(
+                company=company,
+                connection=item.connection,
+                kind=IngestionJob.Kind.COLLECT,
+                item_ids=[item.id],
+            )
+            if settings.INGESTION_RUN_INLINE:
+                drain(limit=1)
+                job.refresh_from_db()
+            response_serializer = LocalFileUploadResultSerializer({
+                'sourceFile': item,
+                'uploadTarget': None,
+                'ingestionJob': IngestionJobSerializer(job).data,
+            })
+
+            return Response(response_serializer.data, status=status.HTTP_201_CREATED)
 
         item, upload_target = create_local_file(
             company,
@@ -412,6 +442,7 @@ class SourceFileListCreateView(APIView):
         response_serializer = LocalFileUploadResultSerializer({
             'sourceFile': item,
             'uploadTarget': upload_target,
+            'ingestionJob': None,
         })
 
         return Response(response_serializer.data, status=status.HTTP_201_CREATED)
