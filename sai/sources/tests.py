@@ -32,7 +32,10 @@ JOINED = [
     {'id': 'C001', 'name': 'general', 'is_member': True, 'is_private': False},
     {'id': 'C002', 'name': 'payment-api', 'is_member': True, 'is_private': False},
 ]
-NOT_JOINED_PUBLIC = {'id': 'C003', 'name': 'design', 'is_member': False, 'is_private': False}
+NOT_JOINED_PUBLIC = {
+    'id': 'C003', 'name': 'design', 'is_member': False,
+    'is_private': False, 'num_members': 7,
+}
 JOINED_PRIVATE = {'id': 'G001', 'name': 'exec', 'is_member': True, 'is_private': True}
 NOT_JOINED_PRIVATE = {'id': 'G002', 'name': 'secret', 'is_member': False, 'is_private': True}
 ALL_CHANNELS = JOINED + [NOT_JOINED_PUBLIC, JOINED_PRIVATE]
@@ -254,6 +257,16 @@ class ChannelTests(TestCase):
         self.assertEqual([c['externalId'] for c in response.data['items']], ['C003'])
         self.assertFalse(response.data['items'][0]['isPrivate'])
         self.assertFalse(response.data['items'][0]['isMember'])
+        self.assertEqual(response.data['items'][0]['memberCount'], 7)
+
+    def test_available_channel_without_member_count_returns_null(self):
+        channel = {**NOT_JOINED_PUBLIC}
+        channel.pop('num_members')
+        with patch('sources.services.SlackClient.list_channels', return_value=[channel]):
+            response = self.client.get(f'{self.base}/available')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIsNone(response.data['items'][0]['memberCount'])
 
     def test_available_surfaces_slack_error(self):
         with patch('sources.services.SlackClient.list_channels', side_effect=SlackError('missing_scope')):

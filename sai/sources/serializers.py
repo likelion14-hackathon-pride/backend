@@ -64,6 +64,7 @@ class AvailableChannelSerializer(serializers.Serializer):
     label = serializers.CharField(read_only=True)
     isPrivate = serializers.BooleanField(read_only=True)
     isMember = serializers.BooleanField(read_only=True)
+    memberCount = serializers.IntegerField(read_only=True, allow_null=True)
 
 
 class AvailableChannelListSerializer(serializers.Serializer):

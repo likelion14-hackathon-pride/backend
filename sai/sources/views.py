@@ -567,7 +567,8 @@ class SourceAvailableChannelListView(APIView):
         operation_description=(
             '아직 수집 대상으로 등록되지 않은 워크스페이스 채널입니다. '
             'isMember가 false인 공개 채널은 추가 시 봇이 자동으로 참여합니다. '
-            '봇이 참여하지 않은 비공개 채널은 슬랙 특성상 목록에 나타나지 않습니다.'
+            '봇이 참여하지 않은 비공개 채널은 슬랙 특성상 목록에 나타나지 않습니다. '
+            'memberCount는 슬랙에서 인원수를 제공하지 않으면 null입니다.'
         ),
         responses={
             200: AvailableChannelListSerializer(),
