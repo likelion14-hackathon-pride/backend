@@ -18,6 +18,7 @@ from .classifier import (
     classify_documents,
 )
 from .ingestion import PROGRESS_COLLECTED
+from .local_ingestion import ingest_local_file, run_local_ingestion
 from .models import Connection, Identity, IngestionJob, Item, RawDocument
 from .services import register_joined_channels
 from .slack import SlackError
@@ -977,6 +978,89 @@ class LocalFileIngestionApiTests(TestCase):
         self.assertEqual(response.data['ingestionJob']['kind'], IngestionJob.Kind.COLLECT)
         self.assertEqual(response.data['ingestionJob']['itemIds'], [item.id])
         upload.assert_called_once()
+
+    def test_local_file_status_is_error_when_ai_processing_failed(self):
+        self.item.last_synced_at = timezone.now()
+        self.item.save(update_fields=['last_synced_at'])
+        IngestionJob.objects.create(
+            company=self.company,
+            connection=self.connection,
+            kind=IngestionJob.Kind.COLLECT,
+            status=IngestionJob.Status.PARTIAL,
+            item_ids=[self.item.id],
+            errors=[{'scope': 'draft', 'code': 'openai_not_configured'}],
+        )
+
+        response = self.client.get(f'/api/companies/{self.company.id}/source-files')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data['items'][0]['status'], 'ERROR')
+
+    def test_local_file_documents_are_instruction_candidates(self):
+        self.item.label = '개발규칙.txt'
+        self.item.mime_type = 'text/plain'
+        self.item.save(update_fields=['label', 'mime_type'])
+        with patch(
+            'sources.local_ingestion.download_file',
+            return_value='작업 내용과 진행 상황을 팀원에게 공유합니다.'.encode(),
+        ):
+            ingest_local_file(self.item)
+
+        document = RawDocument.objects.get(item=self.item)
+        self.assertEqual(document.classified_as, RawDocument.ClassifiedAs.INSTRUCTION)
+        self.assertEqual(document.classifier_version, CLASSIFIER_VERSION)
+
+    def test_local_file_recollect_restores_instruction_candidate(self):
+        self.item.label = '개발규칙.txt'
+        self.item.mime_type = 'text/plain'
+        self.item.save(update_fields=['label', 'mime_type'])
+        RawDocument.objects.create(
+            company=self.company,
+            item=self.item,
+            external_ref=f'file:{self.item.external_id}:0',
+            raw_text='기존 문서',
+            content_hash='a' * 64,
+            classified_as=RawDocument.ClassifiedAs.CONTEXT,
+            classifier_version='clf-old',
+        )
+
+        with patch(
+            'sources.local_ingestion.download_file',
+            return_value='기존 문서'.encode(),
+        ):
+            ingest_local_file(self.item)
+
+        document = RawDocument.objects.get(item=self.item)
+        self.assertEqual(document.classified_as, RawDocument.ClassifiedAs.INSTRUCTION)
+        self.assertEqual(document.classifier_version, CLASSIFIER_VERSION)
+
+    def test_local_collect_drafts_file_before_heavy_processing(self):
+        self.item.label = '개발규칙.txt'
+        self.item.mime_type = 'text/plain'
+        self.item.save(update_fields=['label', 'mime_type'])
+        job = IngestionJob.objects.create(
+            company=self.company,
+            connection=self.connection,
+            kind=IngestionJob.Kind.COLLECT,
+            item_ids=[self.item.id],
+        )
+
+        with patch(
+            'sources.local_ingestion.download_file',
+            return_value='작업 내용과 진행 상황을 팀원에게 공유합니다.'.encode(),
+        ), patch('sources.ingestion.draft_entries', return_value=([1], [])) as draft, \
+             patch('sources.ingestion.classify_documents') as classify, \
+             patch('sources.ingestion.sync_chunks') as chunks, \
+             patch('sources.ingestion.generate_cards') as cards:
+            result = run_local_ingestion(job, self.connection)
+
+        self.assertEqual(result.status, IngestionJob.Status.SUCCEEDED)
+        self.assertEqual(result.entry_count, 1)
+        draft.assert_called_once()
+        self.assertIn('documents', draft.call_args.kwargs)
+        classify.assert_not_called()
+        chunks.assert_not_called()
+        cards.assert_not_called()
 
     def test_local_file_open_redirects_to_presigned_url(self):
         self.client.force_authenticate(user=self.member)
