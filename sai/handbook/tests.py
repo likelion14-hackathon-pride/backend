@@ -1,3 +1,4 @@
+from datetime import timedelta
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -108,6 +109,25 @@ class CreateProjectScopeTests(TestCase):
         self.assertEqual(response.data['name'], 'payment-api')
         # 프로젝트 범위는 회사규칙 카테고리를 갖지 않는다.
         self.assertIsNone(response.data['areaKey'])
+        self.assertIsNone(response.data['descriptionEn'])
+
+    def test_scope_list_returns_english_descriptions(self):
+        self.client.force_authenticate(user=self.member)
+
+        response = self.client.get(self.url)
+
+        descriptions = {
+            item['name']: item['descriptionEn'] for item in response.data['items']
+        }
+        self.assertEqual(
+            descriptions,
+            {
+                'Company': 'Values · mission · communication · handbook',
+                'People Group': 'HR · hiring · compensation · learning',
+                'Product / Engineering': 'Product principles · dev ops · support',
+                'Security': 'Security standards · operations',
+            },
+        )
 
     def test_multiple_project_scopes_allowed(self):
         for name in ('payment-api', 'admin-web', 'landing'):
@@ -169,11 +189,13 @@ class DraftEntriesTests(TestCase):
         self.document = self._document('100.1', '배포는 금요일 오후에는 하지 않는 걸로 합시다')
 
     def _document(self, ref, text, item=None, classified='INSTRUCTION'):
+        item = item or self.item
         return RawDocument.objects.create(
-            company=self.company, item=item or self.item, external_ref=ref,
+            company=self.company, item=item, external_ref=ref,
             author_identity=self.identity, raw_text=text,
             content_hash=ref.ljust(64, '0'), classified_as=classified,
-            occurred_at=timezone.now(), permalink=f'https://slack/{ref}',
+            occurred_at=item.connection.created_at - timedelta(seconds=1),
+            permalink=f'https://slack/{ref}',
         )
 
     def draft(self, rules):
@@ -214,6 +236,16 @@ class DraftEntriesTests(TestCase):
         self.assertEqual(evidence.source_label, '#dev')
         self.assertEqual(evidence.speaker_name, '조상원')
         self.assertEqual(evidence.document_id, self.document.id)
+
+    @override_settings(OPENAI_API_KEY='test-key')
+    def test_slack_message_after_connection_is_not_drafted(self):
+        self.document.occurred_at = self.connection.created_at + timedelta(seconds=1)
+        self.document.save(update_fields=['occurred_at'])
+
+        entries, errors = self.draft([])
+
+        self.assertEqual((entries, errors), ([], []))
+        self.assertFalse(self.parse_mock.called)
 
     @override_settings(OPENAI_API_KEY='test-key')
     def test_local_file_draft_uses_ai_selected_company_category(self):

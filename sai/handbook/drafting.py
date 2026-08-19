@@ -6,12 +6,13 @@ from typing import Literal
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
 from django.db import transaction
+from django.db.models import F, Q
 from openai import OpenAI, OpenAIError
 from pydantic import BaseModel
 
 from config.ai import client_options, generation_options, timed_call
 from sources.classifier import build_lookup, build_parents
-from sources.models import RawDocument
+from sources.models import Connection, RawDocument
 from sources.text import normalize_document_text
 
 from .models import CompanyScope, HandbookEntry, HandbookEvidence
@@ -318,6 +319,12 @@ def draft_entries(company):
                 RawDocument.SyncState.CURRENT,
                 RawDocument.SyncState.CHANGED,
             ],
+        )
+        # Slack은 연결할 때 가져온 과거 대화만 확인보관함 후보로 쓴다.
+        # 연결 이후 메시지는 질문과 대표 답변 흐름에서 별도로 처리한다.
+        .filter(
+            ~Q(item__connection__kind=Connection.Kind.SLACK)
+            | Q(occurred_at__lt=F('item__connection__created_at'))
         )
         .select_related('item__connection', 'item__scope', 'author_identity')
         # 초안이 인덱스로 원문을 가리킨다. 동시각 문서가 있으면 근거가 어긋난다.

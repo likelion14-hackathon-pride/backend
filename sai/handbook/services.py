@@ -9,6 +9,13 @@ DEFAULT_COMPANY_SCOPES = [
     (CompanyScope.AreaKey.SECURITY, 'Security', '보안 표준 · 제품 보안 · 보안 운영 · 위협 관리'),
 ]
 
+DEFAULT_COMPANY_SCOPE_DESCRIPTIONS_EN = {
+    CompanyScope.AreaKey.COMPANY: 'Values · mission · communication · handbook',
+    CompanyScope.AreaKey.PEOPLE: 'HR · hiring · compensation · learning',
+    CompanyScope.AreaKey.PRODUCT_ENG: 'Product principles · dev ops · support',
+    CompanyScope.AreaKey.SECURITY: 'Security standards · operations',
+}
+
 
 # 회사 전반 규칙 범위를 만든다.
 # HandbookEntry.scope는 NOT NULL이라 범위가 하나도 없으면 규칙 초안을 만들 수 없다.
