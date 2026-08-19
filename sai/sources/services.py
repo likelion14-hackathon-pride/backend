@@ -80,6 +80,7 @@ def list_available_channels(connection):
             'label': _label(channel),
             'isPrivate': bool(channel.get('is_private')),
             'isMember': bool(channel.get('is_member')),
+            'memberCount': channel.get('num_members'),
         }
         for channel in channels
         if channel['id'] not in registered
