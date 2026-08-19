@@ -463,6 +463,26 @@ class LocalFileSchedulingTests(TestCase):
         self.assertEqual(jobs, [])
         check.assert_not_called()
 
+    def test_local_processing_is_queued_after_fast_collect(self):
+        item = self.file_item(last_synced_at=self.now)
+        RawDocument.objects.create(
+            company=self.company,
+            item=item,
+            external_ref='file:file-1:0',
+            raw_text='작업 내용과 진행 상황을 팀원에게 공유합니다.',
+            content_hash='a' * 64,
+            classified_as=RawDocument.ClassifiedAs.INSTRUCTION,
+            classifier_version=CLASSIFIER_VERSION,
+            sync_state=RawDocument.SyncState.CHANGED,
+        )
+
+        jobs, check = self.enqueue()
+
+        self.assertEqual(len(jobs), 1)
+        self.assertEqual(jobs[0].kind, IngestionJob.Kind.PROCESS)
+        self.assertEqual(jobs[0].item_ids, [item.id])
+        check.assert_not_called()
+
     def test_removed_file_is_not_queued(self):
         self.file_item(removed_at=self.now)
 

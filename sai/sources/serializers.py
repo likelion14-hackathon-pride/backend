@@ -253,7 +253,11 @@ class LocalFileSerializer(serializers.ModelSerializer):
                 error.get('itemId') == obj.id
                 for error in latest_job.errors or []
             )
-            if item_failed:
+            processing_failed = any(
+                error.get('scope') in {'classify', 'draft'}
+                for error in latest_job.errors or []
+            )
+            if item_failed or processing_failed:
                 return 'ERROR'
 
         if obj.last_synced_at:

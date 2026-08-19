@@ -310,9 +310,9 @@ def _draft_batch(client, company, scope, batch, channels, users, parents):
 
 # INSTRUCTION으로 분류된 원문에서 핸드북 초안을 만든다.
 # 채널에 연결된 지식공간별로 나눠서 처리한다. 같은 범위의 규칙끼리 묶여야 하기 때문.
-def draft_entries(company):
-    documents = list(
-        RawDocument.objects.filter(
+def draft_entries(company, documents=None):
+    if documents is None:
+        documents = RawDocument.objects.filter(
             company=company,
             classified_as=RawDocument.ClassifiedAs.INSTRUCTION,
             sync_state__in=[
@@ -320,6 +320,17 @@ def draft_entries(company):
                 RawDocument.SyncState.CHANGED,
             ],
         )
+    else:
+        documents = documents.filter(
+            classified_as=RawDocument.ClassifiedAs.INSTRUCTION,
+            sync_state__in=[
+                RawDocument.SyncState.CURRENT,
+                RawDocument.SyncState.CHANGED,
+            ],
+        )
+
+    documents = list(
+        documents
         # Slack은 연결할 때 가져온 과거 대화만 확인보관함 후보로 쓴다.
         # 연결 이후 메시지는 질문과 대표 답변 흐름에서 별도로 처리한다.
         .filter(

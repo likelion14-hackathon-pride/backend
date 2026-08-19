@@ -250,8 +250,20 @@ def _finish(job, errors, collection_failed=False):
 
 # 수집한 원문을 분류하고 검색용 벡터, 핸드북 초안, 지시 카드까지 만든다.
 # Slack과 GitHub가 같은 처리 순서를 사용한다.
-def process_documents(job, errors=None, collection_failed=False):
+def process_documents(job, errors=None, collection_failed=False, draft_documents=None):
     errors = errors or []
+
+    if draft_documents is not None:
+        if not collection_failed:
+            try:
+                entries, draft_errors = draft_entries(job.company, documents=draft_documents)
+                errors += draft_errors
+                job.entry_count = len(entries)
+                _set_progress(job, PROGRESS_DRAFTED)
+            except ImproperlyConfigured:
+                errors.append({'scope': 'draft', 'code': 'openai_not_configured'})
+
+        return _finish(job, errors, collection_failed)
 
     # 처리할 것이 없으면 AI 단계를 건너뛴다.
     # 초안 생성은 매번 규칙 문서 전체를 다시 부르므로, 주기 실행에서 그냥 두면 비용이 계속 나간다.

@@ -4,6 +4,7 @@ from django.db import transaction
 from django.utils import timezone
 
 from .file_extraction import FileExtractionError, extract_file_text, split_file_text
+from .classifier import CLASSIFIER_VERSION
 from .local_files import LocalFileStorageError, download_file
 from .models import IngestionJob, Item, RawDocument
 
@@ -23,20 +24,26 @@ def _save_part(item, external_ref, text):
             external_ref=external_ref,
             raw_text=text,
             content_hash=content_hash,
+            classified_as=RawDocument.ClassifiedAs.INSTRUCTION,
+            classifier_version=CLASSIFIER_VERSION,
+            sync_state=RawDocument.SyncState.CHANGED,
         )
         return 'created'
 
     is_changed = document.content_hash != content_hash
     document.raw_text = text
     document.content_hash = content_hash
+    document.classified_as = RawDocument.ClassifiedAs.INSTRUCTION
+    document.classifier_version = CLASSIFIER_VERSION
 
     if is_changed:
         document.sync_state = RawDocument.SyncState.CHANGED
-        document.classified_as = RawDocument.ClassifiedAs.UNCLASSIFIED
-        document.classifier_version = None
         document.card_version = None
-    elif document.sync_state == RawDocument.SyncState.REMOVED:
-        document.sync_state = RawDocument.SyncState.CURRENT
+    elif document.sync_state in {
+        RawDocument.SyncState.CURRENT,
+        RawDocument.SyncState.REMOVED,
+    }:
+        document.sync_state = RawDocument.SyncState.CHANGED
 
     document.save()
 
@@ -110,4 +117,11 @@ def run_local_ingestion(job, connection):
 
     collection_failed = bool(errors) and len(errors) == len(items)
 
-    return process_documents(job, errors, collection_failed)
+    draft_documents = None
+    if job.kind == IngestionJob.Kind.COLLECT:
+        draft_documents = RawDocument.objects.filter(
+            company_id=job.company_id,
+            item_id__in=[item.id for item in items],
+        )
+
+    return process_documents(job, errors, collection_failed, draft_documents=draft_documents)

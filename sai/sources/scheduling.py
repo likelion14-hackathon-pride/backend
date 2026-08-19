@@ -98,7 +98,17 @@ def _local_due_job(company, now):
 
     item_ids = _uploaded_local_items(company, connection, now)
     if not item_ids:
-        return None
+        live_item_ids = list(_live_items(connection).values_list('id', flat=True))
+        if not live_item_ids:
+            return None
+
+        if not _is_due(_last_job(company, IngestionJob.Kind.PROCESS, connection), PROCESS_EVERY, now):
+            return None
+
+        if not has_pending_work(company):
+            return None
+
+        return _enqueue(company, connection, IngestionJob.Kind.PROCESS, live_item_ids)
 
     return _enqueue(company, connection, IngestionJob.Kind.COLLECT, item_ids)
 
