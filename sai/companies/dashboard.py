@@ -279,8 +279,7 @@ def _waiting_questions(company):
         'items': [
             {
                 'id': question.id,
-                'question': question.sent_text
-                or question.draft_ko
+                'question': question.draft_ko
                 or question.question_en
                 or '',
                 'askedByName': question.asked_by.display_name,
