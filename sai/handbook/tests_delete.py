@@ -1,3 +1,4 @@
+from datetime import timedelta
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -201,7 +202,8 @@ class DeletedEntryRedraftTests(TestCase):
             author_identity=self.identity,
             raw_text='배포는 금요일 오후에는 하지 않는 걸로 합시다',
             content_hash='100.1'.ljust(64, '0'), classified_as='INSTRUCTION',
-            occurred_at=timezone.now(), permalink='https://slack/100.1',
+            occurred_at=self.connection.created_at - timedelta(seconds=1),
+            permalink='https://slack/100.1',
         )
         self.owner = User.objects.create_user(
             email='owner@example.com', password='pw', display_name='대표'
