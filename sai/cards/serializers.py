@@ -151,6 +151,7 @@ class RelatedRuleSerializer(serializers.Serializer):
     entryId = serializers.IntegerField(source='id')
     title = serializers.CharField()
     titleEn = serializers.CharField(source='title_en', allow_null=True)
+    sourceType = serializers.CharField(source='origin')
     bodyKo = serializers.CharField(source='body_ko', allow_null=True)
     bodyEn = serializers.CharField(source='body_en', allow_null=True)
     scopeName = serializers.CharField(source='scope.name')
