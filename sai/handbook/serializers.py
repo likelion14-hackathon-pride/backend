@@ -11,16 +11,25 @@ from config.errors import (
 
 from .finalizing import mark_stale
 from .models import CompanyScope, HandbookEntry, HandbookEvidence, HandbookRevision
+from .services import DEFAULT_COMPANY_SCOPE_DESCRIPTIONS_EN
 
 
 class CompanyScopeSerializer(serializers.ModelSerializer):
     areaKey = serializers.CharField(source='area_key', read_only=True, allow_null=True)
+    descriptionEn = serializers.SerializerMethodField()
     # 이 공간의 확정 규칙 수. scopes_with_counts() 가 세어 붙인다.
     entryCount = serializers.IntegerField(source='entry_count', read_only=True, default=0)
 
     class Meta:
         model = CompanyScope
-        fields = ['id', 'kind', 'areaKey', 'name', 'description', 'state', 'entryCount']
+        fields = [
+            'id', 'kind', 'areaKey', 'name', 'description', 'descriptionEn',
+            'state', 'entryCount',
+        ]
+
+    @swagger_serializer_method(serializer_or_field=serializers.CharField(allow_null=True))
+    def get_descriptionEn(self, obj):
+        return DEFAULT_COMPANY_SCOPE_DESCRIPTIONS_EN.get(obj.area_key)
 
 
 class CompanyScopeListSerializer(serializers.Serializer):

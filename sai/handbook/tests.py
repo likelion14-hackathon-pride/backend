@@ -109,6 +109,25 @@ class CreateProjectScopeTests(TestCase):
         self.assertEqual(response.data['name'], 'payment-api')
         # 프로젝트 범위는 회사규칙 카테고리를 갖지 않는다.
         self.assertIsNone(response.data['areaKey'])
+        self.assertIsNone(response.data['descriptionEn'])
+
+    def test_scope_list_returns_english_descriptions(self):
+        self.client.force_authenticate(user=self.member)
+
+        response = self.client.get(self.url)
+
+        descriptions = {
+            item['name']: item['descriptionEn'] for item in response.data['items']
+        }
+        self.assertEqual(
+            descriptions,
+            {
+                'Company': 'Values · mission · communication · handbook',
+                'People Group': 'HR · hiring · compensation · learning',
+                'Product / Engineering': 'Product principles · dev ops · support',
+                'Security': 'Security standards · operations',
+            },
+        )
 
     def test_multiple_project_scopes_allowed(self):
         for name in ('payment-api', 'admin-web', 'landing'):
