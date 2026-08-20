@@ -264,13 +264,28 @@ def _recent_answers(company, today_start, today_end):
     }
 
 
+def _asked_by_name(question):
+    for blank in question.card_blanks.all():
+        assignee = blank.card.assignee
+        if assignee is not None:
+            return assignee.display_name
+
+    if question.origin_message is not None:
+        return question.origin_message.thread.user.display_name
+
+    return question.asked_by.display_name
+
+
 def _waiting_questions(company):
     questions = (
         Escalation.objects.filter(
             company=company,
             status__in=OWNER_WAITING_STATUSES,
         )
-        .select_related('asked_by', 'scope')
+        .select_related(
+            'asked_by', 'scope', 'origin_message', 'origin_message__thread__user'
+        )
+        .prefetch_related('card_blanks__card__assignee')
         .order_by('-created_at')
     )
 
@@ -282,7 +297,7 @@ def _waiting_questions(company):
                 'question': question.draft_ko
                 or question.question_en
                 or '',
-                'askedByName': question.asked_by.display_name,
+                'askedByName': _asked_by_name(question),
                 'scopeName': question.scope.name if question.scope else None,
                 'status': question.status,
                 'createdAt': question.created_at,

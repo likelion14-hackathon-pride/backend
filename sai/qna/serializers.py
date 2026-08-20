@@ -118,8 +118,8 @@ class MessageListSerializer(serializers.Serializer):
 
 
 class EscalationSerializer(serializers.ModelSerializer):
-    askedById = serializers.IntegerField(source='asked_by_id', read_only=True)
-    askedByName = serializers.CharField(source='asked_by.display_name', read_only=True)
+    askedById = serializers.SerializerMethodField()
+    askedByName = serializers.SerializerMethodField()
     questionEn = serializers.CharField(source='question_en', read_only=True)
     draftKo = serializers.CharField(source='draft_ko', read_only=True)
     sentText = serializers.CharField(source='sent_text', read_only=True)
@@ -166,6 +166,24 @@ class EscalationSerializer(serializers.ModelSerializer):
             'answeredAt',
             'createdAt',
         ]
+
+    def _asker(self, obj):
+        for blank in obj.card_blanks.all():
+            assignee = blank.card.assignee
+            if assignee is not None:
+                return assignee
+
+        origin = obj.origin_message
+        if origin is not None:
+            return origin.thread.user
+
+        return obj.asked_by
+
+    def get_askedById(self, obj):
+        return self._asker(obj).id
+
+    def get_askedByName(self, obj):
+        return self._asker(obj).display_name
 
 
 class EscalationListSerializer(serializers.Serializer):

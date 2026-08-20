@@ -519,6 +519,38 @@ class EscalationTests(TestCase):
 
         self.assertEqual(len(response.data['items']), 2)
 
+    def test_question_list_prefers_card_assignee_over_sender_name_across_statuses(self):
+        card = InstructionCard.objects.create(
+            company=self.company, scope=self.scope, assignee=self.member,
+            purpose='로그를 확인한다', purpose_en='Check the logs',
+        )
+        escalations = [
+            Escalation.objects.create(
+                company=self.company, asked_by=self.owner,
+                question_en=f'Which environment? {status}',
+                draft_ko='어느 환경을 보면 될까요?',
+                status=status,
+            )
+            for status in (
+                Escalation.Status.SENT,
+                Escalation.Status.ANSWERED,
+                Escalation.Status.APPROVED,
+            )
+        ]
+        for escalation in escalations:
+            Blank.objects.create(
+                company=self.company, card=card,
+                question_en=escalation.question_en, escalation=escalation,
+            )
+        self.client.force_authenticate(user=self.owner)
+
+        response = self.client.get(self.base)
+
+        items = {item['id']: item for item in response.data['items']}
+        for escalation in escalations:
+            self.assertEqual(items[escalation.id]['askedById'], self.member.id)
+            self.assertEqual(items[escalation.id]['askedByName'], 'Alex')
+
     def test_status_filter(self):
         escalation_id = self.create().data['id']
         self.send(escalation_id)
