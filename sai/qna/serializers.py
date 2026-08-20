@@ -179,27 +179,53 @@ class EscalationSerializer(serializers.ModelSerializer):
                 left_at__isnull=True,
             ).exists() else None
 
+        def candidate(user):
+            member = active_member(user)
+            return (member.id, member.display_name) if member is not None else None
+
+        def identity_candidate(identity):
+            if identity is None or identity.is_bot:
+                return None
+
+            linked = candidate(identity.user)
+            if linked is not None:
+                return linked
+
+            if identity.user is not None:
+                return None
+
+            return (None, identity.external_handle) if identity.external_handle else None
+
         for blank in obj.card_blanks.all():
-            assignee = blank.card.assignee
-            member = active_member(assignee)
-            if member is not None:
-                return member
+            picked = candidate(blank.card.assignee)
+            if picked is not None:
+                return picked
 
         origin = obj.origin_message
         if origin is not None:
-            member = active_member(origin.thread.user)
-            if member is not None:
-                return member
+            picked = candidate(origin.thread.user)
+            if picked is not None:
+                return picked
 
-        return active_member(obj.asked_by)
+        picked = candidate(obj.asked_by)
+        if picked is not None:
+            return picked
+
+        for blank in obj.card_blanks.all():
+            document = blank.card.document
+            picked = identity_candidate(document.author_identity if document else None)
+            if picked is not None:
+                return picked
+
+        return None
 
     def get_askedById(self, obj):
         asker = self._asker(obj)
-        return asker.id if asker is not None else None
+        return asker[0] if asker is not None else None
 
     def get_askedByName(self, obj):
         asker = self._asker(obj)
-        return asker.display_name if asker is not None else None
+        return asker[1] if asker is not None else None
 
 
 class EscalationListSerializer(serializers.Serializer):

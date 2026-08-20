@@ -5,6 +5,7 @@ from accounts.models import Membership, User
 from cards.models import Blank, InstructionCard
 from handbook.models import CompanyScope, HandbookEntry
 from qna.models import Citation, Escalation, Message, Thread
+from sources.models import Connection, Identity, Item, RawDocument
 
 from .dashboard import dashboard_data
 from .models import Company
@@ -106,3 +107,40 @@ class AnswerReuseTests(TestCase):
         waiting = dashboard_data(self.company)['waitingQuestions']['items']
 
         self.assertIsNone(waiting[0]['askedByName'])
+
+    def test_waiting_questions_use_unlinked_slack_author_when_member_is_missing(self):
+        owner = User.objects.create_user(
+            email='owner@example.com', password='pw', display_name='김대표'
+        )
+        Membership.objects.create(
+            user=owner, company=self.company, role=Membership.Role.OWNER
+        )
+        connection = Connection.objects.create(company=self.company, kind=Connection.Kind.SLACK)
+        item = Item.objects.create(
+            company=self.company, connection=connection, external_id='C001', label='#dev'
+        )
+        author = Identity.objects.create(
+            company=self.company, connection=connection,
+            external_user_id='U_MING', external_handle='Ming',
+        )
+        document = RawDocument.objects.create(
+            company=self.company, item=item, external_ref='1.1',
+            author_identity=author, raw_text='대표님 확인 부탁드립니다',
+            content_hash='a' * 64,
+        )
+        card = InstructionCard.objects.create(
+            company=self.company, scope=self.scope, document=document,
+            assignee=owner, purpose='로그 확인',
+        )
+        question = Escalation.objects.create(
+            company=self.company, asked_by=owner, question_en='Which environment?',
+            draft_ko='어느 환경을 보면 될까요?', status=Escalation.Status.SENT,
+        )
+        Blank.objects.create(
+            company=self.company, card=card, question_en=question.question_en,
+            escalation=question,
+        )
+
+        waiting = dashboard_data(self.company)['waitingQuestions']['items']
+
+        self.assertEqual(waiting[0]['askedByName'], 'Ming')

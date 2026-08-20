@@ -276,19 +276,44 @@ def _asked_by_name(question):
             left_at__isnull=True,
         ).exists() else None
 
+    def member_name(user):
+        member = active_member(user)
+        return member.display_name if member is not None else None
+
+    def identity_name(identity):
+        if identity is None or identity.is_bot:
+            return None
+
+        linked_name = member_name(identity.user)
+        if linked_name is not None:
+            return linked_name
+
+        if identity.user is not None:
+            return None
+
+        return identity.external_handle
+
     for blank in question.card_blanks.all():
-        assignee = blank.card.assignee
-        member = active_member(assignee)
-        if member is not None:
-            return member.display_name
+        name = member_name(blank.card.assignee)
+        if name is not None:
+            return name
 
     if question.origin_message is not None:
-        member = active_member(question.origin_message.thread.user)
-        if member is not None:
-            return member.display_name
+        name = member_name(question.origin_message.thread.user)
+        if name is not None:
+            return name
 
-    member = active_member(question.asked_by)
-    return member.display_name if member is not None else None
+    name = member_name(question.asked_by)
+    if name is not None:
+        return name
+
+    for blank in question.card_blanks.all():
+        document = blank.card.document
+        name = identity_name(document.author_identity if document else None)
+        if name is not None:
+            return name
+
+    return None
 
 
 def _waiting_questions(company):
@@ -300,7 +325,10 @@ def _waiting_questions(company):
         .select_related(
             'asked_by', 'scope', 'origin_message', 'origin_message__thread__user'
         )
-        .prefetch_related('card_blanks__card__assignee')
+        .prefetch_related(
+            'card_blanks__card__assignee',
+            'card_blanks__card__document__author_identity__user',
+        )
         .order_by('-created_at')
     )
 
