@@ -126,6 +126,21 @@ class EscalationTests(TestCase):
         self.assertEqual(response.status_code, 201)
         self.assertIsNone(response.data['originMessageId'])
 
+    def test_owner_created_blank_question_names_the_card_assignee(self):
+        card = InstructionCard.objects.create(
+            company=self.company, scope=self.scope, assignee=self.member,
+            purpose='로그를 확인한다', purpose_en='Check the logs',
+        )
+        blank = Blank.objects.create(
+            company=self.company, card=card, question_en='Which environment?'
+        )
+        self.client.force_authenticate(user=self.owner)
+
+        response = self.create({'blankId': blank.id, 'draftKo': '어느 환경을 보면 될까요?'})
+
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.data['askedByName'], 'Alex')
+
     def test_requires_question_or_message(self):
         self.assertEqual(self.create({}).status_code, 400)
 
