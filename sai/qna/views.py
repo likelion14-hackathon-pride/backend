@@ -154,10 +154,13 @@ class EscalationListCreateView(APIView):
         origin = blank = scope = None
         question_en = data.get('questionEn')
         draft_ko = data.get('draftKo')
+        asked_by = request.user
 
         if data.get('blankId'):
             blank = get_object_or_404(
-                Blank.objects.select_related('card', 'card__scope', 'card__document'),
+                Blank.objects.select_related(
+                    'card', 'card__assignee', 'card__scope', 'card__document'
+                ),
                 id=data['blankId'], company=company,
             )
             if blank.escalation_id:
@@ -166,10 +169,11 @@ class EscalationListCreateView(APIView):
             scope = blank.card.scope
             question_en = question_en or blank.question_en
             draft_ko = draft_ko or draft_for_blank(blank)
+            asked_by = blank.card.assignee or request.user
 
         if data.get('messageId'):
             origin = get_object_or_404(
-                Message.objects.select_related('thread', 'thread__card'),
+                Message.objects.select_related('thread', 'thread__user', 'thread__card'),
                 id=data['messageId'], company=company, thread__user=request.user,
             )
             if hasattr(origin, 'escalation'):
@@ -185,9 +189,10 @@ class EscalationListCreateView(APIView):
                     company=company, card=card, question_en=question_en
                 )
                 scope = card.scope
+            asked_by = origin.thread.user
 
         escalation = create_escalation(
-            company, request.user, question_en, draft_ko, scope, origin, blank
+            company, asked_by, question_en, draft_ko, scope, origin, blank
         )
 
         return Response(EscalationSerializer(escalation).data, status=status.HTTP_201_CREATED)
