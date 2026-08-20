@@ -364,6 +364,20 @@ class CardGenerationTests(TestCase):
 
         self.assertEqual(InstructionCard.objects.get().assignee, self.assignee)
 
+    def test_resolve_assignee_ignores_owner_mentions(self):
+        owner = User.objects.create_user(
+            email='owner@example.com', password='pw', display_name='김대표'
+        )
+        Membership.objects.create(
+            user=owner, company=self.company, role=Membership.Role.OWNER
+        )
+        Identity.objects.create(
+            company=self.company, connection=self.connection,
+            external_user_id='UOWNER', external_handle='김대표', user=owner,
+        )
+
+        self.assertIsNone(resolve_assignee(self.company, '<@UOWNER> 확인 부탁드립니다'))
+
     # 슬랙에는 있지만 SAI에 가입하지 않은 사람이면 담당자를 비워 둔다.
     @override_settings(OPENAI_API_KEY='test-key')
     def test_no_assignee_when_user_not_linked(self):

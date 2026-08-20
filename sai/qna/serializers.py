@@ -1,5 +1,6 @@
 from rest_framework import serializers
 
+from accounts.models import Membership
 from config.errors import (
     CONFLICTING_SOURCE,
     ESCALATION_SOURCE_REQUIRED,
@@ -168,22 +169,37 @@ class EscalationSerializer(serializers.ModelSerializer):
         ]
 
     def _asker(self, obj):
+        def active_member(user):
+            if user is None:
+                return None
+            return user if Membership.objects.filter(
+                user=user,
+                company_id=obj.company_id,
+                role=Membership.Role.MEMBER,
+                left_at__isnull=True,
+            ).exists() else None
+
         for blank in obj.card_blanks.all():
             assignee = blank.card.assignee
-            if assignee is not None:
-                return assignee
+            member = active_member(assignee)
+            if member is not None:
+                return member
 
         origin = obj.origin_message
         if origin is not None:
-            return origin.thread.user
+            member = active_member(origin.thread.user)
+            if member is not None:
+                return member
 
-        return obj.asked_by
+        return active_member(obj.asked_by)
 
     def get_askedById(self, obj):
-        return self._asker(obj).id
+        asker = self._asker(obj)
+        return asker.id if asker is not None else None
 
     def get_askedByName(self, obj):
-        return self._asker(obj).display_name
+        asker = self._asker(obj)
+        return asker.display_name if asker is not None else None
 
 
 class EscalationListSerializer(serializers.Serializer):

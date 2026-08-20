@@ -10,6 +10,7 @@ from openai import OpenAI, OpenAIError
 from pgvector.django import CosineDistance
 from pydantic import BaseModel, Field
 
+from accounts.models import Membership
 from config.ai import client_options, generation_options, timed_call
 from handbook.retrieval import search_rules
 from handbook.services import scopes_in_view
@@ -106,6 +107,11 @@ def resolve_assignee(company, raw_text):
     identity = (
         Identity.objects.filter(
             company=company, external_user_id__in=slack_ids, user__isnull=False
+        )
+        .filter(
+            user__memberships__company=company,
+            user__memberships__role=Membership.Role.MEMBER,
+            user__memberships__left_at__isnull=True,
         )
         .select_related('user')
         .first()
