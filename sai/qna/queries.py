@@ -7,7 +7,10 @@ from .models import Escalation, Message
 def escalations_for(company, user):
     queryset = Escalation.objects.filter(company=company).select_related(
         'asked_by', 'scope', 'origin_message', 'origin_message__thread__user'
-    ).prefetch_related('card_blanks__card__assignee')
+    ).prefetch_related(
+        'card_blanks__card__assignee',
+        'card_blanks__card__document__author_identity__user',
+    )
     is_owner = Membership.objects.filter(
         user=user, company=company, role=Membership.Role.OWNER, left_at__isnull=True
     ).exists()

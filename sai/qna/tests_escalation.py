@@ -8,7 +8,7 @@ from accounts.models import Membership, User
 from cards.models import Blank, InstructionCard
 from companies.models import Company
 from handbook.models import CompanyScope, HandbookEntry, HandbookEvidence
-from sources.models import Connection, Identity, Item
+from sources.models import Connection, Identity, Item, RawDocument
 from sources.slack import SlackError
 
 from .escalation import AnswerJudgement, make_thread_ref, parse_thread_ref
@@ -572,6 +572,37 @@ class EscalationTests(TestCase):
 
         self.assertIsNone(response.data['items'][0]['askedById'])
         self.assertIsNone(response.data['items'][0]['askedByName'])
+
+    def test_question_list_uses_unlinked_slack_author_when_member_is_missing(self):
+        author = Identity.objects.create(
+            company=self.company, connection=self.item.connection,
+            external_user_id='U_MING', external_handle='Ming',
+        )
+        document = RawDocument.objects.create(
+            company=self.company, item=self.item, external_ref='1.1',
+            author_identity=author, raw_text='대표님 확인 부탁드립니다',
+            content_hash='a' * 64,
+        )
+        card = InstructionCard.objects.create(
+            company=self.company, scope=self.scope, document=document,
+            assignee=self.owner, purpose='로그를 확인한다', purpose_en='Check the logs',
+        )
+        escalation = Escalation.objects.create(
+            company=self.company, asked_by=self.owner,
+            question_en='Which environment?',
+            draft_ko='어느 환경을 보면 될까요?',
+            status=Escalation.Status.SENT,
+        )
+        Blank.objects.create(
+            company=self.company, card=card,
+            question_en=escalation.question_en, escalation=escalation,
+        )
+        self.client.force_authenticate(user=self.owner)
+
+        response = self.client.get(self.base)
+
+        self.assertIsNone(response.data['items'][0]['askedById'])
+        self.assertEqual(response.data['items'][0]['askedByName'], 'Ming')
 
     def test_status_filter(self):
         escalation_id = self.create().data['id']
