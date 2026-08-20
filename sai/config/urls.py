@@ -1,0 +1,70 @@
+"""
+URL configuration for config project.
+
+The `urlpatterns` list routes URLs to views. For more information please see:
+    https://docs.djangoproject.com/en/6.1/topics/http/urls/
+Examples:
+Function views
+    1. Add an import:  from my_app import views
+    2. Add a URL to urlpatterns:  path('', views.home, name='home')
+Class-based views
+    1. Add an import:  from other_app.views import Home
+    2. Add a URL to urlpatterns:  path('', Home.as_view(), name='home')
+Including another URLconf
+    1. Import the include() function: from django.urls import include, path
+    2. Add a URL to urlpatterns:  path('blog/', include('blog.urls'))
+"""
+from django.contrib import admin
+from django.http import JsonResponse
+from django.urls import path, include
+from rest_framework import permissions
+from drf_yasg.views import get_schema_view 
+from drf_yasg import openapi 
+from accounts.views import MeView
+from config.errors import SERVER_ERROR
+from sources.views import github_events, slack_events
+
+
+# DRF 뷰 밖에서 난 에러도 같은 봉투로 내보낸다.
+# 없는 주소로 온 요청과 미들웨어에서 터진 예외가 여기로 온다.
+# 뷰 안에서 난 것은 config.exceptions.api_exception_handler 가 맡는다.
+def _error_json(code, message, status):
+    return JsonResponse(
+        {'error': {'code': code, 'field': None, 'message': message}}, status=status
+    )
+
+
+def handler404(request, exception):
+    return _error_json('not_found', 'not found', 404)
+
+
+def handler500(request):
+    return _error_json(SERVER_ERROR, 'unexpected server error', 500)
+
+# Swagger 설정
+schema_view = get_schema_view(
+    openapi.Info(
+        title="SAI API",
+        default_version="v1",
+        description="SAI API 문서",
+    ),
+    public=True,
+    permission_classes=(permissions.AllowAny,),  # Swagger 접근 가능하도록 설정
+)
+
+urlpatterns = [
+    path('health/', lambda request: JsonResponse({'ok': True})),
+    path('admin/', admin.site.urls),
+    path('api/auth/', include('accounts.urls')),
+    path('api/me', MeView.as_view()),
+    path('api/companies/', include('companies.urls')),
+    path('api/companies/', include('onboarding.urls')),
+    path('api/companies/', include('policy.urls')),
+    path('api/companies/', include('handbook.urls')),
+    path('api/companies/', include('sources.urls')),
+    path('api/companies/', include('qna.urls')),
+    path('api/companies/', include('cards.urls')),
+    path('swagger/', schema_view.with_ui('swagger', cache_timeout=0), name='schema-swagger-ui'),
+    path("api/slack/events/", slack_events),
+    path('api/github/events/', github_events),
+]
