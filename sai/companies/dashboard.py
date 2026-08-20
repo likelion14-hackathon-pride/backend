@@ -4,6 +4,7 @@ from zoneinfo import ZoneInfo
 from django.db.models import Count
 from django.utils import timezone
 
+from accounts.models import Membership
 from handbook.models import HandbookEntry
 from handbook.queries import live_entries
 from qna.models import Citation, Escalation, Message
@@ -265,15 +266,29 @@ def _recent_answers(company, today_start, today_end):
 
 
 def _asked_by_name(question):
+    def active_member(user):
+        if user is None:
+            return None
+        return user if Membership.objects.filter(
+            user=user,
+            company_id=question.company_id,
+            role=Membership.Role.MEMBER,
+            left_at__isnull=True,
+        ).exists() else None
+
     for blank in question.card_blanks.all():
         assignee = blank.card.assignee
-        if assignee is not None:
-            return assignee.display_name
+        member = active_member(assignee)
+        if member is not None:
+            return member.display_name
 
     if question.origin_message is not None:
-        return question.origin_message.thread.user.display_name
+        member = active_member(question.origin_message.thread.user)
+        if member is not None:
+            return member.display_name
 
-    return question.asked_by.display_name
+    member = active_member(question.asked_by)
+    return member.display_name if member is not None else None
 
 
 def _waiting_questions(company):

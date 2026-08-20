@@ -2,8 +2,9 @@ from django.test import TestCase
 from django.utils import timezone
 
 from accounts.models import Membership, User
+from cards.models import Blank, InstructionCard
 from handbook.models import CompanyScope, HandbookEntry
-from qna.models import Citation, Message, Thread
+from qna.models import Citation, Escalation, Message, Thread
 
 from .dashboard import dashboard_data
 from .models import Company
@@ -82,3 +83,26 @@ class AnswerReuseTests(TestCase):
         self.assertEqual(reuse['totalCount'], 1)
         self.assertEqual(reuse['averageCount'], 1.0)
         self.assertEqual([row['title'] for row in reuse['topEntries']], ['살아 있는 규칙'])
+
+    def test_waiting_questions_do_not_show_owner_as_asker(self):
+        owner = User.objects.create_user(
+            email='owner@example.com', password='pw', display_name='김대표'
+        )
+        Membership.objects.create(
+            user=owner, company=self.company, role=Membership.Role.OWNER
+        )
+        card = InstructionCard.objects.create(
+            company=self.company, scope=self.scope, assignee=owner, purpose='로그 확인'
+        )
+        question = Escalation.objects.create(
+            company=self.company, asked_by=owner, question_en='Which environment?',
+            draft_ko='어느 환경을 보면 될까요?', status=Escalation.Status.SENT,
+        )
+        Blank.objects.create(
+            company=self.company, card=card, question_en=question.question_en,
+            escalation=question,
+        )
+
+        waiting = dashboard_data(self.company)['waitingQuestions']['items']
+
+        self.assertIsNone(waiting[0]['askedByName'])

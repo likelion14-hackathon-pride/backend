@@ -551,6 +551,28 @@ class EscalationTests(TestCase):
             self.assertEqual(items[escalation.id]['askedById'], self.member.id)
             self.assertEqual(items[escalation.id]['askedByName'], 'Alex')
 
+    def test_question_list_does_not_show_owner_as_the_employee(self):
+        card = InstructionCard.objects.create(
+            company=self.company, scope=self.scope, assignee=self.owner,
+            purpose='로그를 확인한다', purpose_en='Check the logs',
+        )
+        escalation = Escalation.objects.create(
+            company=self.company, asked_by=self.owner,
+            question_en='Which environment?',
+            draft_ko='어느 환경을 보면 될까요?',
+            status=Escalation.Status.SENT,
+        )
+        Blank.objects.create(
+            company=self.company, card=card,
+            question_en=escalation.question_en, escalation=escalation,
+        )
+        self.client.force_authenticate(user=self.owner)
+
+        response = self.client.get(self.base)
+
+        self.assertIsNone(response.data['items'][0]['askedById'])
+        self.assertIsNone(response.data['items'][0]['askedByName'])
+
     def test_status_filter(self):
         escalation_id = self.create().data['id']
         self.send(escalation_id)
