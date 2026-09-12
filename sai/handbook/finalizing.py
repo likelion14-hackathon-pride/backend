@@ -43,6 +43,18 @@ class TranslationResult(BaseModel):
     translations: list[Translation]
 
 
+# 사람 승인과 자동 승격이 공유하는 확정 상태 전환이다. 번역/임베딩은 아래
+# finalize_entries가 담당하므로 두 단계의 책임과 재시도 지점을 분리한다.
+def mark_confirmed(entry, at=None):
+    at = at or timezone.now()
+    entry.status = HandbookEntry.Status.CONFIRMED
+    entry.reviewed_at = at
+    entry.confirmed_at = at
+    entry.save(update_fields=['status', 'reviewed_at', 'confirmed_at'])
+
+    return entry
+
+
 def _get_client():
     if not settings.OPENAI_API_KEY:
         raise ImproperlyConfigured('OPENAI_API_KEY 설정이 없어 번역/임베딩을 실행할 수 없습니다')

@@ -354,7 +354,8 @@ class EscalationCheckAnswerView(APIView):
         operation_description=(
             '보낸 슬랙 스레드에 달린 답장을 가져와, 그것이 실제로 질문에 답하는지 AI가 판정합니다. '
             '"확인해볼게요" 같은 회피성 답변은 answerIsAnswer=false로 남고 상태는 그대로입니다. '
-            '답이 맞으면 한국어·영어로 정리해 저장하고 ANSWERED로 바뀝니다.'
+            '답이 맞으면 한국어·영어로 정리합니다. 연결된 실제 Owner 답변이고 프로젝트 Scope가 '
+            '명확하며 자동 승격 안전 조건을 통과하면 즉시 APPROVED, 아니면 ANSWERED로 남습니다.'
         ),
         request_body=no_body,
         responses={

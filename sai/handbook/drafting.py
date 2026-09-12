@@ -16,6 +16,7 @@ from sources.models import Connection, RawDocument
 from sources.text import normalize_document_text
 
 from .models import CompanyScope, HandbookEntry, HandbookEvidence
+from .promotion import evaluate_and_promote
 
 logger = logging.getLogger(__name__)
 
@@ -208,7 +209,7 @@ def _build_entry(company, scope, rule, documents, channels, users):
         return None
 
     verified = []
-    seen_quotes = set()
+    seen_citations = set()
     dropped = 0
     for citation in rule.citations:
         document = documents.get(citation.index)
@@ -219,9 +220,11 @@ def _build_entry(company, scope, rule, documents, channels, users):
         if not quote:
             dropped += 1
             continue
-        # 같은 문장이 여러 번 올라온 경우 원문은 여러 건이지만 근거로는 한 줄이면 된다.
-        if quote not in seen_quotes:
-            seen_quotes.add(quote)
+        # 같은 원문의 같은 인용만 중복 제거한다. 문장이 같아도 원문이 다르면 반복
+        # 근거로 남기고, 한 원문 안의 서로 다른 인용도 감사 화면에서 잃지 않는다.
+        citation_key = (document.id, quote)
+        if citation_key not in seen_citations:
+            seen_citations.add(citation_key)
             verified.append((document, quote))
 
     # 대조에 실패한 인용은 조용히 사라진다. 얼마나 버려지는지 보이지 않으면
@@ -299,13 +302,22 @@ def _draft_batch(client, company, scope, batch, channels, users, parents):
     documents = dict(enumerate(batch))
 
     entries = []
+    errors = []
     for rule in result.rules:
         with transaction.atomic():
             entry = _build_entry(company, scope, rule, documents, channels, users)
         if entry:
+            entry, finalization = evaluate_and_promote(
+                entry,
+                method=HandbookEntry.AutoPromotionMethod.REPEATED_EVIDENCE,
+            )
             entries.append(entry)
+            errors += [
+                {'scope': 'promotion', 'entryId': entry.id, **error}
+                for error in finalization['errors']
+            ]
 
-    return entries
+    return entries, errors
 
 
 # INSTRUCTION으로 분류된 원문에서 핸드북 초안을 만든다.
@@ -367,9 +379,11 @@ def draft_entries(company, documents=None):
         for start in range(0, len(scope_documents), BATCH_SIZE):
             batch = scope_documents[start:start + BATCH_SIZE]
             try:
-                entries += _draft_batch(
+                batch_entries, batch_errors = _draft_batch(
                     client, company, scope, batch, channels, users, parents
                 )
+                entries += batch_entries
+                errors += batch_errors
             except (OpenAIError, ValueError) as exc:
                 errors.append({
                     'scope': 'draft',

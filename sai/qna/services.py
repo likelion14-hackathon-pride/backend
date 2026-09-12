@@ -18,9 +18,10 @@ from config.errors import (
     RateLimited,
     UpstreamError,
 )
-from handbook.finalizing import finalize_entries
+from handbook.finalizing import finalize_entries, mark_confirmed
 from handbook.gaps import record_gap
 from handbook.models import CompanyScope, HandbookEntry, HandbookEvidence
+from handbook.promotion import evaluate_and_promote
 from sources.models import Item
 from sources.slack import SlackError
 
@@ -33,6 +34,7 @@ from .answering import (
 from .escalation import (
     draft_from_blank,
     fetch_reply,
+    is_verified_owner_reply,
     judge_reply,
     parse_thread_ref,
     translate_additions,
@@ -238,6 +240,14 @@ def collect_answer(escalation):
             answered_by=Blank.AnsweredBy.OWNER,
         )
 
+        # SAI가 만든 질문에 연결된 실제 Owner 답변이고 범위도 명시됐을 때만 후보를 만든다.
+        # 일반 Slack 대화나 계정 연결 전의 답장은 기존 개별 승인 흐름에 그대로 남는다.
+        _evaluate_owner_answer(
+            escalation,
+            owner_verified=is_verified_owner_reply(escalation.company, reply),
+        )
+        escalation.refresh_from_db()
+
     return escalation
 
 
@@ -313,6 +323,85 @@ def _channel_label(company, external_id):
     return item.label if item else None
 
 
+def _is_sai_escalation(escalation):
+    origin = escalation.origin_message
+    return (
+        origin is not None
+        and origin.role == Message.Role.AI
+        and origin.verdict in NEEDS_OWNER
+    ) or escalation.card_blanks.exists()
+
+
+def _owner_answer_candidate(escalation):
+    if escalation.proposed_entry_id:
+        return escalation.proposed_entry
+    if escalation.scope_id is None:
+        return None
+
+    channel, _ = parse_thread_ref(escalation.slack_thread_ref)
+    with transaction.atomic():
+        locked = Escalation.objects.select_for_update().select_related(
+            'proposed_entry', 'scope'
+        ).get(id=escalation.id)
+        if locked.proposed_entry_id:
+            return locked.proposed_entry
+
+        entry = HandbookEntry.objects.create(
+            company=locked.company,
+            scope=locked.scope,
+            title=_proposed_title(locked)[:200],
+            body_ko=locked.answer_ko,
+            body_en=locked.answer_en or None,
+            original_lang='ko',
+            status=HandbookEntry.Status.DRAFT,
+            origin=HandbookEntry.Origin.ESCALATION,
+            confidence=HandbookEntry.Confidence.HIGH,
+        )
+        HandbookEvidence.objects.create(
+            company=locked.company,
+            entry=entry,
+            quote=locked.answer_ko,
+            tag=HandbookEvidence.Tag.OWNER,
+            source_label=_channel_label(locked.company, channel) or '대표 확인 답변',
+            occurred_at=locked.answered_at,
+        )
+        locked.proposed_entry = entry
+        locked.save(update_fields=['proposed_entry'])
+
+    return entry
+
+
+def _evaluate_owner_answer(escalation, *, owner_verified):
+    if not owner_verified or not _is_sai_escalation(escalation):
+        return None
+
+    entry = _owner_answer_candidate(escalation)
+    if entry is None:
+        return None
+
+    entry, finalization = evaluate_and_promote(
+        entry,
+        method=HandbookEntry.AutoPromotionMethod.OWNER_DECISION,
+        explicit_owner_scope=True,
+        owner_verified=True,
+        answer_needs_review=escalation.answer_needs_review,
+    )
+    if finalization['errors']:
+        logger.warning(
+            'Owner 답변 자동 승격 후 확정 처리 일부 실패 escalation=%s errors=%s',
+            escalation.id,
+            finalization['errors'],
+        )
+    if entry.is_auto_promoted:
+        Escalation.objects.filter(
+            id=escalation.id,
+            status=Escalation.Status.ANSWERED,
+            proposed_entry=entry,
+        ).update(status=Escalation.Status.APPROVED)
+
+    return entry
+
+
 # 대표 답변을 핸드북 규칙으로 만든다.
 # 미리보기에서 고친 제목·영문·계층이 오면 그것으로 저장한다.
 #
@@ -320,6 +409,13 @@ def _channel_label(company, external_id):
 # 초안으로 두면 대표가 확인보관함에서 같은 결정을 한 번 더 하게 된다.
 def promote_to_entry(escalation, title=None, body_en=None, scope=None):
     company = escalation.company
+    if (
+        escalation.status == Escalation.Status.APPROVED
+        and escalation.proposed_entry_id
+        and escalation.proposed_entry.status == HandbookEntry.Status.CONFIRMED
+    ):
+        # 재시도는 이미 만들어진 규칙을 그대로 돌려준다.
+        return escalation
     if escalation.status != Escalation.Status.ANSWERED or not escalation.answer_ko:
         raise ValidationError('no answer to promote', code=NO_ANSWER_TO_PROMOTE)
     if _looks_like_question_or_request(escalation.answer_ko):
@@ -331,31 +427,42 @@ def promote_to_entry(escalation, title=None, body_en=None, scope=None):
 
     now = timezone.now()
     with transaction.atomic():
-        entry = HandbookEntry.objects.create(
-            company=company,
-            scope=scope,
-            title=(title or _proposed_title(escalation))[:200],
-            body_ko=escalation.answer_ko,
-            body_en=body_en or escalation.answer_en or None,
-            original_lang='ko',
-            status=HandbookEntry.Status.CONFIRMED,
-            origin=HandbookEntry.Origin.ESCALATION,
-            confidence=HandbookEntry.Confidence.MEDIUM,
-            reviewed_at=now,
-            confirmed_at=now,
+        locked = Escalation.objects.select_for_update().select_related('proposed_entry').get(
+            id=escalation.id
         )
-        HandbookEvidence.objects.create(
-            company=company,
-            entry=entry,
-            quote=escalation.answer_ko,
-            tag=HandbookEvidence.Tag.OWNER,
-            source_label='대표 확인 답변',
-            speaker_name=None,
-            occurred_at=escalation.answered_at,
-        )
-        escalation.proposed_entry = entry
-        escalation.status = Escalation.Status.APPROVED
-        escalation.save(update_fields=['proposed_entry', 'status'])
+        entry = locked.proposed_entry
+        if entry is None:
+            entry = HandbookEntry.objects.create(
+                company=company,
+                scope=scope,
+                title=(title or _proposed_title(locked))[:200],
+                body_ko=locked.answer_ko,
+                body_en=body_en or locked.answer_en or None,
+                original_lang='ko',
+                status=HandbookEntry.Status.DRAFT,
+                origin=HandbookEntry.Origin.ESCALATION,
+                confidence=HandbookEntry.Confidence.MEDIUM,
+            )
+            HandbookEvidence.objects.create(
+                company=company,
+                entry=entry,
+                quote=locked.answer_ko,
+                tag=HandbookEvidence.Tag.OWNER,
+                source_label='대표 확인 답변',
+                speaker_name=None,
+                occurred_at=locked.answered_at,
+            )
+        else:
+            entry.scope = scope
+            entry.title = (title or entry.title or _proposed_title(locked))[:200]
+            entry.body_en = body_en or entry.body_en or locked.answer_en or None
+
+        entry.save(update_fields=['scope', 'title', 'body_en'])
+        mark_confirmed(entry, at=now)
+        locked.proposed_entry = entry
+        locked.status = Escalation.Status.APPROVED
+        locked.save(update_fields=['proposed_entry', 'status'])
+        escalation = locked
 
     # 번역과 임베딩이 없으면 확정 상태여도 검색에 걸리지 않아 답변에 쓰이지 않는다.
     finalize_entries([entry])

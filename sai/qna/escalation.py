@@ -188,6 +188,13 @@ def _from_owner(message, owner_ids):
     return not owner_ids or message.get('user') in owner_ids
 
 
+# 연결된 Owner 계정으로 작성된 답장인지 엄격하게 확인한다. 답장 회수는 계정 연결 전에도
+# 동작해야 하므로 _from_owner는 fallback을 허용하지만, 자동 승격은 신원 확인 없이는 하지 않는다.
+def is_verified_owner_reply(company, message):
+    owner_ids = _owner_slack_ids(company)
+    return bool(owner_ids) and message.get('user') in owner_ids
+
+
 # 이 질문 다음에 같은 채널로 보낸 질문의 ts. 그 뒤에 오는 말은 이 질문의 답이 아니다.
 def _next_question_ts(escalation, channel_id, ts):
     later = (

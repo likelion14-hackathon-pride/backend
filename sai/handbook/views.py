@@ -1,9 +1,10 @@
+from django.db import transaction
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from drf_yasg import openapi
 from drf_yasg.utils import swagger_auto_schema
 from rest_framework import status
-from rest_framework.exceptions import ValidationError
+from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
@@ -24,8 +25,8 @@ from config.pagination import (
     paged_response,
 )
 
-from .finalizing import finalize_entries
-from .models import CompanyScope, HandbookEntry, HandbookEvidence
+from .finalizing import finalize_entries, mark_confirmed
+from .models import CompanyScope, HandbookEntry, HandbookEvidence, HandbookRevision
 from .queries import (
     entries_for,
     filter_by_review_status,
@@ -54,6 +55,7 @@ SCOPE_ID_PARAMETER = openapi.Parameter(
 SCOPE_KIND_PARAMETER = enum_parameter('scopeKind', CompanyScope.Kind)
 KIND_PARAMETER = enum_parameter('kind', CompanyScope.Kind)
 STATUS_PARAMETER = enum_parameter('status', HandbookEntry.Status)
+PROMOTION_TYPE_PARAMETER = enum_parameter('promotionType', HandbookEntry.PromotionType)
 REVIEW_STATUS_PARAMETER = enum_parameter(
     'reviewStatus', HandbookEntry.ReviewStatus,
     'PENDING은 아직 보지 않은 초안, HELD는 보고 미뤄 둔 초안입니다. '
@@ -75,6 +77,7 @@ class HandbookEntryListCreateView(APIView):
             SCOPE_ID_PARAMETER,
             SCOPE_KIND_PARAMETER,
             STATUS_PARAMETER,
+            PROMOTION_TYPE_PARAMETER,
             REVIEW_STATUS_PARAMETER,
             ORIGIN_PARAMETER,
             CURSOR_PARAMETER,
@@ -95,6 +98,9 @@ class HandbookEntryListCreateView(APIView):
         entries = filter_enum(entries, request, 'scopeKind', CompanyScope.Kind, 'scope__kind')
         entries = filter_int(entries, request, 'scopeId', 'scope_id')
         entries = filter_enum(entries, request, 'status', HandbookEntry.Status)
+        entries = filter_enum(
+            entries, request, 'promotionType', HandbookEntry.PromotionType, 'promotion_type'
+        )
         entries = filter_enum_list(entries, request, 'origin', HandbookEntry.Origin)
 
         review_status = enum_value(request, 'reviewStatus', HandbookEntry.ReviewStatus)
@@ -196,8 +202,21 @@ class HandbookEntryDetailView(APIView):
                 'only a confirmed entry can be deleted', code=ENTRY_NOT_CONFIRMED
             )
 
-        entry.deleted_at = timezone.now()
-        entry.save(update_fields=['deleted_at'])
+        with transaction.atomic():
+            entry.deleted_at = timezone.now()
+            HandbookRevision.objects.create(
+                company=company,
+                entry=entry,
+                before={
+                    'status': entry.status,
+                    'deleted_at': None,
+                    'promotion_type': entry.promotion_type,
+                    'auto_promotion_method': entry.auto_promotion_method,
+                    'promotion_reason': entry.promotion_reason,
+                },
+                reason='owner_deactivated',
+            )
+            entry.save(update_fields=['deleted_at'])
 
         return Response(status=status.HTTP_204_NO_CONTENT)
 
@@ -225,15 +244,32 @@ class HandbookEntryEvidenceView(APIView):
         return page_response(HandbookEvidenceSerializer, evidences)
 
 
+@transaction.atomic
 def _apply_decision(entry, decision):
+    if decision == 'APPROVE' and entry.status == HandbookEntry.Status.CONFIRMED:
+        return entry
+    if decision == 'REJECT' and entry.status == HandbookEntry.Status.ARCHIVED:
+        return entry
+
+    HandbookRevision.objects.create(
+        company=entry.company,
+        entry=entry,
+        before={
+            'status': entry.status,
+            'reviewed_at': entry.reviewed_at.isoformat() if entry.reviewed_at else None,
+            'confirmed_at': entry.confirmed_at.isoformat() if entry.confirmed_at else None,
+            'promotion_type': entry.promotion_type,
+            'auto_promotion_method': entry.auto_promotion_method,
+            'promotion_reason': entry.promotion_reason,
+        },
+        reason=f'owner_review_{decision.lower()}',
+    )
     # 어떤 결정이든 '대표가 봤다'는 사실은 남는다. HOLD가 PENDING과 구분되는 근거다.
     entry.reviewed_at = timezone.now()
     fields = ['reviewed_at']
 
     if decision == 'APPROVE':
-        entry.status = HandbookEntry.Status.CONFIRMED
-        entry.confirmed_at = entry.reviewed_at
-        fields += ['status', 'confirmed_at']
+        return mark_confirmed(entry, at=entry.reviewed_at)
     elif decision == 'REJECT':
         entry.status = HandbookEntry.Status.ARCHIVED
         fields += ['status']
@@ -284,10 +320,10 @@ class HandbookEntryReviewView(APIView):
 
 class HandbookEntryBulkReviewView(APIView):
     @swagger_auto_schema(
-        operation_summary='핸드북 초안 일괄 승인',
+        operation_summary='핸드북 초안 일괄 승인/거절',
         operation_description=(
-            '여러 초안을 한 번에 확정합니다. 승인할 수 없는 항목(내용 없는 BLANK, 다른 회사 항목)은 '
-            '건너뛰고 skipped에 사유와 함께 담아 돌려줍니다.'
+            'PENDING_REVIEW 초안을 한 번에 승인하거나 거절합니다. MANUAL_REQUIRED는 개별 검토만 '
+            '허용하며, 다른 회사 ID가 하나라도 섞이면 전체 요청을 403으로 차단합니다.'
         ),
         request_body=HandbookBulkReviewSerializer,
         responses={
@@ -304,29 +340,85 @@ class HandbookEntryBulkReviewView(APIView):
         serializer = HandbookBulkReviewSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         requested_ids = serializer.validated_data['entryIds']
-
-        entries = {
-            entry.id: entry
-            for entry in live_entries(company).filter(id__in=requested_ids)
-        }
+        decision = serializer.validated_data['decision']
+        unique_ids = set(requested_ids)
+        foreign_ids = list(
+            HandbookEntry.objects.filter(id__in=unique_ids)
+            .exclude(company=company)
+            .values_list('id', flat=True)
+        )
+        if foreign_ids:
+            raise PermissionDenied('entries from another company are not allowed')
 
         approved = []
+        rejected = []
+        results = []
         skipped = []
-        for entry_id in requested_ids:
-            entry = entries.get(entry_id)
-            if entry is None:
-                skipped.append({'entryId': entry_id, 'reason': 'not_found'})
-                continue
-            if entry.status == HandbookEntry.Status.BLANK:
-                skipped.append({'entryId': entry_id, 'reason': 'blank_entry'})
-                continue
-            approved.append(_apply_decision(entry, 'APPROVE'))
+        seen = set()
+        with transaction.atomic():
+            entries = {
+                entry.id: entry
+                for entry in HandbookEntry.objects.select_for_update().filter(
+                    company=company, id__in=unique_ids, deleted_at__isnull=True
+                )
+            }
+            for entry_id in requested_ids:
+                if entry_id in seen:
+                    item = {'entryId': entry_id, 'reason': 'duplicate_request'}
+                    skipped.append(item)
+                    results.append({**item, 'result': 'SKIPPED'})
+                    continue
+                seen.add(entry_id)
+
+                entry = entries.get(entry_id)
+                if entry is None:
+                    item = {'entryId': entry_id, 'reason': 'not_found'}
+                    skipped.append(item)
+                    results.append({**item, 'result': 'SKIPPED'})
+                    continue
+                if entry.promotion_type == HandbookEntry.PromotionType.MANUAL_REQUIRED:
+                    item = {'entryId': entry_id, 'reason': 'individual_review_required'}
+                    skipped.append(item)
+                    results.append({**item, 'result': 'SKIPPED'})
+                    continue
+                if decision == 'APPROVE' and entry.status == HandbookEntry.Status.BLANK:
+                    item = {'entryId': entry_id, 'reason': 'blank_entry'}
+                    skipped.append(item)
+                    results.append({**item, 'result': 'SKIPPED'})
+                    continue
+                if decision == 'APPROVE' and entry.status == HandbookEntry.Status.CONFIRMED:
+                    item = {'entryId': entry_id, 'reason': 'already_approved'}
+                    skipped.append(item)
+                    results.append({**item, 'result': 'SKIPPED'})
+                    continue
+                if decision == 'REJECT' and entry.status == HandbookEntry.Status.ARCHIVED:
+                    item = {'entryId': entry_id, 'reason': 'already_rejected'}
+                    skipped.append(item)
+                    results.append({**item, 'result': 'SKIPPED'})
+                    continue
+
+                changed = _apply_decision(entry, decision)
+                if decision == 'APPROVE':
+                    approved.append(changed)
+                    result_name = 'APPROVED'
+                else:
+                    rejected.append(changed)
+                    result_name = 'REJECTED'
+                results.append({'entryId': entry_id, 'result': result_name})
 
         # 항목마다 호출하지 않고 한 번에 묶어서 번역·임베딩한다.
         finalize_entries(approved)
 
         return Response(
-            {'approvedCount': len(approved), 'skipped': skipped}, status=status.HTTP_200_OK
+            {
+                'decision': decision,
+                'processedCount': len(approved) + len(rejected),
+                'approvedCount': len(approved),
+                'rejectedCount': len(rejected),
+                'results': results,
+                'skipped': skipped,
+            },
+            status=status.HTTP_200_OK,
         )
 
 
