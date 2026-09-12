@@ -9,7 +9,7 @@ from django.db import transaction
 from django.utils import timezone
 from openai import OpenAI, OpenAIError
 
-from config.ai import client_options, timed_call
+from config.ai import client_options, record_usage, timed_call
 from policy.models import RiskKeyword
 from sources.models import RawDocument
 
@@ -144,10 +144,12 @@ def _embed_for_similarity(text):
         raise ImproperlyConfigured('OPENAI_API_KEY 설정이 없어 유사 규칙을 확인할 수 없습니다')
     client = OpenAI(api_key=settings.OPENAI_API_KEY, **client_options())
     with timed_call(settings.OPENAI_EMBEDDING_MODEL):
-        return client.embeddings.create(
+        response = client.embeddings.create(
             model=settings.OPENAI_EMBEDDING_MODEL,
             input=[text],
-        ).data[0].embedding
+        )
+    record_usage('promotion_similarity', settings.OPENAI_EMBEDDING_MODEL, response)
+    return response.data[0].embedding
 
 
 def _similarity_result(entry):
