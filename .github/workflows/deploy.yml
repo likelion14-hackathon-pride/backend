@@ -19,7 +19,8 @@ jobs:
             set -e
 
             cd ~/backend
-            git pull origin develop
+            git fetch origin main
+            git reset --hard origin/main
             cd sai
 
             ~/.local/bin/poetry install --no-root
