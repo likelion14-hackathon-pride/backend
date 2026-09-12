@@ -5,7 +5,7 @@ from openai import OpenAI, OpenAIError
 from pydantic import BaseModel, Field
 
 from accounts.models import Membership
-from config.ai import client_options, generation_options, timed_call
+from config.ai import client_options, generation_options, record_usage, timed_call
 from sources.models import Connection, Identity
 from sources.slack import SlackClient, SlackError
 from sources.text import normalize_slack_text
@@ -40,6 +40,7 @@ def draft_from_blank(blank):
                 verbosity=settings.OPENAI_TRANSLATOR_VERBOSITY,
             ),
         )
+    record_usage('blank_question_translation', settings.OPENAI_TRANSLATOR_MODEL, completion)
 
     return (completion.choices[0].message.content or '').strip() or None
 
@@ -107,6 +108,12 @@ def translate_additions(lines):
                     verbosity=settings.OPENAI_TRANSLATOR_VERBOSITY,
                 ),
             )
+        record_usage(
+            'escalation_addition_translation',
+            settings.OPENAI_TRANSLATOR_MODEL,
+            completion,
+            len(lines),
+        )
     except (OpenAIError, ValueError) as exc:
         raise RuntimeError(f'addition_failed: {type(exc).__name__}') from exc
 
@@ -357,6 +364,7 @@ def judge_reply(question_en, draft_ko, reply_text):
                     verbosity=settings.OPENAI_ANSWER_VERBOSITY,
                 ),
             )
+        record_usage('owner_reply_judge', settings.OPENAI_ANSWER_MODEL, completion)
     except (OpenAIError, ValueError) as exc:
         raise RuntimeError(f'judge_failed: {type(exc).__name__}') from exc
 

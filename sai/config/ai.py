@@ -61,6 +61,29 @@ def generation_options(model, temperature=0, reasoning_effort=None, verbosity=No
     }
 
 
+def record_usage(operation, model, response, inputs=1):
+    """성공한 OpenAI 호출의 token 사용량을 공통 로그 형식으로 남긴다."""
+    usage = getattr(response, 'usage', None)
+    if usage is None:
+        return
+    prompt_tokens = getattr(usage, 'prompt_tokens', None)
+    completion_tokens = getattr(usage, 'completion_tokens', None)
+    total_tokens = getattr(usage, 'total_tokens', None)
+    details = getattr(usage, 'prompt_tokens_details', None)
+    cached_tokens = getattr(details, 'cached_tokens', None) if details else None
+    logger.info(
+        'OpenAI usage operation=%s model=%s inputs=%d prompt=%s completion=%s '
+        'total=%s cached=%s',
+        operation,
+        model,
+        inputs,
+        prompt_tokens,
+        completion_tokens,
+        total_tokens,
+        cached_tokens,
+    )
+
+
 # 호출 한 건이 얼마나 걸렸는지 남긴다.
 # 실패해도 남겨야 한다. 타임아웃으로 죽은 호출이야말로 알고 싶은 것이기 때문이다.
 @contextmanager
