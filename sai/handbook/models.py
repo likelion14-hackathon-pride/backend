@@ -61,6 +61,17 @@ class HandbookEntry(models.Model):
         MEDIUM = 'MEDIUM'
         LOW = 'LOW'
 
+    # status는 규칙의 승인/활성 상태이고, promotion_type은 자동화 정책의 판단 결과다.
+    # 둘을 합치면 자동 승격 규칙을 나중에 보관할 때 판단 이력을 잃게 된다.
+    class PromotionType(models.TextChoices):
+        AUTO_PROMOTED = 'AUTO_PROMOTED'
+        PENDING_REVIEW = 'PENDING_REVIEW'
+        MANUAL_REQUIRED = 'MANUAL_REQUIRED'
+
+    class AutoPromotionMethod(models.TextChoices):
+        OWNER_DECISION = 'OWNER_DECISION'
+        REPEATED_EVIDENCE = 'REPEATED_EVIDENCE'
+
     company = models.ForeignKey('companies.Company', on_delete=models.CASCADE, related_name='handbook_entries')
     scope = models.ForeignKey(CompanyScope, on_delete=models.CASCADE, related_name='handbook_entries')
     title = models.CharField(max_length=200)
@@ -88,6 +99,33 @@ class HandbookEntry(models.Model):
     embedded_at = models.DateTimeField(null=True, blank=True)
     translated_at = models.DateTimeField(null=True, blank=True)
     dedupe_key = models.CharField(max_length=64, null=True, blank=True)
+    promotion_type = models.CharField(
+        max_length=20,
+        choices=PromotionType.choices,
+        default=PromotionType.PENDING_REVIEW,
+        db_index=True,
+    )
+    auto_promotion_method = models.CharField(
+        max_length=24,
+        choices=AutoPromotionMethod.choices,
+        null=True,
+        blank=True,
+    )
+    # 정책 사유와 신호는 버전이 올라가며 모양이 달라질 수 있어 JSON으로 보관한다.
+    promotion_reason = models.JSONField(default=dict, blank=True)
+    evidence_count = models.PositiveIntegerField(default=0)
+    detected_risk_keywords = models.JSONField(default=list, blank=True)
+    conflict_detected = models.BooleanField(default=False)
+    similar_entry = models.ForeignKey(
+        'self',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='similar_candidates',
+    )
+    similarity_score = models.FloatField(null=True, blank=True)
+    auto_promoted_at = models.DateTimeField(null=True, blank=True)
+    promotion_policy_version = models.CharField(max_length=32, null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -109,6 +147,13 @@ class HandbookEntry(models.Model):
             return self.ReviewStatus.HELD
 
         return self.ReviewStatus.PENDING
+
+    @property
+    def is_auto_promoted(self):
+        return (
+            self.promotion_type == self.PromotionType.AUTO_PROMOTED
+            and self.auto_promoted_at is not None
+        )
 
     class Meta:
         db_table = 'handbook_entry'

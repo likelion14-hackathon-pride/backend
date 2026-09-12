@@ -268,6 +268,32 @@ OPENAI_CLASSIFIER_VERBOSITY = get_secret('OPENAI_CLASSIFIER_VERBOSITY', 'low')
 # 1536차원. handbook_entry.embedding_ko/en 과 sources_chunk.embedding 이 이 크기다.
 OPENAI_EMBEDDING_MODEL = get_secret('OPENAI_EMBEDDING_MODEL', 'text-embedding-3-small')
 
+# 핸드북 자동 승격 정책. 운영 중 기준을 바꿔도 과거 판단은 entry의 policy version으로 추적한다.
+HANDBOOK_PROMOTION_POLICY_VERSION = get_secret(
+    'HANDBOOK_PROMOTION_POLICY_VERSION', 'handbook-promotion-v1'
+)
+HANDBOOK_AUTO_PROMOTION_MIN_EVIDENCE = int(
+    get_secret('HANDBOOK_AUTO_PROMOTION_MIN_EVIDENCE', 3)
+)
+HANDBOOK_AUTO_PROMOTION_RECENT_DAYS = int(
+    get_secret('HANDBOOK_AUTO_PROMOTION_RECENT_DAYS', 30)
+)
+HANDBOOK_PROMOTION_SIMILAR_MAX_DISTANCE = float(
+    get_secret('HANDBOOK_PROMOTION_SIMILAR_MAX_DISTANCE', 0.18)
+)
+HANDBOOK_PROMOTION_DUPLICATE_TEXT_RATIO = float(
+    get_secret('HANDBOOK_PROMOTION_DUPLICATE_TEXT_RATIO', 0.90)
+)
+
+# 등록형 위험 키워드 외에 어떤 회사에서도 자동 확정하면 안 되는 공통 고위험 영역이다.
+HANDBOOK_HIGH_RISK_KEYWORDS = {
+    'SECURITY': ['보안', '암호', '비밀번호', '시크릿', '접근 권한', 'security', 'password', 'secret', 'credential'],
+    'PRIVACY': ['개인정보', '개인 정보', '주민번호', '개인 데이터', 'privacy', 'personal data', 'pii'],
+    'PAYMENT': ['결제', '정산', '환불', '카드 정보', 'payment', 'billing', 'refund', 'credit card'],
+    'DEPLOYMENT': ['배포', '릴리스', '프로덕션', '운영 반영', 'deploy', 'deployment', 'release', 'production'],
+    'PEOPLE': ['인사', '채용', '해고', '급여', '보상', '평가', '휴가', 'hr', 'hiring', 'termination', 'salary', 'compensation'],
+}
+
 # SDK 기본값은 timeout=600초, max_retries=2 다. 그대로 두면 호출 한 건이 최대 30분 매달린다.
 # 워커는 단일 스레드라 그동안 큐 전체가 멈추고, STALE_AFTER(30분)와도 어긋난다.
 OPENAI_TIMEOUT = float(get_secret('OPENAI_TIMEOUT', 30))

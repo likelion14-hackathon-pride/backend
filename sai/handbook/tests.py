@@ -386,6 +386,25 @@ class DraftEntriesTests(TestCase):
 
         self.assertEqual(entries[0].evidences.count(), 1)
 
+    @override_settings(OPENAI_API_KEY='test-key')
+    def test_distinct_quotes_from_the_same_document_are_preserved(self):
+        self.document.raw_text = (
+            '배포는 금요일 오후에는 하지 않는 걸로 합시다. 핫픽스는 예외로 하겠습니다.'
+        )
+        self.document.save(update_fields=['raw_text'])
+
+        entries, _ = self.draft([{
+            'title': '금요일 오후 배포 금지',
+            'body': '금요일 오후 배포는 금지하되 핫픽스는 예외입니다.',
+            'confidence': 'HIGH',
+            'citations': [
+                {'index': 0, 'quote': '금요일 오후에는 하지 않는'},
+                {'index': 0, 'quote': '핫픽스는 예외로'},
+            ],
+        }])
+
+        self.assertEqual(entries[0].evidences.count(), 2)
+
     # 따옴표로 감싸서 돌려주는 경우가 있어 벗겨내고 대조한다.
     @override_settings(OPENAI_API_KEY='test-key')
     def test_quote_surrounded_by_quotation_marks(self):
@@ -774,7 +793,7 @@ class HandbookReviewTests(TestCase):
         )
 
     # 다른 회사 항목이 id로 섞여 들어와도 승인되면 안 된다.
-    def test_bulk_approve_ignores_other_company_entries(self):
+    def test_bulk_approve_blocks_other_company_entries(self):
         other = Company.objects.create(name='다른회사', code='TESTCODE2')
         other_scope = CompanyScope.objects.create(
             company=other, kind=CompanyScope.Kind.PROJECT, name='남의 프로젝트'
@@ -788,7 +807,7 @@ class HandbookReviewTests(TestCase):
             f'{self.base}/review-all', {'entryIds': [foreign.id]}, format='json'
         )
 
-        self.assertEqual(response.data['approvedCount'], 0)
+        self.assertEqual(response.status_code, 403)
         foreign.refresh_from_db()
         self.assertEqual(foreign.status, HandbookEntry.Status.DRAFT)
 

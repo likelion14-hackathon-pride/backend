@@ -136,6 +136,28 @@ class HandbookEntrySerializer(serializers.ModelSerializer):
     sourceType = serializers.CharField(source='origin', read_only=True)
     source = serializers.SerializerMethodField()
     reviewStatus = serializers.CharField(source='review_status', read_only=True)
+    promotionType = serializers.CharField(source='promotion_type', read_only=True)
+    isAutoPromoted = serializers.BooleanField(source='is_auto_promoted', read_only=True)
+    autoPromotionMethod = serializers.CharField(
+        source='auto_promotion_method', read_only=True, allow_null=True
+    )
+    promotionReason = serializers.JSONField(source='promotion_reason', read_only=True)
+    evidenceCount = serializers.IntegerField(source='evidence_count', read_only=True)
+    riskKeywords = serializers.JSONField(source='detected_risk_keywords', read_only=True)
+    hasConflict = serializers.BooleanField(source='conflict_detected', read_only=True)
+    hasSimilarRule = serializers.SerializerMethodField()
+    similarEntryId = serializers.IntegerField(
+        source='similar_entry_id', read_only=True, allow_null=True
+    )
+    similarityScore = serializers.FloatField(
+        source='similarity_score', read_only=True, allow_null=True
+    )
+    autoPromotedAt = serializers.DateTimeField(
+        source='auto_promoted_at', read_only=True, allow_null=True
+    )
+    promotionPolicyVersion = serializers.CharField(
+        source='promotion_policy_version', read_only=True, allow_null=True
+    )
     reviewedAt = serializers.DateTimeField(source='reviewed_at', read_only=True)
     translatedAt = serializers.DateTimeField(source='translated_at', read_only=True)
     embeddedAt = serializers.DateTimeField(source='embedded_at', read_only=True)
@@ -158,6 +180,18 @@ class HandbookEntrySerializer(serializers.ModelSerializer):
             'status',
             'reviewStatus',
             'reviewedAt',
+            'promotionType',
+            'isAutoPromoted',
+            'autoPromotionMethod',
+            'promotionReason',
+            'evidenceCount',
+            'riskKeywords',
+            'hasConflict',
+            'hasSimilarRule',
+            'similarEntryId',
+            'similarityScore',
+            'autoPromotedAt',
+            'promotionPolicyVersion',
             'confidence',
             'questionCount',
             'sourceType',
@@ -171,6 +205,10 @@ class HandbookEntrySerializer(serializers.ModelSerializer):
     @swagger_serializer_method(serializer_or_field=EntrySourceSerializer)
     def get_source(self, obj):
         return entry_source(obj)
+
+    @swagger_serializer_method(serializer_or_field=serializers.BooleanField())
+    def get_hasSimilarRule(self, obj):
+        return obj.similar_entry_id is not None
 
 
 class HandbookEntryListSerializer(serializers.Serializer):
@@ -206,6 +244,7 @@ class HandbookEntryUpdateSerializer(serializers.ModelSerializer):
                 'scope_id': instance.scope_id,
                 'status': instance.status,
             },
+            reason='owner_edit',
         )
 
         # 원문 언어 본문이 바뀌면 기존 번역과 임베딩은 더 이상 그 내용이 아니다.
@@ -257,8 +296,13 @@ class HandbookReviewSerializer(serializers.Serializer):
 
 class HandbookBulkReviewSerializer(serializers.Serializer):
     entryIds = serializers.ListField(child=serializers.IntegerField(), allow_empty=False)
+    decision = serializers.ChoiceField(choices=['APPROVE', 'REJECT'], default='APPROVE')
 
 
 class HandbookBulkReviewResultSerializer(serializers.Serializer):
+    decision = serializers.CharField()
+    processedCount = serializers.IntegerField()
     approvedCount = serializers.IntegerField()
+    rejectedCount = serializers.IntegerField()
+    results = serializers.ListField(child=serializers.DictField())
     skipped = serializers.ListField(child=serializers.DictField())
