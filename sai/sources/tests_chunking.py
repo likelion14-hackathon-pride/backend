@@ -168,6 +168,17 @@ class ChunkingTests(TestCase):
 
         self.assertEqual(Chunk.objects.count(), 0)
 
+    def test_removing_the_last_document_deletes_its_existing_chunk(self):
+        document = self.document('1.1', '나중에 삭제될 원문')
+        build_chunks(self.company)
+        self.assertEqual(Chunk.objects.count(), 1)
+
+        document.sync_state = RawDocument.SyncState.REMOVED
+        document.save(update_fields=['sync_state'])
+        build_chunks(self.company)
+
+        self.assertEqual(Chunk.objects.count(), 0)
+
     # --- 재실행 ---
 
     def test_rebuild_does_not_duplicate(self):
@@ -398,6 +409,118 @@ class ChunkingTests(TestCase):
         self.embed()
 
         self.assertIsNotNone(Chunk.objects.get().embedding_en)
+
+    @override_settings(
+        SOURCE_LONG_DOCUMENT_CHUNK_CHARS=400,
+        SOURCE_LONG_DOCUMENT_CHUNK_OVERLAP_CHARS=40,
+    )
+    def test_long_local_file_is_split_on_stable_ordinals(self):
+        self.connection.kind = Connection.Kind.LOCAL
+        self.connection.save(update_fields=['kind'])
+        text = '\n\n'.join(
+            f'섹션 {index}\n' + ('긴 문서 내용입니다. ' * 30)
+            for index in range(5)
+        )
+        self.document('file:1', text)
+
+        build_chunks(self.company)
+
+        chunks = list(Chunk.objects.order_by('ord'))
+        self.assertGreater(len(chunks), 1)
+        self.assertEqual([chunk.ord for chunk in chunks], list(range(len(chunks))))
+        self.assertTrue(all(len(chunk.text) <= 400 for chunk in chunks))
+        self.assertTrue(all(chunk.token_count > 0 for chunk in chunks))
+
+    @override_settings(
+        SOURCE_LONG_DOCUMENT_CHUNK_CHARS=400,
+        SOURCE_LONG_DOCUMENT_CHUNK_OVERLAP_CHARS=40,
+    )
+    def test_shortened_file_removes_obsolete_chunks(self):
+        self.connection.kind = Connection.Kind.GITHUB
+        self.connection.save(update_fields=['kind'])
+        document = self.document('readme:1', '문단입니다. ' * 300)
+        build_chunks(self.company)
+        self.assertGreater(Chunk.objects.count(), 1)
+
+        document.raw_text = '짧아진 문서입니다.'
+        document.save(update_fields=['raw_text'])
+        build_chunks(self.company)
+
+        self.assertEqual(Chunk.objects.count(), 1)
+        self.assertEqual(Chunk.objects.get().ord, 0)
+
+    @override_settings(
+        SOURCE_LONG_DOCUMENT_CHUNK_CHARS=400,
+        SOURCE_LONG_DOCUMENT_CHUNK_OVERLAP_CHARS=40,
+    )
+    def test_long_slack_message_stays_one_chunk(self):
+        self.document('1.1', '긴 슬랙 메시지입니다. ' * 300)
+
+        build_chunks(self.company)
+
+        self.assertEqual(Chunk.objects.count(), 1)
+
+    def test_identical_text_is_translated_once(self):
+        self.document('1.1', '같은 배포 규칙입니다')
+        self.document('1.2', '같은 배포 규칙입니다')
+        build_chunks(self.company)
+
+        with patch('sources.chunking.OpenAI') as client:
+            client.return_value.chat.completions.parse.side_effect = (
+                lambda **kwargs: translations_stub(kwargs['messages'][1]['content'])
+            )
+            count, errors = translate_chunks(self.company)
+
+        prompt = client.return_value.chat.completions.parse.call_args.kwargs[
+            'messages'
+        ][1]['content']
+        self.assertEqual((count, errors), (2, []))
+        self.assertEqual(len(re.findall(r'^\[\d+\]$', prompt, re.M)), 1)
+        self.assertEqual(Chunk.objects.exclude(text_en=None).count(), 2)
+
+    def test_identical_text_is_embedded_once(self):
+        self.document('1.1', '같은 배포 규칙입니다')
+        self.document('1.2', '같은 배포 규칙입니다')
+        build_chunks(self.company)
+
+        with patch('sources.chunking.OpenAI') as client:
+            client.return_value.embeddings.create.side_effect = (
+                lambda **kwargs: embeddings_stub(len(kwargs['input']))
+            )
+            count, errors = embed_chunks(self.company)
+
+        inputs = client.return_value.embeddings.create.call_args.kwargs['input']
+        self.assertEqual((count, errors), (2, []))
+        self.assertEqual(inputs, ['같은 배포 규칙입니다'])
+        self.assertEqual(Chunk.objects.exclude(embedding=None).count(), 2)
+
+    def test_translation_is_reused_across_worker_runs(self):
+        self.document('1.1', '반복해서 복사된 규칙입니다')
+        build_chunks(self.company)
+        self.translate()
+
+        self.document('1.2', '반복해서 복사된 규칙입니다')
+        build_chunks(self.company)
+        with patch('sources.chunking.OpenAI') as client:
+            count, errors = translate_chunks(self.company)
+
+        self.assertEqual((count, errors), (1, []))
+        self.assertFalse(client.called)
+        self.assertEqual(Chunk.objects.exclude(text_en=None).count(), 2)
+
+    def test_embedding_is_reused_across_worker_runs(self):
+        self.document('1.1', '반복해서 복사된 규칙입니다')
+        build_chunks(self.company)
+        self.embed()
+
+        self.document('1.2', '반복해서 복사된 규칙입니다')
+        build_chunks(self.company)
+        with patch('sources.chunking.OpenAI') as client:
+            count, errors = embed_chunks(self.company)
+
+        self.assertEqual((count, errors), (1, []))
+        self.assertFalse(client.called)
+        self.assertEqual(Chunk.objects.exclude(embedding=None).count(), 2)
 
     def test_other_company_chunks_untouched(self):
         other = Company.objects.create(name='다른회사', code='TESTCODE2')
