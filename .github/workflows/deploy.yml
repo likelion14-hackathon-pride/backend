@@ -2,7 +2,7 @@ name: Deploy to EC2
 
 on:
   push:
-    branches: [develop]
+    branches: [main]
   workflow_dispatch:
 
 jobs:
@@ -37,7 +37,7 @@ jobs:
       - name: Health check
         run: |
           for i in $(seq 1 10); do
-            code=$(curl -s -o /dev/null -w '%{http_code}' https://saisai.n-e.kr/health/ || true)
+            code=$(curl -s -o /dev/null -w '%{http_code}' https://sai42.vercel.app/health/ || true)
             if [ "$code" = "200" ]; then
               echo "health OK"
               exit 0
