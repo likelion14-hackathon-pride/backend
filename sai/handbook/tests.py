@@ -435,6 +435,40 @@ class DraftEntriesTests(TestCase):
         # 근거도 중복되지 않는다.
         self.assertEqual(entry.evidences.count(), 1)
 
+    @override_settings(OPENAI_API_KEY='test-key')
+    def test_same_rule_keeps_evidence_from_previous_batch(self):
+        second = self._document(
+            '100.2', '배포는 금요일 오후에는 하지 않는 걸로 합시다'
+        )
+        rule = DraftRule(
+            title='금요일 오후 배포 금지',
+            title_en='No Friday afternoon deployments',
+            body='배포는 금요일 오후에 하지 않습니다.',
+            confidence='HIGH',
+            citations=[{
+                'index': 0,
+                'quote': '배포는 금요일 오후에는 하지 않는 걸로 합시다',
+            }],
+        )
+        completion = SimpleNamespace(
+            choices=[SimpleNamespace(message=SimpleNamespace(
+                parsed=DraftResult(rules=[rule])
+            ))]
+        )
+
+        with (
+            patch('handbook.drafting.BATCH_SIZE', 1),
+            patch('handbook.drafting.OpenAI') as client,
+        ):
+            client.return_value.chat.completions.parse.return_value = completion
+            draft_entries(self.company)
+
+        entry = HandbookEntry.objects.get(title='금요일 오후 배포 금지')
+        self.assertEqual(
+            set(entry.evidences.values_list('document_id', flat=True)),
+            {self.document.id, second.id},
+        )
+
     # 대표가 확정한 항목은 재실행이 덮어쓰지 않는다.
     @override_settings(OPENAI_API_KEY='test-key')
     def test_confirmed_entry_is_never_overwritten(self):

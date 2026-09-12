@@ -10,7 +10,7 @@ from django.db.models import F, Q
 from openai import OpenAI, OpenAIError
 from pydantic import BaseModel
 
-from config.ai import client_options, generation_options, timed_call
+from config.ai import client_options, generation_options, record_usage, timed_call
 from sources.classifier import build_lookup, build_parents
 from sources.models import Connection, RawDocument
 from sources.text import normalize_document_text
@@ -257,8 +257,13 @@ def _build_entry(company, scope, rule, documents, channels, users):
     entry.origin = _entry_origin(verified[0][0])
     entry.save()
 
-    # 근거는 매번 새로 쓴다. 초안을 다시 만들면 인용도 바뀌기 때문.
-    entry.evidences.all().delete()
+    # 같은 규칙이 다음 batch에서 다시 발견되면 앞 batch의 서로 다른 원문 근거를
+    # 유지한다. 현재 batch 문서의 예전 인용만 교체해 수정된 원문은 남지 않게 한다.
+    current_document_ids = {document.id for document in documents.values()}
+    entry.evidences.filter(document_id__in=current_document_ids).delete()
+    existing_evidence_keys = set(
+        entry.evidences.exclude(document_id=None).values_list('document_id', 'quote')
+    )
     HandbookEvidence.objects.bulk_create([
         HandbookEvidence(
             company=company,
@@ -274,6 +279,7 @@ def _build_entry(company, scope, rule, documents, channels, users):
             occurred_at=document.occurred_at,
         )
         for document, quote in verified
+        if (document.id, quote) not in existing_evidence_keys
     ])
 
     return entry
@@ -298,6 +304,9 @@ def _draft_batch(client, company, scope, batch, channels, users, parents):
                 verbosity=settings.OPENAI_DRAFTER_VERBOSITY,
             ),
         )
+    record_usage(
+        'handbook_drafting', settings.OPENAI_DRAFTER_MODEL, completion, len(batch)
+    )
     result = completion.choices[0].message.parsed
     documents = dict(enumerate(batch))
 
