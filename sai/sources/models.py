@@ -1,4 +1,5 @@
 from django.db import models
+from django.contrib.postgres.indexes import GinIndex
 from pgvector.django import VectorField, HnswIndex
 
 
@@ -166,6 +167,16 @@ class Chunk(models.Model):
                 m=16,
                 ef_construction=64,
                 opclasses=['vector_cosine_ops'],
+            ),
+            GinIndex(
+                name='chunk_text_trgm_idx',
+                fields=['text'],
+                opclasses=['gin_trgm_ops'],
+            ),
+            GinIndex(
+                name='chunk_text_en_trgm_idx',
+                fields=['text_en'],
+                opclasses=['gin_trgm_ops'],
             ),
         ]
 

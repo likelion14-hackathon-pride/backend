@@ -15,6 +15,7 @@ from .answering import (
     AnswerResult,
     CitationJudgeResult,
     OUT_OF_SCOPE_ANSWER,
+    _render_case,
     answer_question,
     find_risk_warnings,
 )
@@ -185,6 +186,22 @@ class AskTests(TestCase):
         prompt = parse.call_args.kwargs['messages'][1]['content']
         self.assertIn('Selected knowledge space: company-wide rules only.', prompt)
         self.assertIn('Hard boundary: do not use project rules or project cases.', prompt)
+
+    def test_english_answer_context_prefers_translated_case(self):
+        chunk = SimpleNamespace(
+            text='금요일 오후에는 배포하지 않습니다.',
+            text_en='Do not deploy on Friday afternoons.',
+            document=SimpleNamespace(
+                author_identity=None,
+                item=SimpleNamespace(label='#dev'),
+                occurred_at=None,
+            ),
+        )
+
+        rendered = _render_case(chunk, 0, 'en')
+
+        self.assertIn('Do not deploy on Friday afternoons.', rendered)
+        self.assertNotIn('금요일 오후에는', rendered)
 
     def test_records_usage_and_retrieval(self):
         response = self.ask()
