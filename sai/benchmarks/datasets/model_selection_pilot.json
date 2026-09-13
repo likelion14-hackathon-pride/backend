@@ -1,0 +1,81 @@
+{
+  "schemaVersion": 1,
+  "name": "SAi model-selection pilot v2",
+  "classification": [
+    {"id":"cls-01","text":"앞으로 금요일 오후에는 운영 배포를 하지 않습니다.","label":"INSTRUCTION"},
+    {"id":"cls-02","text":"모든 PR은 두 명의 승인을 받은 뒤 병합합니다.","label":"INSTRUCTION"},
+    {"id":"cls-03","text":"지훈님 제안대로 확정하죠. 다음 배포부터 적용합니다.","label":"INSTRUCTION"},
+    {"id":"cls-04","text":"고객 개인정보는 로컬 PC에 저장하면 안 됩니다.","label":"INSTRUCTION"},
+    {"id":"cls-05","text":"법인카드 영수증은 사용 후 7일 안에 제출합니다.","label":"INSTRUCTION"},
+    {"id":"cls-06","text":"핫픽스 배포 전에는 #dev 채널에 공지합니다.","label":"INSTRUCTION"},
+    {"id":"cls-07","text":"staging 배포 완료했습니다.","label":"CONTEXT"},
+    {"id":"cls-08","text":"넵, 확인했습니다.","label":"CONTEXT"},
+    {"id":"cls-09","text":"결제 실패 로그 세 건 첨부합니다.","label":"CONTEXT"},
+    {"id":"cls-10","text":"민수님 오늘 중으로 로그 확인해 주세요.","label":"CONTEXT"},
+    {"id":"cls-11","text":"docker compose up -d --build","label":"CONTEXT"},
+    {"id":"cls-12","text":"PR 리뷰어는 누구로 지정할까요?","label":"AMBIGUOUS"},
+    {"id":"cls-13","text":"PR 승인을 두 명으로 바꾸는 게 좋을 것 같습니다.","label":"AMBIGUOUS"},
+    {"id":"cls-14","text":"앞으로 회의록을 전사에 공유하면 어떨까요?","label":"AMBIGUOUS"},
+    {"id":"cls-15","text":"배포 시간을 오후로 정하는 안을 검토해 보면 좋겠습니다.","label":"AMBIGUOUS"},
+    {"id":"cls-16","text":"재택근무 신청 절차가 필요할 수도 있을 것 같아요.","label":"AMBIGUOUS"},
+    {"id":"cls-17","text":"보안 검토를 의무화할지 다음 회의에서 논의합시다.","label":"AMBIGUOUS"},
+    {"id":"cls-18","text":"장애 보고서 양식을 하나로 통일하는 건 어떤가요?","label":"AMBIGUOUS"}
+  ],
+  "drafting": {
+    "scopePrompt": "Target knowledge space: project \"payment-api\". Leave area_key null.",
+    "documents": [
+      {"id":0,"text":"금요일 오후에는 운영 배포하지 맙시다. 다음 주부터 적용합니다."},
+      {"id":1,"text":"금요일 오후 배포 금지 규칙대로 이번 건은 월요일에 올려주세요."},
+      {"id":2,"text":"확인했습니다. payment-api도 금요일 오후에는 배포하지 않습니다."},
+      {"id":3,"text":"payment-api 결제 장애가 끝나면 24시간 안에 장애 보고서를 작성합니다."},
+      {"id":4,"text":"지난 결제 오류도 복구 후 하루 안에 장애 보고서를 올렸습니다. 이 방식으로 계속 운영합니다."},
+      {"id":5,"text":"payment-api 오류 대응 후 24시간 이내에 장애 보고서를 남기는 규칙을 적용합니다."},
+      {"id":6,"text":"PR 승인 인원을 세 명으로 늘리면 어떨까요? 아직 결정은 아닙니다."},
+      {"id":7,"text":"민수님 오늘 중으로 결제 실패 로그 확인해 주세요."}
+    ],
+    "goldRules": [
+      {"id":"deploy","requiredTermGroups":[["금요일"],["오후"],["배포"],["않","금지"]],"evidenceIndexes":[0,1,2]},
+      {"id":"incident","requiredTermGroups":[["payment-api"],["결제","오류","장애"],["24시간","하루"],["보고서"]],"evidenceIndexes":[3,4,5]}
+    ],
+    "forbiddenTermGroups": [["PR"],["세 명","3명"]]
+  },
+  "cardJudge": [
+    {"id":"judge-01","text":"민수님 오늘 중으로 결제 실패 로그 확인해 주세요.","isInstruction":true},
+    {"id":"judge-02","text":"회의록 정리해서 노션에 올려주세요.","isInstruction":true},
+    {"id":"judge-03","text":"급한 건 아닌데 시간 되실 때 배포 스크립트 봐주세요.","isInstruction":true},
+    {"id":"judge-04","text":"Could you review this PR by tomorrow morning?","isInstruction":true},
+    {"id":"judge-05","text":"지금 바로 장애 원인 확인해서 공유 부탁드립니다.","isInstruction":true},
+    {"id":"judge-06","text":"QA 결과를 이번 주 안에 문서로 정리해 주세요.","isInstruction":true},
+    {"id":"judge-07","text":"시크릿 키는 절대 커밋하지 마세요.","isInstruction":false},
+    {"id":"judge-08","text":"staging 서버 방금 재기동했습니다.","isInstruction":false},
+    {"id":"judge-09","text":"넵 알겠습니다.","isInstruction":false},
+    {"id":"judge-10","text":"로그 확인","isInstruction":false},
+    {"id":"judge-11","text":"일반 PR은 승인 한 명으로 하죠. 확정하겠습니다.","isInstruction":false},
+    {"id":"judge-12","text":"PR 리뷰 기준도 정해야 할 것 같은데 어떻게 할까요?","isInstruction":false}
+  ],
+  "cards": [
+    {"id":"card-01","text":"민수님 오늘 중으로 결제 실패 로그를 확인하고 원인을 #dev에 공유해 주세요.","urgency":"SOON","requiredTermGroups":[["결제"],["실패"],["로그"],["원인"]],"deadlineTermGroups":[["오늘"]]},
+    {"id":"card-02","text":"급한 건 아닌데 시간 되실 때 payment-api 배포 스크립트 한번 검토해 주세요.","urgency":"WHENEVER","requiredTermGroups":[["payment-api"],["배포"],["스크립트"],["검토"]],"deadlineTermGroups":[]},
+    {"id":"card-03","text":"회의록 정리해서 Notion에 올려주세요.","urgency":"UNCLEAR","requiredTermGroups":[["회의록"],["Notion","노션"]],"deadlineTermGroups":[]},
+    {"id":"card-04","text":"내일 오전까지 PR #142를 리뷰하고 코멘트를 남겨주세요.","urgency":"SOON","requiredTermGroups":[["PR #142","#142"],["리뷰"],["코멘트"]],"deadlineTermGroups":[["내일"],["오전"]]},
+    {"id":"card-05","text":"서비스 장애 대응 중입니다. 지금 바로 payment-api 오류 원인을 확인해서 알려주세요.","urgency":"URGENT","requiredTermGroups":[["payment-api"],["오류"],["원인"]],"deadlineTermGroups":[]}
+  ],
+  "qna": [
+    {"id":"qna-01","question":"Can I deploy payment-api on Friday afternoon?","scope":{"name":"payment-api","kind":"PROJECT"},"rules":[{"title":"Friday deployment restriction","body":"Do not deploy payment-api on Friday afternoons.","scopeName":"payment-api","scopeKind":"PROJECT"}],"expectedVerdict":"GROUNDED","requiredTermGroups":[["not","do not","cannot","must not","prohibit"],["Friday"],["deploy"]],"requiredCitationIndexes":[0]},
+    {"id":"qna-02","question":"How many approvals does a payment-api PR need?","scope":{"name":"payment-api","kind":"PROJECT"},"rules":[{"title":"payment-api review rule","body":"payment-api pull requests require two approvals before merging.","scopeName":"payment-api","scopeKind":"PROJECT"},{"title":"General review rule","body":"Company pull requests normally require one approval.","scopeName":"Company","scopeKind":"COMPANY"}],"expectedVerdict":"GROUNDED","requiredTermGroups":[["two","2"],["approval"]],"requiredCitationIndexes":[0]},
+    {"id":"qna-03","question":"Does the company provide free parking?","scope":null,"rules":[{"title":"Expense receipts","body":"Submit corporate card receipts within seven days.","scopeName":"Company","scopeKind":"COMPANY"}],"expectedVerdict":"NO_SOURCE","requiredTermGroups":[],"requiredCitationIndexes":[]},
+    {"id":"qna-04","question":"How many reviewers are required?","scope":null,"rules":[{"title":"Review rule A","body":"Every pull request requires one approval.","scopeName":"Company","scopeKind":"COMPANY"},{"title":"Review rule B","body":"Every pull request requires two approvals.","scopeName":"Company","scopeKind":"COMPANY"}],"expectedVerdict":"NEEDS_DECISION","requiredTermGroups":[],"requiredCitationIndexes":[]},
+    {"id":"qna-05","question":"Will it rain tomorrow?","scope":null,"rules":[],"expectedVerdict":"OUT_OF_SCOPE","requiredTermGroups":[],"requiredCitationIndexes":[]},
+    {"id":"qna-06","question":"When must I submit a corporate card receipt?","scope":null,"rules":[{"title":"Receipt submission","body":"Submit corporate card receipts within seven days of the transaction.","scopeName":"Company","scopeKind":"COMPANY"}],"expectedVerdict":"GROUNDED","requiredTermGroups":[["seven","7"],["day"]],"requiredCitationIndexes":[0]},
+    {"id":"qna-07","question":"May I store customer personal data on my laptop?","scope":null,"rules":[{"title":"Personal data storage","body":"Customer personal data must not be stored on local employee devices.","scopeName":"Company","scopeKind":"COMPANY"}],"expectedVerdict":"GROUNDED","requiredTermGroups":[["must not","cannot","do not"],["local","laptop","device"]],"requiredCitationIndexes":[0]},
+    {"id":"qna-08","question":"What is the team lunch budget?","scope":null,"rules":[{"title":"Receipt submission","body":"Submit corporate card receipts within seven days.","scopeName":"Company","scopeKind":"COMPANY"}],"expectedVerdict":"NO_SOURCE","requiredTermGroups":[],"requiredCitationIndexes":[]}
+  ],
+  "translations": [
+    {"id":"tr-01","title":"금요일 오후에는 배포하지 않습니다.","body":"운영 안정성을 위해 금요일 오후에는 production 배포를 하지 않습니다.","requiredTermGroups":[["Friday"],["afternoon"],["production"],["deploy"]]},
+    {"id":"tr-02","title":"PR은 승인 두 개를 받아야 합니다.","body":"payment-api PR은 병합 전에 두 명의 승인을 받아야 합니다.","requiredTermGroups":[["payment-api"],["two","2"],["approval"],["merge","merging"]]},
+    {"id":"tr-03","title":"법인카드 영수증은 7일 안에 제출합니다.","body":"법인카드 영수증은 결제일로부터 7일 안에 재무팀에 제출합니다.","requiredTermGroups":[["receipt"],["7","seven"],["day"],["finance"]]},
+    {"id":"tr-04","title":"배포 전에 #dev에 공지합니다.","body":"핫픽스 배포 전에는 반드시 #dev 채널에 공지합니다.","requiredTermGroups":[["hotfix"],["#dev"],["before"],["deploy"]]},
+    {"id":"tr-05","title":"고객 개인정보는 로컬에 저장하지 않습니다.","body":"고객 개인정보를 직원의 로컬 PC에 저장하면 안 됩니다.","requiredTermGroups":[["customer"],["personal","private"],["local"],["not","must not","do not"]]},
+    {"id":"tr-06","title":"회의록은 Notion에 올립니다.","body":"회의가 끝나면 당일 안에 회의록을 Notion에 올립니다.","requiredTermGroups":[["meeting"],["notes","minutes"],["Notion"],["same day","end of the day"]]}
+  ]
+}

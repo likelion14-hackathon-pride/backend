@@ -1,0 +1,6 @@
+{"caseId":"classification-001","output":{"label":"INSTRUCTION"},"telemetry":{"latencyMs":120,"promptTokens":30,"completionTokens":5,"costUsd":0.0001}}
+{"caseId":"drafting-001","output":{"rules":[{"title":"금요일 오후 배포 금지","body":"금요일 오후에는 배포하지 않습니다.","scopeId":1,"confidence":"HIGH","evidenceIds":["document:1","document:2","document:3"]}],"pipelineErrors":[]},"telemetry":{"latencyMs":850,"promptTokens":500,"completionTokens":100,"costUsd":0.005}}
+{"caseId":"promotion-001","output":{"promotionType":"AUTO_PROMOTED"},"telemetry":{"latencyMs":80}}
+{"caseId":"retrieval-001","output":{"rankedIds":["handbook:1","handbook:2"],"rankedDocumentIds":["document:1"]},"telemetry":{"latencyMs":55}}
+{"caseId":"qna-001","output":{"escalated":false,"answer":"금요일 오후에는 배포하지 않습니다.","citationIds":["handbook:1"],"citationDocumentIds":["document:1"]},"telemetry":{"latencyMs":450,"promptTokens":200,"completionTokens":30,"costUsd":0.002}}
+{"caseId":"cards-001","output":{"isInstruction":true,"card":{"purpose":"배포 로그 확인","deliverable":"확인 결과","deadlineText":"오늘","isDeadlineInferred":false,"urgency":"SOON","steps":["로그 확인"],"blanks":[]}},"telemetry":{"latencyMs":720,"promptTokens":400,"completionTokens":80,"costUsd":0.004}}
