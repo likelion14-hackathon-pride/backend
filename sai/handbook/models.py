@@ -1,4 +1,5 @@
 from django.db import models
+from django.contrib.postgres.indexes import GinIndex
 from pgvector.django import VectorField, HnswIndex
 
 # 회사 규칙 / 프로젝트 범위 구분
@@ -171,6 +172,26 @@ class HandbookEntry(models.Model):
                 m=16,
                 ef_construction=64,
                 opclasses=['vector_cosine_ops'],
+            ),
+            GinIndex(
+                name='hb_title_trgm_idx',
+                fields=['title'],
+                opclasses=['gin_trgm_ops'],
+            ),
+            GinIndex(
+                name='hb_title_en_trgm_idx',
+                fields=['title_en'],
+                opclasses=['gin_trgm_ops'],
+            ),
+            GinIndex(
+                name='hb_body_ko_trgm_idx',
+                fields=['body_ko'],
+                opclasses=['gin_trgm_ops'],
+            ),
+            GinIndex(
+                name='hb_body_en_trgm_idx',
+                fields=['body_en'],
+                opclasses=['gin_trgm_ops'],
             ),
         ]
         constraints = [

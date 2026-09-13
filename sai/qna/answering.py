@@ -11,9 +11,9 @@ from openai import OpenAI, OpenAIError, RateLimitError
 from pgvector.django import CosineDistance
 from pydantic import BaseModel
 
-from config.ai import client_options, generation_options, timed_call
+from config.ai import client_options, generation_options, record_usage, timed_call
 from handbook.models import CompanyScope
-from handbook.retrieval import search_rules
+from handbook.retrieval import lexical_score, lexical_terms, search_rules
 from handbook.services import scopes_in_view
 from policy.models import RiskKeyword
 from sources.models import Chunk
@@ -145,6 +145,8 @@ class Source:
         return {
             'entryId': self.entry.id if self.entry else None,
             'chunkId': self.chunk.id if self.chunk else None,
+            # API의 score는 기존처럼 cosine 기반 값이다. Hybrid 점수는 후보 정렬에만
+            # 사용해 클라이언트가 저장하거나 표시하는 값의 의미를 바꾸지 않는다.
             'score': round(1 - self.distance, 4),
         }
 
@@ -200,7 +202,7 @@ def _get_client():
 # 한국어 원문과 영어판을 모두 뒤져 청크마다 더 가까운 쪽을 쓴다. 규칙(search_rules)과 같은
 # 방식이다. 한쪽만 보면 영어 질문이 한국어 벡터와 비교되어 컷오프에 걸린다.
 # 실측: 영어 질문의 평균 거리 0.752 로 상한 0.75 를 넘어 8건 중 5건이 버려졌다.
-def retrieve_cases(vector, company, scope_ids=None, include_unscoped=True):
+def retrieve_cases(vector, company, scope_ids=None, include_unscoped=True, query=None):
     chunks = Chunk.objects.filter(company=company)
     if scope_ids is not None:
         scope_filter = Q(scope_id__in=scope_ids)
@@ -208,6 +210,9 @@ def retrieve_cases(vector, company, scope_ids=None, include_unscoped=True):
             scope_filter |= Q(scope__isnull=True)
         chunks = chunks.filter(scope_filter)
 
+    use_hybrid = bool(query and settings.HANDBOOK_HYBRID_RETRIEVAL_ENABLED)
+    multiplier = max(1, settings.HANDBOOK_RETRIEVAL_CANDIDATE_MULTIPLIER)
+    candidate_limit = MAX_CASES * (multiplier if use_hybrid else 3)
     best = {}
     for field in ('embedding', 'embedding_en'):
         rows = (
@@ -215,15 +220,54 @@ def retrieve_cases(vector, company, scope_ids=None, include_unscoped=True):
             .annotate(distance=CosineDistance(field, vector))
             .filter(distance__lte=CASE_MAX_DISTANCE)
             .select_related('document', 'document__item', 'document__author_identity')
-            .order_by('distance')[: MAX_CASES * 3]
+            .order_by('distance')[:candidate_limit]
         )
         for chunk in rows:
             if chunk.id not in best or chunk.distance < best[chunk.id].distance:
                 best[chunk.id] = chunk
 
+    if use_hybrid:
+        terms = lexical_terms(query)
+        filters = Q()
+        for term in terms:
+            filters |= Q(text__icontains=term) | Q(text_en__icontains=term)
+        if terms:
+            rows = (
+                chunks.filter(
+                    Q(embedding__isnull=False) | Q(embedding_en__isnull=False)
+                )
+                .filter(filters)
+                .select_related('document', 'document__item', 'document__author_identity')
+                .distinct()
+                .order_by('id')[:candidate_limit]
+            )
+            for chunk in rows:
+                if chunk.id not in best:
+                    chunk.distance = CASE_MAX_DISTANCE
+                    best[chunk.id] = chunk
+
+        vector_weight = max(
+            0.0, min(1.0, settings.HANDBOOK_RETRIEVAL_VECTOR_WEIGHT)
+        )
+        for chunk in best.values():
+            semantic = max(0.0, 1.0 - float(chunk.distance))
+            lexical = lexical_score(query, f'{chunk.text} {chunk.text_en or ""}')
+            chunk.retrieval_score = (
+                vector_weight * semantic + (1.0 - vector_weight) * lexical
+            )
+
     seen = set()
     cases = []
-    for chunk in sorted(best.values(), key=lambda chunk: chunk.distance):
+    ordered = sorted(
+        best.values(),
+        key=(
+            (lambda chunk: (
+                -chunk.retrieval_score, float(chunk.distance), chunk.id
+            ))
+            if use_hybrid else (lambda chunk: (float(chunk.distance), chunk.id))
+        ),
+    )
+    for chunk in ordered:
         if chunk.text in seen:
             continue
         seen.add(chunk.text)
@@ -239,9 +283,11 @@ def retrieve_cases(vector, company, scope_ids=None, include_unscoped=True):
 def embed_question(client, question):
     try:
         with timed_call(settings.OPENAI_EMBEDDING_MODEL):
-            return client.embeddings.create(
+            response = client.embeddings.create(
                 model=settings.OPENAI_EMBEDDING_MODEL, input=[question]
-            ).data[0].embedding
+            )
+        record_usage('qna_question_embedding', settings.OPENAI_EMBEDDING_MODEL, response)
+        return response.data[0].embedding
     except RateLimitError as exc:
         raise AnswerRateLimited(_retry_after(exc)) from exc
     except (OpenAIError, ValueError) as exc:
@@ -261,24 +307,32 @@ def _merge_rows(*groups):
     return rows
 
 
-def retrieve(vector, company, scope=None):
+def retrieve(vector, company, scope=None, query=None):
     company_scope_ids = scopes_in_view(company)
     if scope is not None and scope.kind == CompanyScope.Kind.PROJECT:
         return (
             _merge_rows(
-                search_rules(vector, company, [scope.id], TOP_K, MAX_DISTANCE),
-                search_rules(vector, company, company_scope_ids, TOP_K, MAX_DISTANCE),
+                search_rules(
+                    vector, company, [scope.id], TOP_K, MAX_DISTANCE, query=query
+                ),
+                search_rules(
+                    vector, company, company_scope_ids, TOP_K, MAX_DISTANCE, query=query
+                ),
             ),
             _merge_rows(
-                retrieve_cases(vector, company, [scope.id], include_unscoped=False),
-                retrieve_cases(vector, company, company_scope_ids),
+                retrieve_cases(
+                    vector, company, [scope.id], include_unscoped=False, query=query
+                ),
+                retrieve_cases(vector, company, company_scope_ids, query=query),
             ),
         )
 
     scope_ids = scopes_in_view(company, scope)
     return (
-        search_rules(vector, company, scope_ids, TOP_K, MAX_DISTANCE),
-        retrieve_cases(vector, company, scope_ids),
+        search_rules(
+            vector, company, scope_ids, TOP_K, MAX_DISTANCE, query=query
+        ),
+        retrieve_cases(vector, company, scope_ids, query=query),
     )
 
 
@@ -291,14 +345,15 @@ def _render_rule(entry, index, lang):
     return f'[{index}] scope={entry.scope.name} ({kind}) title={entry.title}\n    {body}'
 
 
-def _render_case(chunk, index):
+def _render_case(chunk, index, lang):
     document = chunk.document
     author = (
         document.author_identity.external_handle if document.author_identity else 'unknown'
     )
     when = f'{document.occurred_at:%Y-%m-%d}' if document.occurred_at else 'unknown date'
 
-    return f'[{index}] {author} in {document.item.label}, {when}\n    {chunk.text}'
+    text = chunk.text_en or chunk.text if lang == 'en' else chunk.text
+    return f'[{index}] {author} in {document.item.label}, {when}\n    {text}'
 
 
 def _citation_text(source, index):
@@ -344,6 +399,9 @@ def _judge_citations(client, question, answer, cited):
                     verbosity=settings.OPENAI_CLASSIFIER_VERBOSITY,
                 ),
             )
+        record_usage(
+            'qna_citation_judge', settings.OPENAI_CLASSIFIER_MODEL, completion
+        )
         supported = set(completion.choices[0].message.parsed.supported_indexes)
     except (OpenAIError, ValueError, RuntimeError, AttributeError) as exc:
         logger.warning('citation judge failed: %s', type(exc).__name__)
@@ -412,13 +470,14 @@ def _ask(client, question, lang, entries, cases, scope):
         _render_rule(entry, index, lang) for index, entry in enumerate(entries)
     ) or '(no confirmed rules retrieved)'
     past = '\n'.join(
-        _render_case(chunk, len(entries) + index) for index, chunk in enumerate(cases)
+        _render_case(chunk, len(entries) + index, lang)
+        for index, chunk in enumerate(cases)
     ) or '(no past cases retrieved)'
     language = 'English' if lang == 'en' else 'Korean'
 
     try:
         with timed_call(settings.OPENAI_ANSWER_MODEL):
-            return client.chat.completions.parse(
+            completion = client.chat.completions.parse(
                 model=settings.OPENAI_ANSWER_MODEL,
                 messages=[
                     {'role': 'system', 'content': SYSTEM_PROMPT},
@@ -440,6 +499,8 @@ def _ask(client, question, lang, entries, cases, scope):
                     verbosity=settings.OPENAI_ANSWER_VERBOSITY,
                 ),
             )
+        record_usage('qna_answer', settings.OPENAI_ANSWER_MODEL, completion)
+        return completion
     except RateLimitError as exc:
         raise AnswerRateLimited(_retry_after(exc)) from exc
     except (OpenAIError, ValueError) as exc:
@@ -458,7 +519,7 @@ def answer_question(company, question, lang='en', scope=None):
     started = time.time()
 
     vector = embed_question(client, question)
-    entries, cases = retrieve(vector, company, scope)
+    entries, cases = retrieve(vector, company, scope, query=question)
     completion = _ask(client, question, lang, entries, cases, scope)
     prompt_tokens = _tokens(completion, 'prompt_tokens')
     completion_tokens = _tokens(completion, 'completion_tokens')

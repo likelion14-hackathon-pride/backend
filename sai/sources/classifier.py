@@ -5,7 +5,7 @@ from django.core.exceptions import ImproperlyConfigured
 from openai import OpenAI, OpenAIError
 from pydantic import BaseModel
 
-from config.ai import client_options, generation_options, timed_call
+from config.ai import client_options, generation_options, record_usage, timed_call
 
 from .models import Identity, Item, RawDocument
 from .text import normalize_document_text
@@ -141,25 +141,30 @@ def _render(document, index, channels, users, parents):
     return '\n'.join(lines)
 
 
-def _classify_batch(client, documents, channels, users, parents):
+def _classify_batch(client, documents, channels, users, parents, *, model=None,
+                    reasoning_effort=None, verbosity=None):
+    model = model or settings.OPENAI_CLASSIFIER_MODEL
+    reasoning_effort = reasoning_effort or settings.OPENAI_CLASSIFIER_REASONING_EFFORT
+    verbosity = verbosity or settings.OPENAI_CLASSIFIER_VERBOSITY
     prompt = '\n'.join(
         _render(document, index, channels, users, parents)
         for index, document in enumerate(documents)
     )
-    with timed_call(settings.OPENAI_CLASSIFIER_MODEL, len(documents)):
+    with timed_call(model, len(documents)):
         completion = client.chat.completions.parse(
-            model=settings.OPENAI_CLASSIFIER_MODEL,
+            model=model,
             messages=[
                 {'role': 'system', 'content': SYSTEM_PROMPT},
                 {'role': 'user', 'content': prompt},
             ],
             response_format=ClassificationResult,
             **generation_options(
-                settings.OPENAI_CLASSIFIER_MODEL,
-                reasoning_effort=settings.OPENAI_CLASSIFIER_REASONING_EFFORT,
-                verbosity=settings.OPENAI_CLASSIFIER_VERBOSITY,
+                model,
+                reasoning_effort=reasoning_effort,
+                verbosity=verbosity,
             ),
         )
+    record_usage('source_classification', model, completion, len(documents))
     result = completion.choices[0].message.parsed
 
     return {label.index: label.label for label in result.labels}
@@ -204,6 +209,36 @@ def classify_documents(company_id, documents=None):
         except (OpenAIError, ValueError) as exc:
             errors.append({'scope': 'classify', 'batch': start // BATCH_SIZE, 'code': type(exc).__name__})
             continue
+
+        # 구조화 출력에서도 일부 index가 누락될 수 있다. 누락분만 더 강한 fallback에
+        # 한 번 보내므로 정상 배치의 비용은 늘리지 않고 조용한 데이터 손실을 막는다.
+        missing = [index for index in range(len(batch)) if index not in labels]
+        if missing:
+            retry_batch = [batch[index] for index in missing]
+            try:
+                retried = _classify_batch(
+                    client,
+                    retry_batch,
+                    channels,
+                    users,
+                    parents,
+                    model=settings.OPENAI_CLASSIFIER_FALLBACK_MODEL,
+                    reasoning_effort=(
+                        settings.OPENAI_CLASSIFIER_FALLBACK_REASONING_EFFORT
+                    ),
+                    verbosity=settings.OPENAI_CLASSIFIER_VERBOSITY,
+                )
+                labels.update({
+                    missing[local_index]: label
+                    for local_index, label in retried.items()
+                    if 0 <= local_index < len(missing)
+                })
+            except (OpenAIError, ValueError) as exc:
+                errors.append({
+                    'scope': 'classify_retry',
+                    'batch': start // BATCH_SIZE,
+                    'code': type(exc).__name__,
+                })
 
         updated = []
         for index, document in enumerate(batch):

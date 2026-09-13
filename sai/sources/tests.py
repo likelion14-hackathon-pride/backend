@@ -1205,11 +1205,33 @@ class ClassifierTests(TestCase):
         with self.assertRaises(ImproperlyConfigured):
             classify_documents(self.company.id)
 
-    # 응답에 빠진 index는 미분류로 남는다. 잘못된 라벨을 추측해 채우지 않는다.
+    # 응답에 빠진 index는 누락분만 fallback 모델에 다시 보내 복구한다.
     @override_settings(OPENAI_API_KEY='test-key')
-    def test_missing_index_left_unclassified(self):
+    def test_missing_index_is_retried(self):
         (count, _), _ = self.run_classify([{'index': 0, 'label': 'CONTEXT'}])
 
         self.reply.refresh_from_db()
+        self.assertEqual(count, 2)
+        self.assertEqual(self.reply.classified_as, RawDocument.ClassifiedAs.CONTEXT)
+
+    @override_settings(OPENAI_API_KEY='test-key')
+    def test_failed_missing_index_retry_keeps_completed_labels(self):
+        parsed = ClassificationResult(labels=[
+            MessageLabel(index=0, label='CONTEXT')
+        ])
+        completion = SimpleNamespace(
+            choices=[SimpleNamespace(message=SimpleNamespace(parsed=parsed))]
+        )
+        with patch('sources.classifier.OpenAI') as client:
+            client.return_value.chat.completions.parse.side_effect = [
+                completion,
+                ValueError('fallback failed'),
+            ]
+            count, errors = classify_documents(self.company.id)
+
+        self.parent.refresh_from_db()
+        self.reply.refresh_from_db()
         self.assertEqual(count, 1)
+        self.assertEqual(self.parent.classified_as, RawDocument.ClassifiedAs.CONTEXT)
         self.assertEqual(self.reply.classified_as, RawDocument.ClassifiedAs.UNCLASSIFIED)
+        self.assertEqual(errors[0]['scope'], 'classify_retry')

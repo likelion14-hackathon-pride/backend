@@ -4,7 +4,7 @@ from django.utils import timezone
 from openai import OpenAI, OpenAIError
 from pydantic import BaseModel
 
-from config.ai import client_options, generation_options, timed_call
+from config.ai import client_options, generation_options, record_usage, timed_call
 
 from .models import HandbookEntry
 
@@ -119,6 +119,12 @@ def _translate(client, entries):
                     verbosity=settings.OPENAI_TRANSLATOR_VERBOSITY,
                 ),
             )
+        record_usage(
+            'handbook_translation',
+            settings.OPENAI_TRANSLATOR_MODEL,
+            completion,
+            len(batch),
+        )
         by_index = {t.index: t for t in completion.choices[0].message.parsed.translations}
 
         for index, entry in enumerate(batch):
@@ -161,22 +167,34 @@ def _embed(client, entries):
     if not targets:
         return []
 
+    by_text = {}
+    for entry, lang, text in targets:
+        by_text.setdefault(text, []).append((entry, lang))
+    unique_targets = list(by_text.items())
+
     embedded = set()
-    for start in range(0, len(targets), BATCH_SIZE):
-        batch = targets[start:start + BATCH_SIZE]
+    for start in range(0, len(unique_targets), BATCH_SIZE):
+        batch = unique_targets[start:start + BATCH_SIZE]
         with timed_call(settings.OPENAI_EMBEDDING_MODEL, len(batch)):
             response = client.embeddings.create(
                 model=settings.OPENAI_EMBEDDING_MODEL,
-                input=[text for _, _, text in batch],
+                input=[text for text, _ in batch],
             )
-        for (entry, lang, _), item in zip(batch, response.data):
-            if lang == 'ko':
-                entry.embedding_ko = item.embedding
-            else:
-                entry.embedding_en = item.embedding
-            entry.embedding_model = settings.OPENAI_EMBEDDING_MODEL
-            entry.embedded_at = timezone.now()
-            embedded.add(entry)
+        record_usage(
+            'handbook_embedding',
+            settings.OPENAI_EMBEDDING_MODEL,
+            response,
+            len(batch),
+        )
+        for (text, text_targets), item in zip(batch, response.data):
+            for entry, lang in text_targets:
+                if lang == 'ko':
+                    entry.embedding_ko = item.embedding
+                else:
+                    entry.embedding_en = item.embedding
+                entry.embedding_model = settings.OPENAI_EMBEDDING_MODEL
+                entry.embedded_at = timezone.now()
+                embedded.add(entry)
 
     HandbookEntry.objects.bulk_update(
         embedded, ['embedding_ko', 'embedding_en', 'embedding_model', 'embedded_at']

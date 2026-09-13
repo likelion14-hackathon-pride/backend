@@ -265,8 +265,37 @@ OPENAI_TRANSLATOR_REASONING_EFFORT = get_secret('OPENAI_TRANSLATOR_REASONING_EFF
 OPENAI_TRANSLATOR_VERBOSITY = get_secret('OPENAI_TRANSLATOR_VERBOSITY', 'low')
 OPENAI_CLASSIFIER_REASONING_EFFORT = get_secret('OPENAI_CLASSIFIER_REASONING_EFFORT', 'medium')
 OPENAI_CLASSIFIER_VERBOSITY = get_secret('OPENAI_CLASSIFIER_VERBOSITY', 'low')
+# 저가 1차 판정이 일부 인덱스를 누락한 경우에만 쓰는 fallback이다. 평상시에는 호출되지
+# 않으며, 누락 때문에 원문이 영구히 미분류 상태로 남는 것을 막는다.
+OPENAI_CLASSIFIER_FALLBACK_MODEL = get_secret(
+    'OPENAI_CLASSIFIER_FALLBACK_MODEL', OPENAI_DRAFTER_MODEL
+)
+OPENAI_CLASSIFIER_FALLBACK_REASONING_EFFORT = get_secret(
+    'OPENAI_CLASSIFIER_FALLBACK_REASONING_EFFORT', 'low'
+)
 # 1536차원. handbook_entry.embedding_ko/en 과 sources_chunk.embedding 이 이 크기다.
 OPENAI_EMBEDDING_MODEL = get_secret('OPENAI_EMBEDDING_MODEL', 'text-embedding-3-small')
+
+# 긴 GitHub/업로드 문서는 한 벡터에 전부 넣지 않는다. Slack 메시지는 스레드 맥락을
+# 보존하기 위해 길어도 기존처럼 한 청크로 둔다.
+SOURCE_LONG_DOCUMENT_CHUNK_CHARS = int(
+    get_secret('SOURCE_LONG_DOCUMENT_CHUNK_CHARS', 2400)
+)
+SOURCE_LONG_DOCUMENT_CHUNK_OVERLAP_CHARS = int(
+    get_secret('SOURCE_LONG_DOCUMENT_CHUNK_OVERLAP_CHARS', 240)
+)
+
+# 기존 함수 시그니처와 vector-only 호출은 그대로 지원한다. query가 함께 들어온 Q&A와
+# 카드 생성에서만 lexical 후보를 합치고 재정렬한다.
+HANDBOOK_HYBRID_RETRIEVAL_ENABLED = get_bool(
+    'HANDBOOK_HYBRID_RETRIEVAL_ENABLED', True
+)
+HANDBOOK_RETRIEVAL_CANDIDATE_MULTIPLIER = int(
+    get_secret('HANDBOOK_RETRIEVAL_CANDIDATE_MULTIPLIER', 3)
+)
+HANDBOOK_RETRIEVAL_VECTOR_WEIGHT = float(
+    get_secret('HANDBOOK_RETRIEVAL_VECTOR_WEIGHT', 0.72)
+)
 
 # 핸드북 자동 승격 정책. 운영 중 기준을 바꿔도 과거 판단은 entry의 policy version으로 추적한다.
 HANDBOOK_PROMOTION_POLICY_VERSION = get_secret(

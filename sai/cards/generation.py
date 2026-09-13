@@ -11,7 +11,7 @@ from pgvector.django import CosineDistance
 from pydantic import BaseModel, Field
 
 from accounts.models import Membership
-from config.ai import client_options, generation_options, timed_call
+from config.ai import client_options, generation_options, record_usage, timed_call
 from handbook.retrieval import search_rules
 from handbook.services import scopes_in_view
 from sources.classifier import build_lookup
@@ -135,27 +135,32 @@ def _parse_deadline(value, company):
     return parsed
 
 
-def _judge_batch(client, batch, channels, users):
+def _judge_batch(client, batch, channels, users, *, model=None,
+                 reasoning_effort=None, verbosity=None):
+    model = model or settings.OPENAI_CLASSIFIER_MODEL
+    reasoning_effort = reasoning_effort or settings.OPENAI_CLASSIFIER_REASONING_EFFORT
+    verbosity = verbosity or settings.OPENAI_CLASSIFIER_VERBOSITY
     prompt = '\n'.join(
         f'[{index}] source={document.item.connection.kind} '
         f'type={document.external_ref.split(":", 1)[0]} '
         f'{normalize_document_text(document, channels, users)[:300]}'
         for index, document in enumerate(batch)
     )
-    with timed_call(settings.OPENAI_CLASSIFIER_MODEL, len(batch)):
+    with timed_call(model, len(batch)):
         completion = client.chat.completions.parse(
-            model=settings.OPENAI_CLASSIFIER_MODEL,
+            model=model,
             messages=[
                 {'role': 'system', 'content': JUDGE_PROMPT},
                 {'role': 'user', 'content': prompt},
             ],
             response_format=JudgementResult,
             **generation_options(
-                settings.OPENAI_CLASSIFIER_MODEL,
-                reasoning_effort=settings.OPENAI_CLASSIFIER_REASONING_EFFORT,
-                verbosity=settings.OPENAI_CLASSIFIER_VERBOSITY,
+                model,
+                reasoning_effort=reasoning_effort,
+                verbosity=verbosity,
             ),
         )
+    record_usage('card_judge', model, completion, len(batch))
 
     # 대상이 비면 지시가 아니다. 프롬프트에도 적었지만 여기서 한 번 더 막는다.
     # 조각글과 붙여넣은 명령어가 남의 할 일 목록에 올라가는 것을 프롬프트만으로 막지 못했다.
@@ -179,7 +184,15 @@ def _judge(client, documents, channels, users):
         # 여기서 놓치면 진짜 지시가 카드가 되지 못한 채 조용히 사라진다.
         missing = [index for index in range(len(batch)) if index not in decided]
         if missing:
-            retried = _judge_batch(client, [batch[index] for index in missing], channels, users)
+            retried = _judge_batch(
+                client,
+                [batch[index] for index in missing],
+                channels,
+                users,
+                model=settings.OPENAI_CLASSIFIER_FALLBACK_MODEL,
+                reasoning_effort=settings.OPENAI_CLASSIFIER_FALLBACK_REASONING_EFFORT,
+                verbosity=settings.OPENAI_CLASSIFIER_VERBOSITY,
+            )
             decided.update({
                 missing[local]: value for local, value in retried.items() if local < len(missing)
             })
@@ -206,11 +219,18 @@ def _judge(client, documents, channels, users):
 # 회사 규칙을 단계에 달지 못한다.
 def _find_rules(client, company, text, scope):
     with timed_call(settings.OPENAI_EMBEDDING_MODEL):
-        vector = client.embeddings.create(
+        response = client.embeddings.create(
             model=settings.OPENAI_EMBEDDING_MODEL, input=[text]
-        ).data[0].embedding
+        )
+    record_usage('card_embedding', settings.OPENAI_EMBEDDING_MODEL, response)
+    vector = response.data[0].embedding
     rules = search_rules(
-        vector, company, scopes_in_view(company, scope), MAX_RULES, RULE_MAX_DISTANCE
+        vector,
+        company,
+        scopes_in_view(company, scope),
+        MAX_RULES,
+        RULE_MAX_DISTANCE,
+        query=text,
     )
 
     return rules, vector
@@ -428,6 +448,7 @@ def _build_card(client, company, document, channels, users):
                 verbosity=settings.OPENAI_DRAFTER_VERBOSITY,
             ),
         )
+    record_usage('card_generation', settings.OPENAI_DRAFTER_MODEL, completion)
     draft = completion.choices[0].message.parsed
     if not draft.purpose.strip():
         return None

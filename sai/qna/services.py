@@ -340,9 +340,10 @@ def _owner_answer_candidate(escalation):
 
     channel, _ = parse_thread_ref(escalation.slack_thread_ref)
     with transaction.atomic():
-        locked = Escalation.objects.select_for_update().select_related(
-            'proposed_entry', 'scope'
-        ).get(id=escalation.id)
+        # proposed_entry와 scope는 nullable이라 select_related()가 LEFT OUTER JOIN을
+        # 만든다. PostgreSQL은 nullable join 쪽에 FOR UPDATE를 허용하지 않으므로
+        # Escalation 본행만 잠그고 관계는 필요할 때 별도로 조회한다.
+        locked = Escalation.objects.select_for_update().get(id=escalation.id)
         if locked.proposed_entry_id:
             return locked.proposed_entry
 
@@ -427,9 +428,10 @@ def promote_to_entry(escalation, title=None, body_en=None, scope=None):
 
     now = timezone.now()
     with transaction.atomic():
-        locked = Escalation.objects.select_for_update().select_related('proposed_entry').get(
-            id=escalation.id
-        )
+        # nullable proposed_entry를 outer join한 쿼리에는 PostgreSQL이
+        # FOR UPDATE를 적용할 수 없다. 중복 승인을 막는 데 필요한 잠금 대상은
+        # Escalation 본행이므로 관계는 lazy-load한다.
+        locked = Escalation.objects.select_for_update().get(id=escalation.id)
         entry = locked.proposed_entry
         if entry is None:
             entry = HandbookEntry.objects.create(

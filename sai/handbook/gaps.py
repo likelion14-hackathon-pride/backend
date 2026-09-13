@@ -7,7 +7,7 @@ from django.utils import timezone
 from openai import OpenAI, OpenAIError
 from pgvector.django import CosineDistance
 
-from config.ai import client_options, timed_call
+from config.ai import client_options, record_usage, timed_call
 
 from .models import CompanyScope, HandbookEntry
 
@@ -29,9 +29,11 @@ def _embed(question):
     client = OpenAI(api_key=settings.OPENAI_API_KEY, **client_options())
 
     with timed_call(settings.OPENAI_EMBEDDING_MODEL):
-        return client.embeddings.create(
+        response = client.embeddings.create(
             model=settings.OPENAI_EMBEDDING_MODEL, input=[question]
-        ).data[0].embedding
+        )
+    record_usage('handbook_gap_embedding', settings.OPENAI_EMBEDDING_MODEL, response)
+    return response.data[0].embedding
 
 
 def _fallback_scope(company):
