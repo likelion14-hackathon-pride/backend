@@ -25,6 +25,8 @@ COMPANY_CODE_NOT_FOUND = 'company_code_not_found'
 EMAIL_TAKEN = 'email_taken'
 WEAK_PASSWORD = 'weak_password'
 PROFILE_FIELD_REQUIRED = 'profile_field_required'
+DEMO_LOGIN_DISABLED = 'demo_login_disabled'
+DEMO_ACCOUNT_UNAVAILABLE = 'demo_account_unavailable'
 
 # 회사
 WORKING_HOURS_IDENTICAL = 'working_hours_identical'
@@ -95,6 +97,8 @@ ERROR_FIELDS = {
     EMAIL_TAKEN: 'email',
     WEAK_PASSWORD: 'password',
     PROFILE_FIELD_REQUIRED: None,
+    DEMO_LOGIN_DISABLED: None,
+    DEMO_ACCOUNT_UNAVAILABLE: None,
 
     WORKING_HOURS_IDENTICAL: 'workingHoursEnd',
     KEYWORD_TAKEN: 'keyword',
@@ -187,6 +191,20 @@ class InvalidCredentials(DomainError):
 
     def __init__(self):
         super().__init__(INVALID_CREDENTIALS, 'email or password is incorrect')
+
+
+class DemoLoginDisabled(DomainError):
+    status_code = status.HTTP_404_NOT_FOUND
+
+    def __init__(self):
+        super().__init__(DEMO_LOGIN_DISABLED, 'demo login is not available')
+
+
+class DemoAccountUnavailable(DomainError):
+    status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+
+    def __init__(self):
+        super().__init__(DEMO_ACCOUNT_UNAVAILABLE, 'demo account is not available')
 
 
 class RateLimited(DomainError):
