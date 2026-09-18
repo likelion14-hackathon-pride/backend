@@ -124,6 +124,10 @@ class AuthSerializer(serializers.Serializer):
         return attrs
 
 
+class DemoLoginSerializer(serializers.Serializer):
+    role = serializers.ChoiceField(choices=Membership.Role.choices)
+
+
 class UserSerializer(serializers.ModelSerializer):
     name = serializers.CharField(source='display_name', read_only=True)
     locale = serializers.CharField(source='ui_language', read_only=True)

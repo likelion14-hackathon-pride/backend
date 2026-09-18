@@ -1,3 +1,4 @@
+from django.conf import settings
 from rest_framework import status
 from rest_framework.exceptions import NotFound
 from rest_framework.permissions import AllowAny
@@ -19,11 +20,23 @@ from .serializers import (
     OwnerSignupSerializer,
     ProfileUpdateSerializer,
     UserSerializer,
+    DemoLoginSerializer,
 )
+from config.errors import DemoAccountUnavailable, DemoLoginDisabled
 
 NEXT_ROUTES = {
     'OWNER': 'onboarding/day0',
     'MEMBER': 'app/home',
+}
+
+DEMO_NEXT_ROUTES = {
+    Membership.Role.OWNER: 'owner',
+    Membership.Role.MEMBER: 'member/tasks',
+}
+
+DEMO_EMAIL_SETTINGS = {
+    Membership.Role.OWNER: 'DEMO_OWNER_EMAIL',
+    Membership.Role.MEMBER: 'DEMO_MEMBER_EMAIL',
 }
 
 FORM_AND_JSON = ['application/x-www-form-urlencoded', 'application/json']
@@ -74,6 +87,21 @@ LOGOUT_RESPONSE = openapi.Schema(
     type=openapi.TYPE_OBJECT,
     properties={'message': _string('logout success!')},
 )
+
+
+def _auth_data(membership, next_route=None):
+    token = RefreshToken.for_user(membership.user)
+    return {
+        'userId': membership.user_id,
+        'role': membership.role,
+        'company': {
+            'id': membership.company_id,
+            'name': membership.company.name,
+        },
+        'next': next_route or NEXT_ROUTES[membership.role],
+        'accessToken': str(token.access_token),
+        'refreshToken': str(token),
+    }
 
 
 class OwnerSignupView(APIView):
@@ -186,20 +214,57 @@ class AuthView(APIView):
         serializer.is_valid(raise_exception=True)
         membership = serializer.validated_data['membership']
 
-        token = RefreshToken.for_user(membership.user)
+        return Response(_auth_data(membership), status=status.HTTP_200_OK)
+
+
+class DemoLoginView(APIView):
+    permission_classes = [AllowAny]
+    throttle_scope = 'login'
+
+    @swagger_auto_schema(
+        operation_summary='심사용 데모 로그인',
+        operation_description=(
+            '제출용 랜딩 페이지에서 선택한 역할의 데모 계정으로 로그인합니다. '
+            'DEMO_LOGIN_ENABLED가 켜진 환경에서만 사용할 수 있습니다.'
+        ),
+        request_body=DemoLoginSerializer,
+        consumes=FORM_AND_JSON,
+        responses={
+            200: AUTH_RESPONSE,
+            400: '입력값 오류 (role)',
+            404: '데모 로그인 비활성화 (demo_login_disabled)',
+            429: '요청 한도 초과 (rate_limited)',
+            503: '데모 계정 사용 불가 (demo_account_unavailable)',
+        },
+        tags=['Auth'],
+        security=[],
+    )
+    def post(self, request):
+        if not settings.DEMO_LOGIN_ENABLED:
+            raise DemoLoginDisabled()
+
+        serializer = DemoLoginSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        role = serializer.validated_data['role']
+        email = str(getattr(settings, DEMO_EMAIL_SETTINGS[role], '')).strip()
+
+        membership = (
+            Membership.objects.select_related('user', 'company')
+            .filter(
+                user__email__iexact=email,
+                user__is_active=True,
+                role=role,
+                left_at__isnull=True,
+            )
+            .first()
+            if email
+            else None
+        )
+        if membership is None:
+            raise DemoAccountUnavailable()
 
         return Response(
-            {
-                'userId': membership.user_id,
-                'role': membership.role,
-                'company': {
-                    'id': membership.company_id,
-                    'name': membership.company.name,
-                },
-                'next': NEXT_ROUTES[membership.role],
-                'accessToken': str(token.access_token),
-                'refreshToken': str(token),
-            },
+            _auth_data(membership, DEMO_NEXT_ROUTES[role]),
             status=status.HTTP_200_OK,
         )
 

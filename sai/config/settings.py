@@ -236,6 +236,12 @@ AWS_S3_REGION_NAME = 'ap-northeast-2'
 SLACK_SIGNING_SECRET = get_secret('SLACK_SIGNING_SECRET')
 SLACK_BOT_TOKEN = get_secret('SLACK_BOT_TOKEN')
 
+# 심사용 배포에서만 켠다. 프론트에는 계정 정보나 비밀번호를 두지 않고,
+# 서버가 역할별 데모 계정에 대한 토큰만 발급한다.
+DEMO_LOGIN_ENABLED = get_bool('DEMO_LOGIN_ENABLED', False)
+DEMO_OWNER_EMAIL = get_secret('DEMO_OWNER_EMAIL', '')
+DEMO_MEMBER_EMAIL = get_secret('DEMO_MEMBER_EMAIL', '')
+
 # GitHub App 자격증명은 서버 환경변수(또는 secrets.json)에만 둔다.
 # 심사자는 별도 GitHub 로그인 없이, 미리 설치해 둔 데모 레포 데이터를 조회한다.
 GITHUB_APP_ID = get_secret('GITHUB_APP_ID', '')
